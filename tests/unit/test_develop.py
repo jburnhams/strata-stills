@@ -132,3 +132,15 @@ def test_exposure_protects_the_highlights_but_never_more_than_a_stop():
 def test_local_tone_compresses_big_bright_regions_more_than_a_flat_squeeze():
     img = np.full((200, 300, 3), 0.1, np.float32); img[:, 150:] = 0.8; rng = np.random.default_rng(8); img *= (1 + 0.05 * rng.standard_normal((200, 300, 1))).astype(np.float32)
     a = D.local_tone(img, 0.35, highlights=0.0); b = D.local_tone(img, 0.35, highlights=0.55); assert b[:, 180:].mean() < a[:, 180:].mean() * 0.95
+
+
+def test_highlight_detail_boosts_contrast_in_bright_areas_but_not_their_brightness_or_the_dark():
+    rng = np.random.default_rng(9); h, w = 160, 240; tex = cv2.GaussianBlur(rng.standard_normal((h, w)).astype(np.float32), (0, 0), 1.2) * 0.02
+    img = np.dstack([np.full((h, w), 0.2, np.float32) + tex] * 3); img[:, 120:] = (0.85 + tex[:, 120:, None] * 1.0) * np.ones(3, np.float32)                 # left dark, right bright: both with the same texture
+    out = D.highlight_detail(np.clip(img, 0, 1), 1.0)
+    assert out[:, 130:].std() > img[:, 130:].std() * 1.5 and abs(float(out[:, 130:].mean() - np.clip(img, 0, 1)[:, 130:].mean())) < 0.01        # more contrast, same brightness
+    assert np.abs(out[:, :100] - img[:, :100]).max() < 1e-3 and out.max() <= 1.0 and D.highlight_detail(np.clip(img, 0, 1), 0.0).shape == img.shape
+
+
+def test_default_shoulder_is_the_soft_one():
+    assert D.WHITE == 16.0 and D.KNEE == 0.55 and 0 < D.HIGHLIGHT_CONTRAST <= 1.5

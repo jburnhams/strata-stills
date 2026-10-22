@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import denoise_ai
 
-VERSION = 5
+VERSION = 6
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -181,8 +181,8 @@ def srgb_eotf(v):
 
 TARGET_MEDIAN = 0.40            # the picture's median luminance in the finished (sRGB-encoded) picture, where the camera's own JPEGs sit
 MAX_EV = 3.5
-KNEE = 0.72                     # linear value above which highlights are rolled off towards white
-WHITE = 4.0                     # the linear value that the shoulder maps to white
+KNEE = 0.55                     # linear value above which highlights are rolled off towards white
+WHITE = 16.0                     # the linear value that the shoulder maps to white
 
 
 def shoulder(img, knee=None, white=None):
@@ -215,6 +215,15 @@ def clean_colour(rgb, sig8, desat_from=0.86):
     roll = 1.0 - np.clip((y - desat_from) / (1.0 - desat_from), 0, 1) ** 2 * 0.9
     cb, cr = out[0] * roll, out[1] * roll; r = y + cr; b = y + cb; g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
     return np.clip(np.dstack([r, g, b]), 0, 1).astype(np.float32)
+
+
+def highlight_detail(rgb, amount=1.0, lo=0.62, hi=0.92):
+    """More contrast in the bright areas, without changing how bright they are: the luminance is split into a smooth edge-preserving base (guided filter) and the detail on top of it, at two scales (about 2 and 8 px); where the base is bright (from `lo`, fully by `hi`) the detail is multiplied by up to 1 + `amount`, and the base is put back unchanged.
+    The white level of a wall stays where it is; the window frames, mouldings, brick lines and render texture inside it stand out more. A pixel that would pass white is held at white."""
+    y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); b2 = _guided(y, y, 2, 2e-4); b8 = _guided(y, y, 8, 1e-3)
+    w = np.clip((b8 - lo) / (hi - lo), 0, 1); w = w * w * (3 - 2 * w); f = 1 + amount * w
+    new = b8 + (b2 - b8) * f + (y - b2) * f
+    return np.clip(rgb + (new - y)[..., None], 0, 1).astype(np.float32)
 
 
 def core_luma(rgb, sig8, k=0.6):
@@ -253,6 +262,7 @@ def finish(img, lut):
 HIGHLIGHTS = 0.55               # how hard local_tone squeezes bright regions towards the median (0..1)
 HIGHLIGHT_PCT = 99.5
 HIGHLIGHT_TARGET = 1.0          # the linear value the 99.5th percentile may reach after exposure (the shoulder and the tone curve take it the rest of the way to white)
+HIGHLIGHT_CONTRAST = 0.8        # highlight_detail: how much more contrast the bright areas get (0 = none)
 MAX_DARKER = 1.0                # protecting highlights may take the exposure at most this many stops below the median target (the shadows are lifted by the local tone recovery instead)
 
 
@@ -303,7 +313,7 @@ def develop_parts(path, half=False, ev='auto', recover=0.35):
     return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
 
 
-def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None):
+def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST):
     """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`:
       'auto'    the classical clean-up (default): colour noise and fringes removed edge-aware and cored to grey, colour rolled off near white, the finest luminance grain cored (clean_colour, core_luma), the light corner pass on luminance where the lens-shading gain lifted the noise
       'ai'      'auto' plus a learned model (`model`, `strength`: denoise_ai) where the noise is visible
@@ -314,6 +324,7 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
     sig8 = noise_map8(img, npf) if npf is not None else None
     out = finish(img, lut)
+    if highlight_contrast > 0: out = highlight_detail(out, highlight_contrast)
     if classical:
         out = clean_colour(out, sig8)
         if denoise in ('auto', 'ai'): out = core_luma(out, sig8)

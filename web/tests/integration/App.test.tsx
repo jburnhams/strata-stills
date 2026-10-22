@@ -81,7 +81,7 @@ describe('export', () => {
     expect(await screen.findByText('A_1-6016x4512.jpg')).toHaveAttribute('href', expect.stringContaining('/api/project/export/file?id=demo&name=A_1-6016x4512.jpg'))
     await userEvent.selectOptions(screen.getByLabelText('Format'), 'tiff'); await userEvent.click(screen.getByLabelText('Level'))
     await userEvent.click(screen.getByRole('button', { name: 'Export' }))
-    expect(exportCalls.at(-1)).toMatchObject({ variant: 'raw', size: 'auto', format: 'tiff', level: false, sharpen: true, sharpen_amount: 1.5 })
+    expect(exportCalls.at(-1)).toMatchObject({ variant: 'raw', size: 'auto', format: 'tiff', level: false, sharpen: true, sharpen_amount: 1.5, highlight_contrast: 0.8 })
     expect(await screen.findByText(/Done: A_1-6016x4512.jpg/, {}, { timeout: 4000 })).toBeInTheDocument()
   })
   it('sends the chosen sharpness', async () => {

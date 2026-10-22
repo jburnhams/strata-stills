@@ -38,6 +38,7 @@ class ExportIn(BaseModel):
     format: str = 'jpeg'
     level: bool = True
     sharpen: bool = True
+    highlight_contrast: float = 0.8      # more contrast inside the bright areas (0 = none), brightness unchanged
     sharpen_amount: float = 1.5          # 1 restores the measured blur; above 1 goes past it (crisper)
     quality: int = 95
 
@@ -121,7 +122,7 @@ def create_app():
         job = jobs[key] = dict(state='running', text='starting', result=None, error=None)
 
         def run():
-            try: job['result'] = X.export_item(id, item, b.variant, b.size, b.format, b.level, b.sharpen, b.quality, progress=lambda t: job.update(text=t), sharpen_amount=b.sharpen_amount); job['state'] = 'done'
+            try: job['result'] = X.export_item(id, item, b.variant, b.size, b.format, b.level, b.sharpen, b.quality, progress=lambda t: job.update(text=t), sharpen_amount=b.sharpen_amount, highlight_contrast=b.highlight_contrast); job['state'] = 'done'
             except Exception as e: job.update(state='failed', error=str(e))
         threading.Thread(target=run, daemon=True).start(); return job
 

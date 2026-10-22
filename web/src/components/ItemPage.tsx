@@ -3,6 +3,7 @@ import { api, imageUrl, TRANSFORMS, type TransformInfo, type Variant } from '../
 import { href, useLoad } from '../route'
 import { Crumbs, Err, btnQuiet, projectCrumbs } from './ui'
 import ExportPanel from './ExportPanel'
+import Loupe, { pointIn, type Point } from './Loupe'
 
 /** One sentence on what a transform did to the picture (or why it did nothing). */
 export function describe(id: string, i: TransformInfo | null): string {
@@ -16,10 +17,15 @@ export function describe(id: string, i: TransformInfo | null): string {
   return ''
 }
 
-function Picture({ project, item, variant, transform, label, info }: { project: string; item: string; variant: string; transform: string; label: string; info: TransformInfo | null }) {
+interface PictureProps { project: string; item: string; variant: string; transform: string; label: string; info: TransformInfo | null; point: Point | null; onPoint: (p: Point) => void; onToggle: () => void }
+
+function Picture({ project, item, variant, transform, label, info, point, onPoint, onToggle }: PictureProps) {
   return (
     <figure className="flex-1 min-w-0">
-      <img alt={`${label} — ${item}`} className="w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-200 dark:bg-stone-800" src={imageUrl(project, item, variant, transform, 1600)} />
+      <div className="relative cursor-crosshair" data-testid={`pic-${transform}`} onMouseMove={e => { const p = pointIn(e, e.currentTarget); if (p) onPoint(p) }} onClick={onToggle}>
+        <img alt={`${label} — ${item}`} draggable={false} className="w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-200 dark:bg-stone-800 select-none" src={imageUrl(project, item, variant, transform, 1600)} />
+        {point && <span aria-hidden className="pointer-events-none absolute w-6 h-6 -ml-3 -mt-3 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.6)]" style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} />}
+      </div>
       <figcaption className="text-xs text-stone-500 mt-1"><b>{label}.</b> {describe(transform, info)}</figcaption>
     </figure>
   )
@@ -31,9 +37,11 @@ export default function ItemPage({ project, item, source }: { project: string; i
   const siblings = useLoad(() => api.items(project, source), [project, source])
   const [variant, setVariant] = useState<string | null>(null), [transform, setTransform] = useState('level'), [compare, setCompare] = useState(true)
   const [infos, setInfos] = useState<Record<string, TransformInfo | null>>({}), [err, setErr] = useState<string | null>(null)
+  const [point, setPoint] = useState<Point | null>(null), [locked, setLocked] = useState(false)       // the loupe's point: follows the pointer over the picture until a click holds it
   const v = variant ?? it.data?.primary ?? null
+  const pic = { point, onPoint: (p: Point) => { if (!locked) setPoint(p) }, onToggle: () => setLocked(l => !l) }
 
-  useEffect(() => { setVariant(null) }, [item])
+  useEffect(() => { setVariant(null); setPoint(null); setLocked(false) }, [item])
   useEffect(() => {
     if (!v) return
     let live = true; setInfos({})
@@ -89,9 +97,10 @@ export default function ItemPage({ project, item, source }: { project: string; i
                 <label className="ml-auto text-sm text-stone-500 flex items-center gap-2"><input type="checkbox" checked={compare} onChange={e => setCompare(e.target.checked)} />Side by side with original</label>
               </div>
               <div className="flex gap-3 flex-col lg:flex-row">
-                {compare && transform !== 'original' && <Picture project={project} item={item} variant={v} transform="original" label="Original" info={infos.original ?? null} />}
-                <Picture project={project} item={item} variant={v} transform={transform} label={TRANSFORMS.find(t => t.id === transform)?.label ?? transform} info={infos[transform] ?? null} />
+                {compare && transform !== 'original' && <Picture project={project} item={item} variant={v} transform="original" label="Original" info={infos.original ?? null} {...pic} />}
+                <Picture project={project} item={item} variant={v} transform={transform} label={TRANSFORMS.find(t => t.id === transform)?.label ?? transform} info={infos[transform] ?? null} {...pic} />
               </div>
+              <Loupe project={project} item={item} variants={data.variants} point={point} locked={locked} />
               <ExportPanel project={project} item={item} stem={data.stem} variant={v} />
             </>
           )}
