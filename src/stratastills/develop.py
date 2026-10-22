@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
-from stratastills import denoise_ai, gpu
+from stratastills import denoise_ai, gpu, inputs, lineardng
 
 VERSION = 9
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
@@ -30,7 +30,7 @@ class DevelopError(RuntimeError): pass
 def read_dng_tags(path):
     """The DNG tags this module uses, from the raw IFD (and the main IFD): {name: value}. Missing ones are left out."""
     import tifffile
-    want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding')
+    want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding', 'Make', 'Model')
     out = {}
     with tifffile.TiffFile(path) as t:
         pages = [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or [])
@@ -362,10 +362,15 @@ def auto_ev(img, lut, target=TARGET_MEDIAN, stride=8):
 # ---- the whole development ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 def _raw_u16(path, half):
-    """The demosaiced raw as LibRaw gives it: uint16 (H, W, 3), camera RGB, white-balanced, linear."""
+    """The demosaiced raw as LibRaw gives it: uint16 (H, W, 3), camera RGB, white-balanced, linear. A linear DNG (demosaiced RGB, which LibRaw refuses: Lightroom's merged panoramas) is read by lineardng.py into the same form."""
     import rawpy
-    with rawpy.imread(path) as r:
-        return r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+    try:
+        with rawpy.imread(path) as r:
+            return r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+    except Exception as e:
+        if not lineardng.is_linear(path): raise
+        try: return lineardng.read(path, half, gpu.max_pixels() if gpu.available() else None)
+        except Exception as e2: raise ValueError(f'neither LibRaw ({e}) nor the linear DNG reader ({e2}) could read {path}')
 
 
 def _raw_linear(path, half): return _raw_u16(path, half).astype(np.float32) / 65535.0
@@ -392,7 +397,7 @@ def develop_parts(path, half=False, ev='auto', recover=0.35):
         if table is None: img = img @ camera_to_srgb(cm, n).T.astype(np.float32)
         else: img = apply_hue_sat_map(img @ camera_to_prophoto(cm, n).T.astype(np.float32), table) @ prophoto_to_srgb().T.astype(np.float32)
     be =float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(tags.get('ProfileToneCurve'))
+    img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(inputs.tone_curve(tags))
     g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else float(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None          # the profile is for the raw values: after the gain, variance = S*g*v + O*g^2
     return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
@@ -445,7 +450,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
         if table is None: img = (mat(camera_to_srgb(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w)
         else: img = (mat(prophoto_to_srgb()) @ gpu.apply_hue_sat_map((mat(camera_to_prophoto(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w), mat(table)).reshape(3, -1)).reshape(3, h, w)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(tags.get('ProfileToneCurve')); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
+    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(inputs.tone_curve(tags)); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
     sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else float(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
     classical = denoise in ('auto', 'chroma') and npf is not None

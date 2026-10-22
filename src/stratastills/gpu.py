@@ -72,6 +72,16 @@ def cubic_ok():
 
 PEAK_BYTES = 6.5e9              # what one 48 MP develop needs on the device at its peak (measured 5.7 GB)
 _slots = None
+PEAK_PIXELS = 48.8e6           # the size of the picture PEAK_BYTES was measured on
+
+
+def max_pixels():
+    """The largest picture (pixels) one develop fits on the device, or None when it is not limited by a card's memory (MPS shares the machine's, CPU has no card): 90 % of a CUDA card's memory over the peak bytes per pixel. A bigger one does not fail, it thrashes through system memory (minutes instead of seconds)."""
+    try:
+        d = dev()
+        if d.type == 'cuda': return int(torch_().cuda.mem_get_info()[1] * 0.9 / PEAK_BYTES * PEAK_PIXELS)
+    except Exception: pass
+    return None
 
 
 _slots_lock = threading.Lock()

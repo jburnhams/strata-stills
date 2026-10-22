@@ -17,7 +17,7 @@ import datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, jpeg_quality, preview, projects as P, settings, sizeplan, transforms
+from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, preview, projects as P, settings, sizeplan, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
@@ -85,7 +85,7 @@ class State:
 def run_develop(st, p):
     st.say('developing the full-size picture'); an = {}
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast']) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
-    st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
+    st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
 
 
 def run_level(st, p):
