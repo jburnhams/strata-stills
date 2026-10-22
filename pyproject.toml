@@ -2,6 +2,7 @@
 pythonpath = ["src", "tests/utils"]
 testpaths = ["tests/unit"]
 addopts = "-ra --timeout=300"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]       # TestClient noise from the installed starlette; remove when the dependency moves on
 markers = [
     "integration: builds synthetic photos and runs the CLI / server (tests/integration)",
     "slow: needs downloaded models; run manually or on a schedule",

@@ -3,7 +3,8 @@
 Each milestone ends with something that can be run on the Hazelmere shoot.
 
 - [x] **M0 scaffold**: repo layout, environment, CI, `doctor`, `scan` (grouping, metadata). 
-- [ ] **M1 project and working images**: a project folder (`shoots/<name>/`) with `project.json`; decode each source once (DNG via rawpy, else JPEG) into a cached working image (long side 2048) and a thumbnail; resumable and versioned like strata-360's analysis stages.
+- [x] **M0b projects**: projects directory setting, projects with several source folders, `projects/new/source/set/serve` commands, project list on app start.
+- [ ] **M1 working images**: in each project, decode each source once (DNG via rawpy, else JPEG) into a cached working image (long side 2048) and a thumbnail; resumable and versioned like strata-360's analysis stages.
 - [ ] **M2 level**: nadir shots: dominant orientation of edges (roof lines, roads) folded to 90 degrees, rotate by the smallest angle with a confidence; oblique shots: horizon from gradient/line voting, plus the DJI flight roll as a prior. Contact sheet of before/after to judge on real shots.
 - [ ] **M3 develop**: raw development to a good starting point (exposure/white balance/tone/highlight recovery), compared against the camera JPEG; port exposure and palette grading from strata-360.
 - [ ] **M4 detect and label**: YOLO11 objects and people, scene tags, place from GPS; stored per shot.

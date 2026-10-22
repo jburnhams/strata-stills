@@ -19,3 +19,4 @@ web/coverage/
 # Source photos and generated output never live in the repo
 shoots/
 out/
+projects/
