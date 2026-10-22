@@ -22,6 +22,20 @@ def test_project_lifecycle(client, tmp_path):
     assert client.get('/api/project', params=dict(id='nope')).status_code == 400
 
 
+def test_sources_items_primary_and_image(client, tmp_path):
+    from PIL import Image
+    src = tmp_path / 's'; src.mkdir(); Image.new('RGB', (80, 60), 'gray').save(src / 'X_1.JPG'); Image.new('RGB', (80, 60)).save(src / 'X_1-Enhanced.jpg')
+    client.post('/api/projects', json=dict(name='Demo', sources=[str(src)]))
+    (s,) = client.get('/api/project/sources', params=dict(id='demo')).json(); assert s['stills'] == 1
+    (it,) = client.get('/api/project/items', params=dict(id='demo', source=s['id'])).json(); assert it['primary'] == 'jpeg'
+    assert client.put('/api/project/primary', params=dict(id='demo', item=it['id']), json=dict(variant='enhanced.jpg')).json()['primary'] == 'enhanced.jpg'
+    assert client.put('/api/project/primary', params=dict(id='demo', item=it['id']), json=dict(variant='zzz')).status_code == 400
+    r = client.get('/api/project/image', params=dict(id='demo', item=it['id'], transform='level', px=64)); assert r.status_code == 200 and r.headers['content-type'] == 'image/jpeg'
+    assert client.get('/api/project/transform', params=dict(id='demo', item=it['id'], transform='level')).json()['applied'] is False
+    assert client.get('/api/project/image', params=dict(id='demo', item='nope~x')).status_code == 400
+    assert client.get('/api/project/item', params=dict(id='demo', item=it['id'])).json()['stem'] == 'X_1'
+
+
 def test_settings_roundtrip(client, tmp_path):
     assert client.put('/api/settings', json=dict(projects_dir='relative')).status_code == 400
     assert client.get('/api/settings').json()['projects_dir'] == str(tmp_path / 'projects')

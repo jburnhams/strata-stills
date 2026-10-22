@@ -11,3 +11,11 @@
 ## 2026-10-22: projects
 
 - A project is separate from the photos: a folder in the projects directory (setting `projects_dir`, default `projects/` in this repo, gitignored; `~/.stratastills/settings.json`, env `STRATASTILLS_PROJECTS`) with `project.json` listing any number of source folders. Projects may be nested in plain sub-folders. `./stratastills serve` opens on the list of projects (interim single-file page until the React app exists).
+
+## 2026-10-22: browser app, first cut
+
+- Items and variants: a shot's files (raw, camera JPEG, `-Enhanced-NR` ...) are its variants and the person picks the primary (stored in `<project>/items.json`; default raw, a panorama's JPEG). `-Pano` files are their own items, named after the shot they came from.
+- Previews: decoded once to a 2048 px working image (raw: LibRaw half-size with camera white balance; Lightroom linear DNG: the embedded 2048 level through tifffile + imagecodecs for JPEG XL) and cached under `<project>/cache/`, keyed by path, size and mtime. A transform result and its info are cached beside it.
+- The raw as LibRaw develops it by default is darker and cooler than the camera's own JPEG; choosing a good development (baseline exposure, DJI tone curve, white balance) is milestone M3.
+- Levelling v1 (transforms.py): long straight segments (Canny + probabilistic Hough), deviation from the nearest axis; straight-down shots use the 4x-angle circular mean so any building direction folds to the nearest 90 degrees; oblique shots only trust the median within 10 degrees. Not applied when under 12 lines, confidence under 0.35 or the turn under 0.15 degrees. Synthetic grids turned 3, 7 and 20 degrees are recovered within 0.5 degrees. Real-shot confidence is modest (0.49 on the first rooftop shot), so judging it on the whole shoot is the next step. A panorama's pitch is not known from its own JPEG, so it is treated as oblique for now.
+- OpenCV 5 returns `HoughLinesP` segments as (N,4), OpenCV 4 as (N,1,4).

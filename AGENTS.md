@@ -2,7 +2,7 @@
 
 Sister project of `../strata-360` (video): same structure, libraries, build and conventions, applied to still images. When in doubt, do what strata-360 does; port code from it rather than rewriting it, and note ports in `NOTICE`/`docs/progress.md`.
 
-- Python application code lives in `src/stratastills/`; a React web app (not started yet) will live in `web/src/` and build into `src/stratastills/server/static/`, as in strata-360.
+- Python application code lives in `src/stratastills/`; the React web app lives in `web/src/` and build into `src/stratastills/server/static/`, as in strata-360.
 - Python tests live under `tests/`: `tests/unit/` (fast, isolated, synthetic data; no models, no real photos), `tests/integration/` (CLI/server on synthetic photos), `tests/utils/` (shared helpers). Real photos (`shoots/`, the drone folders on `\\Server\Drone`) are never required by tests and never committed.
 - Commands (from the repo root, with `.venv` active or via `./stratastills` / `stratastills.cmd`):
   - `pip install -r requirements-test.txt` is enough for the test suites.
@@ -12,3 +12,5 @@ Sister project of `../strata-360` (video): same structure, libraries, build and 
 - Originals are read-only: nothing here ever writes into, renames or deletes files in a source folder. Output goes to a separate project/output folder.
 - Style: dense, comment-the-why, long lines are fine (ruff line-length 400), pytest style tests.
 - Docs live in `docs/`: `overview.md` (design brief), `implementation-plan.md` (what to build next, in order), `progress.md` (log of findings and decisions).
+- Web (from `web/`): `npm install`, `npm run dev` (proxies /api to `./stratastills serve` on 8361), `npm run build` (writes into `src/stratastills/server/static/`, which `serve` serves), `npm run typecheck`, `npm run test:unit` (node), `npm run test:integration` (jsdom + msw: every endpoint the app calls needs a handler in `web/tests/utils/server.ts`).
+- App shape: projects -> source folders -> contents (items) -> item (variants: pick the primary; transforms: original, levelled ...). Transforms live in `src/stratastills/transforms.py` (each has a VERSION in its cache key) and the frontend lists them in `web/src/api.ts` TRANSFORMS: add to both.

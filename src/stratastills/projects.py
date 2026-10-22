@@ -95,3 +95,79 @@ def shots(pid, root=None, recursive=False):
         try: out += [(s['path'], sh) for sh in ingest.scan(s['path'], recursive=recursive)]
         except OSError: out.append((s['path'], None))
     return out
+
+
+# ---- sources, items and the choices made on them ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+STATE = 'items.json'                    # {item_id: {primary: variant_id}}: what the person chose, per item
+
+
+def source_id(path):
+    """A short stable id of a source folder (the same folder is the same id whatever the case or slashes)."""
+    import hashlib
+    return hashlib.sha1(os.path.normcase(os.path.abspath(path)).encode()).hexdigest()[:8]
+
+
+def item_id(sid, stem): return f'{sid}~{stem}'
+
+
+def _source(pid, sid, root=None):
+    for s in load(pid, root)['sources']:
+        if source_id(s['path']) == sid: return s
+    raise ProjectError(f'no source {sid!r} in project {pid!r}')
+
+
+def load_state(pid, root=None):
+    try: d = json.load(open(os.path.join(folder(pid, root), STATE)))
+    except (OSError, ValueError): d = {}
+    return d if isinstance(d, dict) else {}
+
+
+def _save_state(pid, d, root=None):
+    p = os.path.join(folder(pid, root), STATE); tmp = p + '.tmp'
+    with open(tmp, 'w') as f: json.dump(d, f, indent=1)
+    os.replace(tmp, p)
+
+
+def default_primary(shot):
+    """The variant shown and processed unless the person picks another: the raw (a panorama's raw is a big linear file, so its JPEG), else the camera JPEG, else the first derived file."""
+    v = {x['id']: x for x in shot.variants()}
+    for k in (('jpeg', 'raw') if shot.pano else ('raw', 'jpeg')):
+        if k in v: return k
+    return next(iter(v), None)
+
+
+def source_summaries(pid, root=None):
+    """Each source folder with what is in it: [{id, path, reachable, stills, panos, videos}]. An unreachable folder (a share that is off) is reported, not an error."""
+    out = []
+    for s in load(pid, root)['sources']:
+        d = dict(id=source_id(s['path']), path=s['path'], added=s.get('added'), reachable=True, stills=0, panos=0, videos=0)
+        try:
+            for sh in ingest.scan(s['path']):
+                k = sh.kind; d['stills' if k == 'still' else 'panos' if k == 'pano' else 'videos'] += 1
+        except OSError: d['reachable'] = False
+        out.append(d)
+    return out
+
+
+def source_items(pid, sid, root=None):
+    """The items of one source: [{id, stem, kind, parent, primary, variants: [...]}] (videos included, marked by kind)."""
+    s = _source(pid, sid, root); st = load_state(pid, root); out = []
+    for sh in ingest.scan(s['path']):
+        iid = item_id(sid, sh.stem); vs = sh.variants(); prim = st.get(iid, {}).get('primary')
+        if prim not in {v['id'] for v in vs}: prim = default_primary(sh)
+        out.append(dict(id=iid, stem=sh.stem, kind=sh.kind, parent=sh.parent, primary=prim, chosen=iid in st, variants=vs, n_sidecars=len(sh.sidecars), video=sh.video))
+    return out
+
+
+def get_item(pid, iid, root=None):
+    sid, _, stem = iid.partition('~')
+    for it in source_items(pid, sid, root):
+        if it['id'] == iid: return it
+    raise ProjectError(f'no item {iid!r}')
+
+
+def set_primary(pid, iid, variant, root=None):
+    it = get_item(pid, iid, root)
+    if variant not in {v['id'] for v in it['variants']}: raise ProjectError(f'item {iid!r} has no variant {variant!r}')
+    st = load_state(pid, root); st.setdefault(iid, {})['primary'] = variant; _save_state(pid, st, root); return get_item(pid, iid, root)
