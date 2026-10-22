@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import denoise_ai
 
-VERSION = 6
+VERSION = 7
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -226,11 +226,19 @@ def highlight_detail(rgb, amount=1.0, lo=0.62, hi=0.92):
     return np.clip(rgb + (new - y)[..., None], 0, 1).astype(np.float32)
 
 
-def core_luma(rgb, sig8, k=0.6):
-    """Take the grain out of the finest detail without taking the texture: luminance is split into a smooth part and a fine band (Y minus its 1 px blur); fine detail weaker than `k` x the noise is shrunk to nothing (soft threshold) and stronger detail (the edge of a tile, a brick line) is kept as it is.
-    Unlike a non-local-means pass, which averages texture away, strong structure passes through unchanged."""
-    y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); low = cv2.GaussianBlur(y, (0, 0), 1.0); d = y - low; tau = k * sig8 / 255.0
-    dn = np.sign(d) * np.maximum(np.abs(d) - tau, 0); return np.clip(rgb + (low + dn - y)[..., None], 0, 1).astype(np.float32)
+BAND_CORE = (0.6, 0.18, 0.27)   # soft-threshold of the luminance bands 0.5-1, 1-2 and 2-4 px as a fraction of the pixel noise: found empirically (the noise within a band is a fraction of the noise of the pixel, falling with the band's scale); see docs/progress.md
+
+
+def core_luma(rgb, sig8, k=None):
+    """Take the grain out of the luminance without taking the texture: it is split into bands by scale (finer than 1 px, 1 to 2 px, 2 to 4 px and the smooth rest) and the detail in each band weaker than a threshold (BAND_CORE times the noise expected at that pixel, `sig8`) is soft-thresholded to nothing,
+    while stronger structure (the edge of a tile, a brick line, a window frame) passes unchanged. Unlike a non-local-means pass, which averages texture away, strong structure is untouched; and unlike coring the finest band only, the mottling at 1 to 4 px that demosaicing and noise reduction leave (most visible in light walls) is dealt with too.
+    The thresholds also follow the local brightness: x0.7 in dark and mid tones, rising to x1.1 in bright walls (smoothstep over a smoothed luminance of 0.55 to 0.85): measured against the camera's JPEG in flat patches, that puts the grain of bright walls at the JPEG's level (it was 25 % above) without making the dark and mid areas smoother than the JPEG's.
+    `k` scales all the thresholds (default 1)."""
+    k = 1.0 if k is None else k; y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); n = sig8 / 255.0
+    b = cv2.GaussianBlur(y, (0, 0), 8.0); w = np.clip((b - 0.55) / 0.30, 0, 1); w = w * w * (3 - 2 * w); n = n * (0.7 + 0.4 * w)
+    g = [y] + [cv2.GaussianBlur(y, (0, 0), s) for s in (1.0, 2.0, 4.0)]; out = g[3].copy()
+    for band, a in zip((g[0] - g[1], g[1] - g[2], g[2] - g[3]), BAND_CORE): out += np.sign(band) * np.maximum(np.abs(band) - a * k * n, 0)
+    return np.clip(rgb + (out - y)[..., None], 0, 1).astype(np.float32)
 
 
 def noise_map8(img, noise_profile, blur=8.0):
@@ -324,10 +332,10 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
     sig8 = noise_map8(img, npf) if npf is not None else None
     out = finish(img, lut)
-    if highlight_contrast > 0: out = highlight_detail(out, highlight_contrast)
     if classical:
         out = clean_colour(out, sig8)
-        if denoise in ('auto', 'ai'): out = core_luma(out, sig8)
+        if denoise in ('auto', 'ai'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
+    if highlight_contrast > 0: out = highlight_detail(out, highlight_contrast)
     if denoise == 'ai' and sig8 is not None:
         model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
         if denoise_ai.available(model): out = denoise_ai.adaptive(out, sig8, model, strength)

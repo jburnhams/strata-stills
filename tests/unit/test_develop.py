@@ -144,3 +144,22 @@ def test_highlight_detail_boosts_contrast_in_bright_areas_but_not_their_brightne
 
 def test_default_shoulder_is_the_soft_one():
     assert D.WHITE == 16.0 and D.KNEE == 0.55 and 0 < D.HIGHLIGHT_CONTRAST <= 1.5
+
+
+def test_band_coring_removes_mottling_at_two_to_four_pixels_but_keeps_edges_and_is_stronger_in_bright_areas():
+    rng = np.random.default_rng(10); h, w = 200, 300
+    mottle = cv2.GaussianBlur(rng.standard_normal((h, w)).astype(np.float32), (0, 0), 1.6); mottle *= 0.012 / mottle.std()                                   # grain correlated over 2 to 4 px
+    dark = np.full((h, w), 0.25, np.float32) + mottle; bright = np.full((h, w), 0.85, np.float32) + mottle
+    sig = np.full((h, w), 8.0, np.float32)
+    for lab, a in (('dark', dark), ('bright', bright)):
+        out = D.core_luma(np.dstack([a] * 3), sig); assert out[..., 0].std() < a.std() * 0.8, lab
+    od = D.core_luma(np.dstack([dark] * 3), sig)[..., 0].std() / dark.std(); ob = D.core_luma(np.dstack([bright] * 3), sig)[..., 0].std() / bright.std(); assert ob < od        # stronger in the bright area
+    edge = np.full((h, w), 0.5, np.float32); edge[:, 150:] = 0.9; e = D.core_luma(np.dstack([edge + mottle] * 3), sig)[..., 0]
+    assert abs(float(e[:, 160:190].mean() - e[:, 110:140].mean()) - 0.4) < 0.01 and D.core_luma(np.dstack([edge] * 3), sig * 0)[..., 0].std() == pytest.approx(edge.std(), rel=1e-3)      # a strong edge is untouched, and no noise means no coring
+
+
+def test_the_contrast_boost_runs_after_the_grain_is_cored(monkeypatch):
+    order = []; rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32)
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p: dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_linear', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+    monkeypatch.setattr(D, 'core_luma', lambda r, s, k=None: order.append('core') or r); monkeypatch.setattr(D, 'highlight_detail', lambda r, a=1.0, lo=0.62, hi=0.92: order.append('contrast') or r)
+    D.develop('x.dng', half=True); assert order == ['core', 'contrast']
