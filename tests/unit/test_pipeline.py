@@ -195,3 +195,9 @@ def test_auto_size_is_the_folders_median_so_every_picture_of_a_size_gets_the_sam
 def images_dims(item):
     from stratastills import images
     return images.dims(next(v for v in item['variants'] if v['kind'] != 'generated')['path'])
+
+
+def test_auto_size_never_goes_below_half_the_native_size(proj):
+    from stratastills import sizeplan as S
+    pid, sid, iid = proj; item = P.get_item(pid, iid); native = tuple(images_dims(item))
+    assert S.folder_size(pid, item, native, lambda path: dict(ok=True, scale30=0.2), PL.source_variant) >= 0.5 * max(native)

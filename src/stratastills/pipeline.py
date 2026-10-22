@@ -13,7 +13,7 @@ Presets: built in (BUILTIN: 'best' is the default and needs nothing chosen) or t
 `apply_rules` generates what is missing, so adding a folder and pressing one button gives the preferred variants of every picture in it.
 
 Nothing is ever written into a source folder."""
-import datetime as dt, hashlib, json, os, re
+import datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
@@ -104,6 +104,7 @@ def run_resize(st, p):
         try: fs = sizeplan.folder_size(st.pid, st.item, (w, h), lambda path: X.measure_detail(st.pid, path), lambda it: source_variant(it))
         except Exception: fs = None
         if fs: out_long, why = fs, 'the detail limit measured over this folder (median of a sample of its pictures of this size)'
+    if p['size'] in (None, 'auto') and out_long < sizeplan.MIN_SHARE * long_native: out_long, why = math.ceil(sizeplan.MIN_SHARE * long_native), 'half the native size: auto never goes below it'
     if p['size'] in (None, 'auto'): ow, oh = sizeplan.output_dims(w, h, out_long)                                      # tidy dimensions; a size asked for in pixels is made exactly
     else: ow, oh = (out_long, max(1, round(h * out_long / w))) if w >= h else (max(1, round(w * out_long / h)), out_long)
     st.scale = max(ow, oh) / long_native; st.rec['size'] = dict(long_side=max(ow, oh), why=why)

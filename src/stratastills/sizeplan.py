@@ -8,6 +8,7 @@ import numpy as np
 from stratastills import detail, develop, images, projects as P
 
 SAMPLE = 10
+MIN_SHARE = 0.5                 # 'auto' never goes below this share of the native width and height, whatever the measurement says
 _lock = threading.Lock()
 
 
@@ -48,6 +49,6 @@ def folder_size(pid, item, native, measure, pick):
             try: return json.load(open(cache))['long_side']
             except (ValueError, KeyError): pass
         vals = [r[detail.RECOMMEND] for r in (measure(paths[i]) for i in chosen) if r.get('ok')]
-        long_native = max(native); size = int(min(long_native, math.ceil(float(np.median(vals)) * long_native / 64) * 64)) if vals else None
+        long_native = max(native); size = int(min(long_native, math.ceil(max(float(np.median(vals)), MIN_SHARE) * long_native / 64) * 64)) if vals else None
         with open(cache, 'w') as f: json.dump(dict(long_side=size, sampled=chosen, measured=len(vals)), f)
         return size
