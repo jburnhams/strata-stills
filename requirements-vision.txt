@@ -1,0 +1,7 @@
+# Detector models for the subject / object stages (added when those stages land; same choices as strata-360).
+ultralytics                # YOLO11 (fetches its own weights on first use)
+insightface                # faces: detection (buffalo_l)
+spandrel==0.4.2            # loads the denoising model (denoise_ai.py)
+einops                     # needed by SCUNet
+# torch/torchvision with CUDA are installed separately (RTX 30/40: --index-url https://download.pytorch.org/whl/cu128, torch==2.9.1 torchvision==0.24.1; cp313 and cp314 wheels exist)
+# the SCUNet weights (72 MB, Apache-2.0) are fetched on first need into models/scunet/ (python -c "from stratastills import denoise_ai; denoise_ai.fetch()")

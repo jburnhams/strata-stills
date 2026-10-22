@@ -1,0 +1,115 @@
+"""Reading a picture file into a working image, and the cache of working images and previews inside a project.
+
+`load(path, px)` gives a BGR uint8 array, the right way up, at most `px` on its longest side:
+  JPEG / PNG / TIFF / WebP   Pillow (EXIF orientation applied)
+  camera raw (.dng ...)      developed from the raw (develop.py), half size: plenty for a preview or for measuring the tilt; the export develops at full size
+  Lightroom linear / merged-pano DNG (LibRaw refuses these)  the biggest reduced-size level inside the file that is at least `px`, read with tifffile (JPEG XL needs imagecodecs)
+`cached(project_dir, path, kind, px, make)` keeps the result of `make()` as a JPEG under `<project>/cache/`, keyed by the file's path, size and modification time, so a changed file is a new picture and nothing stale is served."""
+import hashlib, json, os
+
+import cv2, numpy as np
+
+CACHE = 'cache'
+JPEG_QUALITY = 90
+
+
+class ImageError(RuntimeError): pass
+
+
+def _fit(bgr, px):
+    h, w = bgr.shape[:2]; s = px / max(h, w)
+    return cv2.resize(bgr, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA) if s < 1 else bgr
+
+
+def _read_pillow(path, px):
+    from PIL import Image, ImageOps
+    with Image.open(path) as im:
+        im.draft('RGB', (px, px))                                     # JPEG: decode at a reduced size (much faster for 48 MP files)
+        im = ImageOps.exif_transpose(im).convert('RGB')
+        return _fit(cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR), px)
+
+
+def _read_tiff(path, px):
+    """A TIFF Pillow cannot open (16 bit RGB, as the app's own TIFF exports are): read with tifffile, to 8 bit."""
+    import tifffile
+    a = tifffile.imread(path)
+    if a.ndim == 2: a = np.dstack([a] * 3)
+    a = a[..., :3]; a = (a >> 8).astype(np.uint8) if a.dtype == np.uint16 else a.astype(np.uint8)
+    return _fit(cv2.cvtColor(a, cv2.COLOR_RGB2BGR), px)
+
+
+def _read_raw(path, px):
+    """The picture developed from the raw as in develop.py (half-size demosaic, lens corrections, exposure, tone; colour noise only is removed, the luminance denoise is for the export): quick enough for the app, and looks like the export."""
+    from stratastills import develop
+    rgb = develop.develop(path, half=True, denoise='chroma')
+    return _fit(cv2.cvtColor((rgb * 255 + 0.5).astype(np.uint8), cv2.COLOR_RGB2BGR), px)
+
+
+def _read_linear_dng(path, px):
+    """A demosaiced (LinearRaw) DNG: pick the smallest embedded level that has at least `px` on the long side (else the largest), as 16-bit, and show it with the sRGB curve."""
+    import tifffile
+    with tifffile.TiffFile(path) as f:
+        levels = [s for s in f.series if len(s.shape) == 3 and s.shape[2] == 3 and s.dtype == np.uint16]
+        if not levels: raise ImageError('no 16-bit RGB level in the DNG')
+        big = [s for s in levels if max(s.shape[:2]) >= px]
+        s = min(big, key=lambda s: max(s.shape[:2])) if big else max(levels, key=lambda s: max(s.shape[:2]))
+        a = s.asarray().astype(np.float32) / 65535.0
+    return _fit(cv2.cvtColor((np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8), cv2.COLOR_RGB2BGR), px)
+
+
+RAW_EXTS = ('.dng', '.arw', '.cr2', '.cr3', '.nef', '.orf', '.raf', '.rw2')
+
+
+def is_camera_raw(path): return os.path.splitext(path)[1].lower() in RAW_EXTS
+
+
+def dims(path):
+    """(width, height) of the biggest picture in a file, read from its header: Pillow for ordinary pictures, the largest IFD or sub-IFD level for a DNG (the main IFD of a camera DNG is only a thumbnail)."""
+    if is_camera_raw(path):
+        import tifffile
+        with tifffile.TiffFile(path) as t:
+            best = (0, 0)
+            for pg in [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or []):
+                h, w = pg.shape[:2]
+                if w * h > best[0] * best[1]: best = (w, h)
+        return best
+    from PIL import Image
+    with Image.open(path) as im: return im.size
+
+
+def load(path, px=2048):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ('.dng', '.arw', '.cr2', '.cr3', '.nef', '.orf', '.raf', '.rw2'):
+        try: return _read_raw(path, px)
+        except Exception as e:
+            try: return _read_linear_dng(path, px)
+            except Exception as e2: raise ImageError(f'cannot read {os.path.basename(path)}: {e}; {e2}')
+    try: return _read_pillow(path, px)
+    except Exception as e:
+        if ext in ('.tif', '.tiff'):
+            try: return _read_tiff(path, px)
+            except Exception: pass
+        raise ImageError(f'cannot read {os.path.basename(path)}: {e}')
+
+
+def cache_key(path, *parts):
+    st = os.stat(path)
+    return hashlib.sha1(json.dumps([os.path.normcase(os.path.abspath(path)), st.st_size, int(st.st_mtime), *parts]).encode()).hexdigest()[:20]
+
+
+def cache_path(project_dir, key, ext='.jpg'):
+    d = os.path.join(project_dir, CACHE); os.makedirs(d, exist_ok=True); return os.path.join(d, key + ext)
+
+
+def write_jpeg(path, bgr):
+    tmp = path + '.tmp.jpg'; cv2.imwrite(tmp, bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]); os.replace(tmp, path)
+
+
+def working(project_dir, path, px=2048):
+    """The working image of a file (BGR, long side <= px), from the cache when there."""
+    from stratastills import develop
+    p = cache_path(project_dir, cache_key(path, 'working', px, develop.VERSION))
+    if os.path.exists(p):
+        im = cv2.imread(p)
+        if im is not None: return im
+    im = load(path, px); write_jpeg(p, im); return im
