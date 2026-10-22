@@ -32,7 +32,7 @@ def test_oblique_ignores_big_angles():
 
 def test_inscribed_scale_fills_the_frame():
     assert T.inscribed_scale(800, 600, 0) == pytest.approx(1.0) and T.inscribed_scale(800, 600, 10) > 1.0
-    out = T.rotate_fill(np.full((600, 800, 3), 255, np.uint8), 12); assert out.min() == 255          # no empty corner is brought in
+    out = T.rotate_fill(np.full((600, 800, 3), 255, np.uint8), 12); assert out.min() >= 250          # no empty corner is brought in (cubic interpolation is a level off on some platforms)
 
 
 def test_unknown_transform():

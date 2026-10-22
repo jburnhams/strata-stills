@@ -130,12 +130,15 @@ def test_the_whole_development_agrees_with_the_cpu_one(monkeypatch, denoise):
 
 
 def test_develop_picks_the_gpu_only_when_there_is_one_and_the_option_is_one_it_does(monkeypatch):
-    synthetic_dng(monkeypatch); calls = []; monkeypatch.setattr(D, '_develop_gpu', lambda *a: calls.append('gpu') or np.zeros((2, 2, 3), np.float32)); monkeypatch.setattr(D, 'develop_parts', lambda *a, **k: calls.append('cpu') or (_ for _ in ()).throw(StopIteration()))
+    class CpuPath(Exception): pass                                                                                    # (a StopIteration raised inside a generator becomes a RuntimeError on Python 3.11)
+
+    def cpu_path(*a, **k): calls.append('cpu'); raise CpuPath()
+    synthetic_dng(monkeypatch); calls = []; monkeypatch.setattr(D, '_develop_gpu', lambda *a: calls.append('gpu') or np.zeros((2, 2, 3), np.float32)); monkeypatch.setattr(D, 'develop_parts', cpu_path)
     monkeypatch.setattr(gpu, 'available', lambda: True); D.develop('x.dng'); D.develop('x.dng', denoise='chroma'); assert calls == ['gpu', 'gpu']
     for kw in (dict(denoise=3.0), dict(denoise='ai'), dict(backend='cpu')):
-        with pytest.raises(StopIteration): D.develop('x.dng', **kw)
+        with pytest.raises(CpuPath): D.develop('x.dng', **kw)
     monkeypatch.setattr(gpu, 'available', lambda: False)
-    with pytest.raises(StopIteration): D.develop('x.dng')
+    with pytest.raises(CpuPath): D.develop('x.dng')
     assert D.develop('x.dng', backend='gpu').shape == (2, 2, 3)
 
 

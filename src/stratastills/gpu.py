@@ -227,8 +227,10 @@ def guided(p, guide, r, eps):
 
 
 def resize_area(x, size):
-    """Plane (H, W) reduced to `size` = (h, w) by area averaging (cv2.INTER_AREA)."""
-    return torch_().nn.functional.interpolate(x[None, None], size=size, mode='area')[0, 0]
+    """Plane (H, W) reduced to `size` = (h, w) by area averaging (cv2.INTER_AREA). On MPS the adaptive pooling behind it handles only sizes that divide evenly; for the others the (small) reduction is done on the CPU."""
+    F = torch_().nn.functional
+    if x.device.type == 'mps' and (x.shape[-2] % size[0] or x.shape[-1] % size[1]): return F.interpolate(x.cpu()[None, None], size=size, mode='area')[0, 0].to(x.device)
+    return F.interpolate(x[None, None], size=size, mode='area')[0, 0]
 
 
 def resize_linear(x, size, mode='bilinear'):
