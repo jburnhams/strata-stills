@@ -222,6 +222,36 @@ def gpu_from_numpy_chw(a, device):
     t = torch_().from_numpy(np.ascontiguousarray(a)).to(device).float(); return t.permute(2, 0, 1).contiguous() if t.dim() == 3 else t
 
 
+def sample_grid(small, ys, xs, h, w, mode='bilinear'):
+    """The plane `small` (sh, sw) enlarged to (h, w) as resize_linear does ('bilinear' or 'bicubic', half-pixel centres, edge values held), evaluated only at the pixel rows `ys` and columns `xs` (index tensors/arrays of the full-size picture): (len(ys), len(xs)). What a tile of the enlarged plane is, without making the whole of it."""
+    t = torch_(); F = t.nn.functional; d = small.device; gy = ((t.as_tensor(np.asarray(ys), device=d).float() + 0.5) / h * 2 - 1).view(-1, 1).expand(-1, len(xs)); gx = ((t.as_tensor(np.asarray(xs), device=d).float() + 0.5) / w * 2 - 1).view(1, -1).expand(len(ys), -1)
+    return F.grid_sample(small[None, None], t.stack([gx, gy], -1)[None], mode=mode, padding_mode='border', align_corners=False)[0, 0]
+
+
+def warp_source_box(coef, centre, h, w, box, margin=4):
+    """The part of the source picture (y0, y1, x0, x1) that warp_rectilinear_box needs to make the output `box`: the box's sample positions (computed on the card) plus a margin for the bicubic kernel, clipped to the picture."""
+    t = torch_(); y0, y1, x0, x1 = box; d = dev(); xs_, ys_ = _warp_coords(coef, centre, h, w, box, d); lo = lambda a: max(0, int(a.min().floor()) - margin); hi = lambda a, n: min(n, int(a.max().ceil()) + margin + 1)
+    return min(lo(ys_[c]) for c in range(len(ys_))), max(hi(ys_[c], h) for c in range(len(ys_))), min(lo(xs_[c]) for c in range(len(xs_))), max(hi(xs_[c], w) for c in range(len(xs_)))
+
+
+def _warp_coords(coef, centre, h, w, box, device, planes=3):
+    """The source positions (x, y in pixels of the full picture) each output pixel of `box` samples, per colour plane: (list of xs, list of ys), each (bh, bw): develop.warp_rectilinear's mapping."""
+    t = torch_(); y0, y1, x0, x1 = box; cx, cy = centre[0] * (w - 1), centre[1] * (h - 1); mr = float(np.hypot(max(cx, w - 1 - cx), max(cy, h - 1 - cy)))
+    yy = t.arange(y0, y1, device=device, dtype=t.float32).view(-1, 1); xx = t.arange(x0, x1, device=device, dtype=t.float32).view(1, -1); x = (xx - cx) / mr; y = (yy - cy) / mr; r2 = x * x + y * y; XS, YS = [], []
+    for c in range(planes):
+        kr0, kr1, kr2, kr3, kt0, kt1 = (float(v) for v in coef[min(c, len(coef) - 1)]); f = kr0 + r2 * (kr1 + r2 * (kr2 + r2 * kr3))
+        XS.append((x * f + kt0 * 2 * x * y + kt1 * (r2 + 2 * x * x)) * mr + cx); YS.append((y * f + kt1 * 2 * x * y + kt0 * (r2 + 2 * y * y)) * mr + cy)
+    return XS, YS
+
+
+def warp_rectilinear_box(src, src_box, coef, centre, h, w, box):
+    """warp_rectilinear (bicubic) of the full (h, w) picture, computed only for the output `box`, from `src` (3, sh, sw): the part `src_box` (y0, y1, x0, x1) of the picture (warp_source_box says which). Edge reflection is that of the picture only where src_box reaches its edge, as it does for the pixels near it."""
+    t = torch_(); F = t.nn.functional; sy0, sy1, sx0, sx1 = src_box; sh, sw = sy1 - sy0, sx1 - sx0; XS, YS = _warp_coords(coef, centre, h, w, box, src.device); out = t.empty((3, box[1] - box[0], box[3] - box[2]), device=src.device, dtype=t.float32)
+    for c in range(3):
+        grid = t.stack([((XS[c] - sx0) + 0.5) / sw * 2 - 1, ((YS[c] - sy0) + 0.5) / sh * 2 - 1], dim=-1)[None]; out[c] = F.grid_sample(src[c][None, None], grid, mode='bicubic', padding_mode='reflection', align_corners=False)[0, 0]
+    return out
+
+
 def local_tone(img, strength, highlights, px=1200):
     """develop.local_tone: the edge-preserving base is computed on a reduced copy (the bilateral filter runs on the CPU, it is tiny)."""
     import cv2

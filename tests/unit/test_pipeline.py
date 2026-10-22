@@ -201,3 +201,8 @@ def test_auto_size_never_goes_below_half_the_native_size(proj):
     from stratastills import sizeplan as S
     pid, sid, iid = proj; item = P.get_item(pid, iid); native = tuple(images_dims(item))
     assert S.folder_size(pid, item, native, lambda path: dict(ok=True, scale30=0.2), PL.source_variant) >= 0.5 * max(native)
+
+
+def test_merged_panoramas_have_a_higher_floor_for_the_auto_size():
+    from stratastills import sizeplan as S
+    assert S.min_share('linear-dng') == 0.75 and S.min_share('raw') == 0.5 and S.min_share(None) == 0.5

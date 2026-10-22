@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
-from stratastills import denoise_ai, gpu, inputs, lineardng
+from stratastills import denoise_ai, gpu, gpu_tiled, inputs, lineardng
 
 VERSION = 9
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
@@ -369,7 +369,7 @@ def _raw_u16(path, half):
             return r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
     except Exception as e:
         if not lineardng.is_linear(path): raise
-        try: return lineardng.read(path, half, gpu.max_pixels() if gpu.available() else None)
+        try: return lineardng.read(path, half)
         except Exception as e2: raise ValueError(f'neither LibRaw ({e}) nor the linear DNG reader ({e2}) could read {path}')
 
 
@@ -428,9 +428,39 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
 
 
 def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None):
-    """The raw is decoded first (LibRaw, on the CPU, holding no device slot, so another picture can be on the card meanwhile); then the picture takes a device slot for the rest."""
-    u16 = _raw_u16(path, half)
-    with gpu.slot(): return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis)
+    """The raw is decoded first (LibRaw, on the CPU, holding no device slot, so another picture can be on the card meanwhile); then the picture takes a device slot for the rest. A picture too big for the card (gpu.max_pixels) is developed in tiles (gpu_tiled.py); if that cannot be done for its opcodes, a reduced copy that fits is developed instead."""
+    u16 = _raw_u16(path, half); limit = gpu.max_pixels()
+    with gpu.slot():
+        if limit and u16.shape[0] * u16.shape[1] > limit:
+            try: return gpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis)
+            except gpu_tiled.Unsupported:
+                k = (limit / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
+        return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis)
+
+
+def gpu_colour(img, tags):
+    """The camera matrices (and the profile's hue/saturation map) on a (3, H, W) picture on the device: camera RGB to linear sRGB. Pointwise, so it can be run on a tile."""
+    t = gpu.torch_()
+    if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
+        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3); cm, wt = color_matrix_weight(cm1, cm2, n); table = hue_sat_table(tags, wt) if HUE_SAT_MAP else None
+        mat = lambda m: t.from_numpy(np.asarray(m, np.float32)).to(img.device); c, h, w = img.shape
+        if table is None: img = (mat(camera_to_srgb(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w)
+        else: img = (mat(prophoto_to_srgb()) @ gpu.apply_hue_sat_map((mat(camera_to_prophoto(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w), mat(table)).reshape(3, -1)).reshape(3, h, w)
+    return img
+
+
+def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast):
+    """The last part of the GPU development, from the exposed linear picture `img` (3, H, W) to the finished one: colour noise blurred by `sc` (the visible-noise estimate of the whole picture), the noise map, the tone curve and colour limit, the colour and luminance clean-up, the highlight contrast. Everything in it is local (the widest reach is about 90 pixels), so it can be run on a tile with a margin (gpu_tiled.py) and give what the whole picture would."""
+    classical = denoise in ('auto', 'chroma') and npf is not None
+    if classical and sc > 0.3:                                                                                         # denoise_linear: colour noise blurred in proportion to the noise
+        y = gpu.luma(img); cc = gpu.gaussian(img - y[None], sc); img = (y[None] + cc).clamp_(min=0)
+    sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
+    out = gpu.limit_chroma(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), CHROMA_KNEE, CHROMA_CEIL)
+    if classical:
+        out = gpu.clean_colour(out, sig8)
+        if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)
+    if highlight_contrast > 0: out = gpu.highlight_detail(out, highlight_contrast)
+    return out
 
 
 def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None):
@@ -444,24 +474,12 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
                 m, plane, planes, _box, _sp, _org = gain_map(p); img, field = gpu.apply_gain_map(img, m, plane, planes)
             elif oid == 1:
                 coef, centre = warp_params(p); img = gpu.warp_rectilinear(img, coef, centre)
-    if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
-        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3); cm, wt = color_matrix_weight(cm1, cm2, n); table = hue_sat_table(tags, wt) if HUE_SAT_MAP else None
-        mat = lambda m: t.from_numpy(np.asarray(m, np.float32)).to(img.device); c, h, w = img.shape
-        if table is None: img = (mat(camera_to_srgb(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w)
-        else: img = (mat(prophoto_to_srgb()) @ gpu.apply_hue_sat_map((mat(camera_to_prophoto(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w), mat(table)).reshape(3, -1)).reshape(3, h, w)
+    img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(inputs.tone_curve(tags)); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
     sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else float(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
-    classical = denoise in ('auto', 'chroma') and npf is not None
-    if npf is not None and denoise in ('auto', 'chroma'):                                                          # denoise_linear: colour noise blurred in proportion to the noise
-        sig = visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1); y = gpu.luma(img); cc = img - y[None]; sc = float(np.clip(sig * 0.6, 0.0, 1.5))
-        if sc > 0.3: cc = gpu.gaussian(cc, sc)
-        img = (y[None] + cc).clamp_(min=0)
-    sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
-    out = gpu.limit_chroma(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), CHROMA_KNEE, CHROMA_CEIL); del img
-    if classical:
-        out = gpu.clean_colour(out, sig8)
-        if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)
-    if highlight_contrast > 0: out = gpu.highlight_detail(out, highlight_contrast)
-    res = gpu.to_numpy(out); del out, sig8; gpu.free(); return res
+    sc = 0.0
+    if npf is not None and denoise in ('auto', 'chroma'): sc = float(np.clip(visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1) * 0.6, 0.0, 1.5))
+    out = gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast); del img
+    res = gpu.to_numpy(out); del out; gpu.free(); return res

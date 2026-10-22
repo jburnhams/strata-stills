@@ -121,7 +121,8 @@ def run_resize(st, p):
         try: fs = sizeplan.folder_size(st.pid, st.item, (w, h), lambda path: X.measure_detail(st.pid, path), lambda it: source_variant(it))
         except Exception: fs = None
         if fs: out_long, why = fs, 'the detail limit measured over this folder (median of a sample of its pictures of this size)'
-    if p['size'] in (None, 'auto') and out_long < sizeplan.MIN_SHARE * long_native: out_long, why = math.ceil(sizeplan.MIN_SHARE * long_native), 'half the native size: auto never goes below it'
+    floor = sizeplan.min_share(st.rec.get('input', {}).get('kind'))
+    if p['size'] in (None, 'auto') and out_long < floor * long_native: out_long, why = math.ceil(floor * long_native), f'{floor:.0%} of the native size: auto never goes below it'
     if p['size'] in (None, 'auto'): ow, oh = sizeplan.output_dims(w, h, out_long)                                      # tidy dimensions; a size asked for in pixels is made exactly
     else: ow, oh = (out_long, max(1, round(h * out_long / w))) if w >= h else (max(1, round(w * out_long / h)), out_long)
     st.scale = max(ow, oh) / long_native; st.rec['size'] = dict(long_side=max(ow, oh), why=why)

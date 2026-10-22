@@ -9,6 +9,10 @@ from stratastills import detail, develop, images, projects as P
 
 SAMPLE = 10
 MIN_SHARE = 0.5                 # 'auto' never goes below this share of the native width and height, whatever the measurement says
+MIN_SHARE_MERGED = 0.75         # ... for a merged panorama (many frames in one picture, so more to keep; the merge's own resampling softens it, which the measurement reads as less detail)
+
+
+def min_share(kind): return MIN_SHARE_MERGED if kind == 'linear-dng' else MIN_SHARE
 _lock = threading.Lock()
 
 

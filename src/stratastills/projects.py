@@ -149,9 +149,9 @@ def _save_state(pid, d, root=None):
 
 
 def default_primary(shot):
-    """The variant shown and processed unless the person picks another: the raw (a panorama's raw is a big linear file, so its JPEG), else the camera JPEG, else the first derived file."""
+    """The variant shown and processed unless the person picks another: the raw (a panorama's is a linear DNG, read by lineardng.py and developed in tiles when it is big: it has more than the JPEG), else the camera JPEG, else the first derived file."""
     v = {x['id']: x for x in shot.variants()}
-    for k in (('jpeg', 'raw') if shot.pano else ('raw', 'jpeg')):
+    for k in ('raw', 'jpeg'):
         if k in v: return k
     return next(iter(v), None)
 

@@ -159,3 +159,21 @@ def test_hue_sat_map_and_chroma_limit_match():
     x = (RNG.random((50, 60, 3)) * 1.5).astype(np.float32); tb = np.stack([RNG.normal(0, 8, (36, 10)), 1 + RNG.normal(0, .1, (36, 10)), 1 + RNG.normal(0, .05, (36, 10))], -1).astype(np.float32)
     assert np.abs(c(gpu.apply_hue_sat_map(g(x), gpu.torch_().from_numpy(tb).to(gpu.dev()), rows=16)) - D.apply_hue_sat_map(x, tb)).max() < 1e-4
     y = RNG.random((50, 60, 3)).astype(np.float32); assert np.abs(c(gpu.limit_chroma(g(y), 0.2, 0.45)) - D.limit_chroma(y, 0.2, 0.45)).max() < 1e-4
+
+
+def test_the_tiled_development_agrees_with_the_whole_picture_one(monkeypatch):
+    from stratastills import gpu_tiled as T
+    synthetic_dng(monkeypatch, h=520, w=680); u16 = D._raw_u16('x.dng', False)
+    whole = D._develop_gpu_on_device('x.dng', u16, False, 'auto', 'auto', 0.35, D.HIGHLIGHT_CONTRAST, {}); a, b = {}, {}
+    D._develop_gpu_on_device('x.dng', u16, False, 'auto', 'auto', 0.35, D.HIGHLIGHT_CONTRAST, a); tiled = T.develop_tiled('x.dng', u16, 'auto', 'auto', 0.35, D.HIGHLIGHT_CONTRAST, b, tile=192, halo=T.HALO)
+    assert tiled.shape == whole.shape and tiled.dtype == np.float32 and np.isfinite(tiled).all() and np.abs(a['luma'] - b['luma']).max() < 1e-6
+    d = np.abs(tiled - whole); assert d.mean() < 1.5e-3 and np.percentile(d, 99.9) < 0.04, (d.mean(), np.percentile(d, 99.9))
+    seam = np.zeros(d.shape[:2], bool); seam[190:194] = True; seam[:, 190:194] = True; assert d[seam].mean() < 3 * d.mean() + 1e-3                              # no seams where the tiles meet
+
+
+def test_a_picture_too_big_for_the_card_is_developed_in_tiles_and_otherwise_not(monkeypatch):
+    from stratastills import gpu_tiled as T
+    synthetic_dng(monkeypatch, h=120, w=160); calls = []; monkeypatch.setattr(T, 'develop_tiled', lambda *a, **k: calls.append('tiled') or np.zeros((120, 160, 3), np.float32))
+    monkeypatch.setattr(gpu, 'max_pixels', lambda: 1000); D.develop('x.dng', backend='gpu'); assert calls == ['tiled']
+    calls.clear(); monkeypatch.setattr(gpu, 'max_pixels', lambda: None); D.develop('x.dng', backend='gpu'); assert calls == []
+    monkeypatch.setattr(gpu, 'max_pixels', lambda: 4800); monkeypatch.setattr(T, 'develop_tiled', lambda *a, **k: (_ for _ in ()).throw(T.Unsupported('x'))); out = D.develop('x.dng', backend='gpu'); assert out.shape[0] * out.shape[1] <= 4800     # falls back to a reduced copy
