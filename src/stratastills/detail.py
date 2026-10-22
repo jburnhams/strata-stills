@@ -69,12 +69,18 @@ def recommended_size(res, long_side, round_to=64):
     return int(min(long_side, int(np.ceil(res[RECOMMEND] * long_side / round_to)) * round_to))
 
 
-def sharpen_gain(mtf_freq, mtf, shape, scale, noise=0.01, max_gain=4.0, amount=1.0):
-    """The Wiener filter (2D, for an image of `shape` = (h, w)) that undoes the measured blur: gain m/(m^2 + noise) at each frequency, where m is the measured MTF at that frequency of the NATIVE picture (an output pixel is 1/`scale` native pixels, so output frequency f is native frequency f * scale), limited to `max_gain`. `amount` 1 restores the measured blur and no more; above 1 goes past it (the gain is raised to that power), which adds the local contrast the eye reads as crispness, as a camera's own JPEG sharpening does (at the cost of more of the noise).
-    Above the measured detail limit the gain falls back towards 1 instead of boosting what is only noise. Isotropic: the lens blur seen from a drone is close to it."""
+NOISE_TERM = 0.04               # the Wiener noise term: at 0.01 the gain climbed to its cap at the highest frequencies, where there is mostly noise (measured: finest-scale grain 2 to 3 times the unsharpened picture's and the camera JPEG's)
+ROLLOFF = (0.12, 0.30)          # the boost fades to nothing between these OUTPUT frequencies (cycles per pixel; 0.5 is Nyquist): tile courses, brick lines and edges live below 0.3, the grain above it
+
+
+def sharpen_gain(mtf_freq, mtf, shape, scale, noise=NOISE_TERM, max_gain=4.0, amount=1.0, rolloff=ROLLOFF):
+    """The Wiener filter (2D, for an image of `shape` = (h, w)) that undoes the measured blur: gain (1 + noise) m/(m^2 + noise) at each frequency (scaled so that it is exactly 1 where nothing is blurred, m = 1: a larger noise term must not take contrast off the broad tones), where m is the measured MTF at that frequency of the NATIVE picture (an output pixel is 1/`scale` native pixels, so output frequency f is native frequency f * scale), limited to `max_gain`. `amount` 1 restores the measured blur and no more; above 1 goes past it (the gain is raised to that power), which adds the local contrast the eye reads as crispness, as a camera's own JPEG sharpening does (at the cost of more of the noise).
+    Above the measured detail limit the gain falls back towards 1 instead of boosting what is only noise, and the boost is faded out over the top frequencies (`rolloff`): the sharpening was found to lift the finest-scale grain 2 to 3 times, tile detail needing none of that. Isotropic: the lens blur seen from a drone is close to it."""
     h, w = shape; r = np.hypot(*np.meshgrid(np.fft.fftfreq(w), np.fft.fftfreq(h)))
     m = np.interp(np.minimum(r, 0.5) * scale, mtf_freq, mtf, left=1.0, right=mtf[-1]); m = np.clip(m, 0.02, 1.0)
-    g = np.minimum((m / (m * m + noise)) ** amount, max_gain); return np.where(r * scale < mtf_freq[0], 1.0, g).astype(np.float32)
+    g = np.minimum(((1 + noise) * m / (m * m + noise)) ** amount, max_gain); g = np.where(r * scale < mtf_freq[0], 1.0, g)
+    if rolloff: g = 1 + (g - 1) * np.clip(1 - (r - rolloff[0]) / (rolloff[1] - rolloff[0]), 0, 1)
+    return g.astype(np.float32)
 
 
 def sharpen(rgb, gain, overshoot=0.05):

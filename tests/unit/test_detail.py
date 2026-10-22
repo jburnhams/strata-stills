@@ -38,7 +38,7 @@ def test_recommended_size_rounds_up_and_never_exceeds_native():
 
 def test_sharpening_restores_a_known_blur_without_halos():
     sharp = texture(1200, 900); blurred = cv2.GaussianBlur(sharp, (0, 0), 1.5); r = detail.effective_resolution(blurred)
-    g = detail.sharpen_gain(np.array(r['freq']), np.array(r['mtf']), blurred.shape, 1.0)
+    g = detail.sharpen_gain(np.array(r['freq']), np.array(r['mtf']), blurred.shape, 1.0, noise=0.01, rolloff=None)               # the pure restoration filter (the defaults also hold back the finest scale)
     out = detail.sharpen(np.repeat(blurred[..., None], 3, 2), g)[..., 0]
     assert np.abs(out - sharp).mean() < np.abs(blurred - sharp).mean() * 0.85                  # closer to the truth than the blurred picture
     assert out.min() >= blurred.min() - 0.06 and out.max() <= blurred.max() + 0.06            # no overshoot beyond the local range
@@ -46,5 +46,14 @@ def test_sharpening_restores_a_known_blur_without_halos():
 
 
 def test_sharpen_amount_goes_past_restoration():
-    f = np.linspace(0.002, 0.498, 128); m = np.exp(-2 * np.pi ** 2 * 1.5 ** 2 * f ** 2); g1 = detail.sharpen_gain(f, m, (64, 64), 1.0); g2 = detail.sharpen_gain(f, m, (64, 64), 1.0, amount=1.6)
-    assert g2.max() >= g1.max() and (g2 >= g1 - 1e-6).all() and g2.max() <= 4.0 + 1e-6
+    f = np.linspace(0.002, 0.498, 128); m = np.exp(-2 * np.pi ** 2 * 1.5 ** 2 * f ** 2); g1 = detail.sharpen_gain(f, m, (64, 64), 1.0, rolloff=None); g2 = detail.sharpen_gain(f, m, (64, 64), 1.0, amount=1.6, rolloff=None)
+    assert g2.max() >= g1.max() and g2.max() <= 4.0 + 1e-6 and g1.min() < 1.0                    # (with a noise term the filter also holds back the frequencies that are mostly noise)
+
+
+def test_the_boost_fades_out_at_the_top_frequencies_where_there_is_only_noise():
+    f = np.linspace(0.002, 0.498, 128); m = np.exp(-2 * np.pi ** 2 * 1.5 ** 2 * f ** 2); shape = (256, 256); r = np.hypot(*np.meshgrid(np.fft.fftfreq(256), np.fft.fftfreq(256)))
+    old = detail.sharpen_gain(f, m, shape, 1.0, noise=0.01, rolloff=None); new = detail.sharpen_gain(f, m, shape, 1.0)
+    assert old[r > 0.35].mean() > 1.5 and np.allclose(new[r >= detail.ROLLOFF[1]], 1.0, atol=1e-6) and new[(r > 0.05) & (r < 0.10)].mean() > 1.2        # restored where the detail is, left alone at the top
+    assert new.max() <= old.max() + 0.05 and new[0, 1] == pytest.approx(1.0, abs=0.01) and old[0, 1] == pytest.approx(1.0, abs=0.01)                                     # nothing is taken off the broad tones (the gain is 1 where the MTF is 1)
+    white = np.random.default_rng(0).normal(0.5, 0.02, (256, 256, 3)).astype(np.float32); fine = lambda a: (a[..., 0] - cv2.GaussianBlur(a[..., 0], (0, 0), 1.0)).std()
+    assert fine(detail.sharpen(white, new)) < fine(detail.sharpen(white, old)) * 0.7                                                                    # white noise is boosted much less

@@ -67,7 +67,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 1, sharpen=1, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 1, sharpen=2, encode=2)[stage]
 
 
 class State:
