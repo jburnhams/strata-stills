@@ -19,6 +19,7 @@ export interface GenerateBody { variant?: string | null; preset?: string | null;
 export interface GenerateCheck { key: string; exists: boolean; variant: string | null; stages: Stage[]; summary: string }
 export interface GenerateRecord { key: string; file: string; output: [number, number]; bytes: number; format: string; quality: number | null; summary: string; steps: string[]; existing?: boolean }
 export interface GenerateJob { state: 'idle' | 'running' | 'done' | 'failed' | 'exists'; text?: string; result?: GenerateRecord | null; error?: string | null; variant?: string }
+export interface FullRes { state: 'ready' | 'running' | 'failed' | 'idle'; text: string }
 export interface Rule { source: string; pipeline: string; variant?: string }
 export interface Rules { rules: Rule[]; pending: number }
 export interface ApplyJob { state: 'idle' | 'running' | 'done' | 'stopped' | 'failed'; done?: number; total?: number; text?: string; failed?: [string, string][] }
@@ -57,6 +58,7 @@ export const api = {
   checkGenerate: (id: string, item: string, b: GenerateBody) => req<GenerateCheck>('/api/project/generate/check' + qi(id, item), send('POST', b)),
   generate: (id: string, item: string, b: GenerateBody) => req<GenerateJob>('/api/project/generate' + qi(id, item), send('POST', b)),
   generateStatus: (id: string, item: string) => req<GenerateJob>('/api/project/generate' + qi(id, item)),
+  fullres: (id: string, item: string, variant: string) => req<FullRes>('/api/project/fullres' + qi(id, item) + '&variant=' + encodeURIComponent(variant)),
   rules: (id: string) => req<Rules>('/api/project/rules' + q(id)),
   setRules: (id: string, rules: Rule[]) => req<Rules>('/api/project/rules' + q(id), send('PUT', { rules })),
   applyRules: (id: string) => req<ApplyJob>('/api/project/apply' + q(id), { method: 'POST' }),

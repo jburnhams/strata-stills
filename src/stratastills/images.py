@@ -57,6 +57,26 @@ def _read_linear_dng(path, px):
     return _fit(cv2.cvtColor((np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8), cv2.COLOR_RGB2BGR), px)
 
 
+RAW_EXTS = ('.dng', '.arw', '.cr2', '.cr3', '.nef', '.orf', '.raf', '.rw2')
+
+
+def is_camera_raw(path): return os.path.splitext(path)[1].lower() in RAW_EXTS
+
+
+def dims(path):
+    """(width, height) of the biggest picture in a file, read from its header: Pillow for ordinary pictures, the largest IFD or sub-IFD level for a DNG (the main IFD of a camera DNG is only a thumbnail)."""
+    if is_camera_raw(path):
+        import tifffile
+        with tifffile.TiffFile(path) as t:
+            best = (0, 0)
+            for pg in [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or []):
+                h, w = pg.shape[:2]
+                if w * h > best[0] * best[1]: best = (w, h)
+        return best
+    from PIL import Image
+    with Image.open(path) as im: return im.size
+
+
 def load(path, px=2048):
     ext = os.path.splitext(path)[1].lower()
     if ext in ('.dng', '.arw', '.cr2', '.cr3', '.nef', '.orf', '.raf', '.rw2'):

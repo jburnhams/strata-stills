@@ -4,7 +4,7 @@
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
-  encode    JPEG (4:4:4; quality 'auto' = the lowest whose error the picture's own noise hides, jpeg_quality.py) or 16 bit TIFF      settings: format, quality
+  encode    JPEG (4:4:4; quality 90 by default, or 'auto' = the lowest whose error the picture's own noise hides, jpeg_quality.py) or 16 bit TIFF      settings: format, quality
 
 `develop` comes first and `encode` last; the others are in that order and each appears at most once. A generated picture is a new VARIANT of the item (projects.generated_variants), identified by the KEY of the stage settings that made it (item, source variant, every stage's settings and version):
 asking for the same thing again finds the existing variant instead of making another, which is what greys Generate out in the app.
@@ -19,6 +19,7 @@ import cv2, numpy as np
 
 from stratastills import detail, develop, export as X, images, jpeg_quality, preview, projects as P, settings, transforms
 
+DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
 ORDER = ('develop', 'level', 'resize', 'sharpen', 'encode')
 LABELS = dict(develop='Develop', level='Level', resize='Size', sharpen='Sharpen', encode='Encode')
@@ -52,7 +53,7 @@ def _sharpen_params(p): return dict(amount=_num(p, 'amount', 0, 3, SHARPEN_AMOUN
 def _encode_params(p):
     fmt = p.get('format', 'jpeg')
     if fmt not in X.FORMATS: raise P.ProjectError(f'unknown format {fmt!r}')
-    q = p.get('quality', 'auto')
+    q = p.get('quality', DEFAULT_QUALITY)
     if fmt == 'tiff': return dict(format='tiff', quality='auto')                       # a TIFF has no quality: a setting that does nothing must not make a different key
     if str(q).lower() == 'auto': return dict(format='jpeg', quality='auto')
     try: q = int(q)
@@ -119,11 +120,11 @@ def run_encode(st, p, out_base):
 
 # ---- configs and presets --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-BEST = [dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='auto'), dict(stage='sharpen', amount=SHARPEN_AMOUNT), dict(stage='encode', format='jpeg', quality='auto')]
+BEST = [dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='auto'), dict(stage='sharpen', amount=SHARPEN_AMOUNT), dict(stage='encode', format='jpeg', quality=DEFAULT_QUALITY)]
 BUILTIN = {
     'best': dict(label='Best quality (automatic)', stages=BEST),
     'archive': dict(label='Archive: 16 bit TIFF, native size, as developed', stages=[dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='native'), dict(stage='encode', format='tiff')]),
-    'web': dict(label='Web: 2048 px JPEG', stages=[dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='2048'), dict(stage='sharpen', amount=1.0), dict(stage='encode', format='jpeg', quality='auto')]),
+    'web': dict(label='Web: 2048 px JPEG', stages=[dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='2048'), dict(stage='sharpen', amount=1.0), dict(stage='encode', format='jpeg', quality=DEFAULT_QUALITY)]),
 }
 DEFAULT_PRESET = 'best'
 

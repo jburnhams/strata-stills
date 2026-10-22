@@ -33,7 +33,7 @@ def test_presets_are_data_and_can_be_saved_and_deleted():
 
 
 def test_normalize_orders_and_checks_the_stages():
-    n = PL.normalize([dict(stage='develop'), dict(stage='encode')]); assert n[0]['highlight_contrast'] == 0.8 and n[1] == dict(stage='encode', format='jpeg', quality='auto')
+    n = PL.normalize([dict(stage='develop'), dict(stage='encode')]); assert n[0]['highlight_contrast'] == 0.8 and n[1] == dict(stage='encode', format='jpeg', quality=90)
     for bad in ([], [dict(stage='encode')], [dict(stage='develop')], [dict(stage='develop'), dict(stage='sharpen'), dict(stage='level'), dict(stage='encode')], [dict(stage='develop'), dict(stage='develop'), dict(stage='encode')],
                 [dict(stage='nope')], [dict(stage='develop', bogus=1), dict(stage='encode')], [dict(stage='develop'), dict(stage='resize', size='10'), dict(stage='encode')], [dict(stage='develop'), dict(stage='encode', quality=10)],
                 [dict(stage='develop'), dict(stage='sharpen', amount=9), dict(stage='encode')], [dict(stage='develop', highlight_contrast='x'), dict(stage='encode')]):
@@ -54,7 +54,7 @@ def test_key_depends_on_what_is_made_and_summary_reads_well():
     b = PL.normalize(PL.BEST); k = PL.stage_key('a~x', 'raw', b)
     assert k == PL.stage_key('a~x', 'raw', b) and k != PL.stage_key('a~y', 'raw', b) and k != PL.stage_key('a~x', 'jpeg', b) and k != PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(size='native')))
     assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(format='tiff', quality=70))) == PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(format='tiff', quality=80)))
-    assert PL.summary(b) == 'JPEG auto quality · size auto · levelled · sharpened 1.5' and 'TIFF 16 bit' in PL.summary(PL.get_preset('archive')['stages']) and '2048 px' in PL.summary(PL.get_preset('web')['stages'])
+    assert PL.summary(b) == 'JPEG q90 · size auto · levelled · sharpened 1.5' and PL.summary(PL.apply_options(b, dict(quality='auto'))).startswith('JPEG auto quality') and 'TIFF 16 bit' in PL.summary(PL.get_preset('archive')['stages']) and '2048 px' in PL.summary(PL.get_preset('web')['stages'])
     assert 'highlight contrast 1.5' in PL.summary(PL.apply_options(b, dict(highlight_contrast=1.5)))
 
 
@@ -63,12 +63,17 @@ def test_generate_makes_a_new_variant_once_and_reports_it_exists_the_second_time
     key, have = PL.find_existing(pid, iid); assert have is None
     r = PL.generate(pid, iid, progress=steps.append)
     assert not r['existing'] and r['output'][0] % 64 == 0 and os.path.exists(r['file']) and r['file'].endswith(f'{key}.jpg') and os.path.dirname(r['file']) == P.generated_dir(pid, iid) and steps[0].startswith('developing') and 'writing' in steps
-    assert r['level']['applied'] and abs(r['level']['angle'] + 4) < 1.0 and r['quality'] >= 88 and 'chosen automatically' in ' '.join(r['steps']) and r['summary'].startswith('JPEG auto quality')
+    assert r['level']['applied'] and abs(r['level']['angle'] + 4) < 1.0 and r['quality'] == 90 and 'JPEG quality 90 as asked' in ' '.join(r['steps']) and r['summary'].startswith('JPEG q90')
     im = Image.open(r['file']); assert im.size == tuple(r['output']) and im.info.get('icc_profile') and im.getexif().get(0x0112) in (None, 1)
     g = generated(pid, iid); assert len(g) == 1 and g[0]['id'] == 'gen-' + key and g[0]['stages'] and g[0]['quality'] == r['quality'] and g[0]['label'].startswith('Generated')
     k2, have = PL.find_existing(pid, iid); assert k2 == key and have['id'] == 'gen-' + key
     again = PL.generate(pid, iid); assert again['existing'] and again['file'] == r['file'] and len(generated(pid, iid)) == 1
     other = PL.generate(pid, iid, options=dict(size='native', quality=90)); assert not other['existing'] and other['output'] == [1600, 1200] and other['quality'] == 90 and len(generated(pid, iid)) == 2
+
+
+def test_automatic_quality_is_still_available(proj):
+    pid, sid, iid = proj; r = PL.generate(pid, iid, options=dict(size='native', quality='auto', sharpen=False, level=False))
+    assert 88 <= r['quality'] <= 99 and 'chosen automatically' in ' '.join(r['steps']) and r['quality_info']['target'] >= 0.45 and r['summary'].startswith('JPEG auto quality')
 
 
 def test_a_generated_variant_can_be_primary_but_is_never_a_source(proj):

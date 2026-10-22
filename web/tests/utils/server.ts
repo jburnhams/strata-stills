@@ -29,16 +29,16 @@ export const handlers = [
 ]
 
 export const detail = { ok: true, native: [8064, 6048], recommended: 6016, scale50: 0.35, scale30: 0.75, scale20: 0.88, f50: 0.17, f30: 0.37, f20: 0.44 }
-export const BEST: Stage[] = [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'auto' }, { stage: 'sharpen', amount: 1.5 }, { stage: 'encode', format: 'jpeg', quality: 'auto' }]
+export const BEST: Stage[] = [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'auto' }, { stage: 'sharpen', amount: 1.5 }, { stage: 'encode', format: 'jpeg', quality: 90 }]
 export const presets: Preset[] = [
   { name: 'best', label: 'Best quality (automatic)', builtin: true, stages: BEST },
   { name: 'archive', label: 'Archive: 16 bit TIFF, native size, as developed', builtin: true, stages: [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'native' }, { stage: 'encode', format: 'tiff', quality: 'auto' }] },
 ]
-export const generatedRecord: GenerateRecord = { key: 'abc123', file: 'C:\p\generated\abc123.jpg', output: [6016, 4512], bytes: 15000000, format: 'jpeg', quality: 98, summary: 'JPEG auto quality · size auto · levelled · sharpened 1.5', steps: ['developed from the raw'] }
+export const generatedRecord: GenerateRecord = { key: 'abc123', file: 'C:\p\generated\abc123.jpg', output: [6016, 4512], bytes: 15000000, format: 'jpeg', quality: 90, summary: 'JPEG q90 · size auto · levelled · sharpened 1.5', steps: ['developed from the raw'] }
 
 /** What the mock server remembers within a test (reset after each one). */
-export const mock = { exists: false, existingVariant: 'gen-abc123', checks: [] as GenerateBody[], generates: [] as GenerateBody[], saved: [] as unknown[], rules: [] as Rule[], applies: 0, statusCalls: 0 }
-export const resetMock = () => { mock.exists = false; mock.checks = []; mock.generates = []; mock.saved = []; mock.rules = []; mock.applies = 0; mock.statusCalls = 0 }
+export const mock = { fullres: { state: 'ready', text: '' } as { state: string; text: string }, exists: false, existingVariant: 'gen-abc123', checks: [] as GenerateBody[], generates: [] as GenerateBody[], saved: [] as unknown[], rules: [] as Rule[], applies: 0, statusCalls: 0 }
+export const resetMock = () => { mock.fullres = { state: 'ready', text: '' }; mock.exists = false; mock.checks = []; mock.generates = []; mock.saved = []; mock.rules = []; mock.applies = 0; mock.statusCalls = 0 }
 
 /** The stages a body asks for: the preset with the flat options laid over it (a small copy of what the server does, enough to show the summary and the Advanced values). */
 export function stagesOf(b: GenerateBody): Stage[] {
@@ -51,6 +51,7 @@ const summaryOf = (st: Stage[]) => { const e = st.find(s => s.stage === 'encode'
 
 handlers.push(
   http.get('/api/project/detail', () => HttpResponse.json(detail)),
+  http.get('/api/project/fullres', () => HttpResponse.json(mock.fullres)),
   http.get('/api/pipelines', () => HttpResponse.json(presets)),
   http.put('/api/pipeline', async ({ request }) => { const b = await request.json(); mock.saved.push([new URL(request.url).searchParams.get('name'), b]); return HttpResponse.json({ name: new URL(request.url).searchParams.get('name'), label: 'x', builtin: false, stages: BEST }) }),
   http.post('/api/project/generate/check', async ({ request }) => { const b = await request.json() as GenerateBody; mock.checks.push(b); const st = stagesOf(b); return HttpResponse.json({ key: 'abc123', exists: mock.exists, variant: mock.exists ? mock.existingVariant : null, stages: st, summary: summaryOf(st) }) }),

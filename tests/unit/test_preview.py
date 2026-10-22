@@ -1,6 +1,6 @@
 import cv2, numpy as np, pytest
 from PIL import Image
-from stratastills import images, preview, projects as P
+from stratastills import fullres, images, preview, projects as P
 
 
 @pytest.fixture
@@ -52,12 +52,41 @@ def test_unreadable_file_is_an_image_error(tmp_path):
     with pytest.raises(images.ImageError): images.load(str(r))
 
 
-def test_crop_takes_the_same_point_of_each_variant_and_transform(proj):
+def wait_ready(pid, iid, variant, tries=100):
+    import time
+    for _ in range(tries):
+        if preview.fullres_status(pid, iid, variant)['state'] == 'ready': return
+        time.sleep(0.05)
+    raise AssertionError('the full-size copy was not made')
+
+
+def jpg(buf): return cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_COLOR)
+
+
+def test_crop_waits_for_the_full_size_copy_then_cuts_it(proj):
     pid, sid = proj; iid = P.item_id(sid, 'A_0001')
-    c = cv2.imdecode(np.frombuffer(preview.crop(pid, iid, 'jpeg', 'original', 0.5, 0.5, 100, 2), np.uint8), cv2.IMREAD_COLOR); assert c.shape[:2] == (200, 200)
-    assert cv2.imdecode(np.frombuffer(preview.crop(pid, iid, 'enhanced.jpg', 'level', 0.1, 0.9, 60, 1), np.uint8), cv2.IMREAD_COLOR).shape[:2] == (60, 60)
-    assert cv2.imdecode(np.frombuffer(preview.crop(pid, iid, None, 'original', -5, 9, 5000, 99), np.uint8), cv2.IMREAD_COLOR).shape[0] == 300 * 6          # clamped to the picture (300 px high) and 6x
+    with pytest.raises(preview.NotReady) as e: preview.crop(pid, iid, 'jpeg', 'original', 0.5, 0.5, 100, 2)
+    assert e.value.status['state'] in ('running', 'ready'); wait_ready(pid, iid, 'jpeg')
+    c = jpg(preview.crop(pid, iid, 'jpeg', 'original', 0.5, 0.5, 100, 2)); assert c.shape[:2] == (200, 200)
+    assert jpg(preview.crop(pid, iid, 'jpeg', 'original', -5, 9, 5000, 99)).shape == (preview.MAX_OUT, preview.MAX_OUT, 3)             # absurd requests are clamped
     with pytest.raises(P.ProjectError): preview.crop(pid, iid, 'raw', 'original')
+    with pytest.raises(P.ProjectError): preview.crop(pid, iid, 'jpeg', 'nope')
+    assert fullres.get(pid, P.get_item(pid, iid)['variants'][0]['path']).shape == (300, 400, 3) and fullres.status(pid, P.get_item(pid, iid)['variants'][0]['path'])['state'] == 'ready'
+
+
+def test_variants_of_different_sizes_show_the_same_scene_area(proj):
+    from stratastills import pipeline as PL
+    pid, sid = proj; iid = P.item_id(sid, 'A_0001'); r = PL.generate(pid, iid, options=dict(size='200', sharpen=False, level=False)); gid = 'gen-' + r['key']; assert r['output'][0] == 200
+    wait_ready(pid, iid, 'jpeg'); wait_ready(pid, iid, gid)
+    a = jpg(preview.crop(pid, iid, 'jpeg', 'original', 0.5, 0.5, 100, 2)); b = jpg(preview.crop(pid, iid, gid, 'original', 0.5, 0.5, 100, 2))                   # 100 px of the 400 px original, 50 px of the 200 px export: the same area
+    assert a.shape == b.shape == (200, 200, 3) and np.abs(a.astype(float) - b.astype(float)).mean() < 25 and np.abs(a.astype(float) - jpg(preview.crop(pid, iid, 'jpeg', 'original', 0.9, 0.2, 100, 2)).astype(float)).mean() > 5
+
+
+def test_levelled_crop_turns_only_the_crop(proj):
+    pid, sid = proj; iid = P.item_id(sid, 'A_0001'); wait_ready(pid, iid, 'jpeg')
+    info = preview.render(pid, iid, 'jpeg', 'level', preview.WORK_PX)[1]
+    a = jpg(preview.crop(pid, iid, 'jpeg', 'original', 0.5, 0.5, 120, 1)); b = jpg(preview.crop(pid, iid, 'jpeg', 'level', 0.5, 0.5, 120, 1))
+    assert a.shape == b.shape == (120, 120, 3) and (not info.get('applied') or np.abs(a.astype(float) - b.astype(float)).mean() > 1)
 
 
 def test_a_16_bit_tiff_is_readable(tmp_path):
