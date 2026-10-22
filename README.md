@@ -27,6 +27,10 @@ A 48 MP raw is developed, levelled, resized, sharpened and written in about 15 s
 
 ```bash
 pip install -r requirements-test.txt
-pytest tests/unit --cov
+pytest tests/unit --cov                 # unit tests + coverage (CI gates on it)
+pytest tests/integration -n auto        # CLI, pipelines and HTTP API on synthetic photos
 ruff check src tests
+cd web && npm run test:coverage:gate    # web tests against the coverage floors
 ```
+
+See [tests/README.md](tests/README.md) for the layout and conventions. `scripts/setup_env.ps1` (Windows) and `scripts/setup_env.sh` (macOS, Linux) build the environment from scratch. CI runs on GitHub Actions (`.github/workflows/`).
