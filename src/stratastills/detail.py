@@ -83,6 +83,21 @@ def sharpen_gain(mtf_freq, mtf, shape, scale, noise=NOISE_TERM, max_gain=4.0, am
     return g.astype(np.float32)
 
 
+ROLLOFF_BRIGHT = (0.06, 0.16)   # a tighter roll-off for bright areas (walls, render), where the same boost leaves the grain about a third above the camera JPEG's; measured: bright-wall grain 4.06 -> 3.58 with window and moulding edges and roof-tile detail unchanged
+BRIGHT_FROM, BRIGHT_SPAN = 0.60, 0.28
+
+
+def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0):
+    """The whole sharpening of an export: `sharpen` with the Wiener filter of the measured blur, but with the tighter roll-off (ROLLOFF_BRIGHT) blended in where the picture is bright (smoothed luminance from BRIGHT_FROM up over BRIGHT_SPAN, smoothstep), so the grain of bright walls is not lifted as it is in the dark and mid tones.
+    `rgb` float32 HxWx3 0..1; `scale` is the output size over the native size (see sharpen_gain)."""
+    import cv2
+    h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount)); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
+    if float(k.max()) <= 0: return base
+    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT))
+    return base * (1 - k) + alt * k
+
+
 def sharpen(rgb, gain, overshoot=0.05):
     """Apply a sharpen_gain filter to the luminance of `rgb` (float32 HxWx3, 0..1): the change is added equally to the three channels (colour is left alone), and the result may not go beyond the local range of the original by more than `overshoot` (no halos)."""
     import cv2

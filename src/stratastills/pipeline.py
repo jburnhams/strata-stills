@@ -67,7 +67,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 1, sharpen=2, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 1, sharpen=3, encode=2)[stage]
 
 
 class State:
@@ -104,8 +104,7 @@ def run_resize(st, p):
 def run_sharpen(st, p):
     res = st.res
     if not res.get('ok'): st.rec['steps'].append('not sharpened: too little texture to measure the blur'); return
-    st.say('sharpening to the measured blur'); g = detail.sharpen_gain(np.array(res['freq']), np.array(res['mtf']), st.rgb.shape[:2], st.scale, amount=p['amount'])
-    st.rgb = detail.sharpen(st.rgb, g); st.rec['steps'].append(f"sharpened with the Wiener filter of the measured MTF (amount {p['amount']:g})")
+    st.say('sharpening to the measured blur'); st.rgb = detail.sharpen_picture(st.rgb, np.array(res['freq']), np.array(res['mtf']), st.scale, amount=p['amount']); st.rec['steps'].append(f"sharpened with the Wiener filter of the measured MTF (amount {p['amount']:g})")
 
 
 def run_encode(st, p, out_base):
