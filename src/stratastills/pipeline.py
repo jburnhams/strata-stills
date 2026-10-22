@@ -17,7 +17,7 @@ import datetime as dt, hashlib, json, os, re
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, jpeg_quality, preview, projects as P, settings, transforms
+from stratastills import detail, develop, export as X, images, jpeg_quality, preview, projects as P, settings, sizeplan, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
@@ -67,7 +67,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 1, sharpen=3, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=3, encode=2)[stage]
 
 
 class State:
@@ -99,9 +99,16 @@ def run_level(st, p):
 
 def run_resize(st, p):
     res = st.res; st.rec['detail'] = {k: res.get(k) for k in ('ok', 'f50', 'f30', 'f20', 'scale50', 'scale30', 'scale20', 'recommended', 'alpha')}
-    h, w = st.rgb.shape[:2]; long_native = max(w, h); out_long, why = X.choose_size(p['size'], long_native, res); st.rec['size'] = dict(long_side=out_long, why=why); st.scale = out_long / long_native
-    if st.scale < 0.999:
-        st.say('resizing'); st.rgb = cv2.resize(st.rgb, (round(w * st.scale), round(h * st.scale)), interpolation=cv2.INTER_LANCZOS4 if st.scale > 0.5 else cv2.INTER_AREA); st.rec['steps'].append(f'resized to {st.rgb.shape[1]}x{st.rgb.shape[0]}')
+    h, w = st.rgb.shape[:2]; long_native = max(w, h); out_long, why = X.choose_size(p['size'], long_native, res)
+    if p['size'] in (None, 'auto'):                                                                                  # the folder's size for pictures of this native size, so they all come out alike
+        try: fs = sizeplan.folder_size(st.pid, st.item, (w, h), lambda path: X.measure_detail(st.pid, path), lambda it: source_variant(it))
+        except Exception: fs = None
+        if fs: out_long, why = fs, 'the detail limit measured over this folder (median of a sample of its pictures of this size)'
+    if p['size'] in (None, 'auto'): ow, oh = sizeplan.output_dims(w, h, out_long)                                      # tidy dimensions; a size asked for in pixels is made exactly
+    else: ow, oh = (out_long, max(1, round(h * out_long / w))) if w >= h else (max(1, round(w * out_long / h)), out_long)
+    st.scale = max(ow, oh) / long_native; st.rec['size'] = dict(long_side=max(ow, oh), why=why)
+    if (ow, oh) != (w, h):
+        st.say('resizing'); st.rgb = cv2.resize(st.rgb, (ow, oh), interpolation=cv2.INTER_LANCZOS4 if st.scale > 0.5 else cv2.INTER_AREA); st.rec['steps'].append(f'resized to {ow}x{oh}')
 
 
 def run_sharpen(st, p):

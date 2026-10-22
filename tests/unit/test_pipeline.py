@@ -172,3 +172,26 @@ def test_worker_count_follows_the_machine(monkeypatch):
     monkeypatch.setattr(resources, 'total_ram', lambda: 16e9); monkeypatch.setattr(resources.os, 'cpu_count', lambda: 16); assert resources.auto_workers(False) == 1                          # 16 GB holds one 7 GB picture at 80 %
     monkeypatch.setattr(resources, 'total_ram', lambda: 64e9); assert resources.auto_workers(False) == 4                                                                                          # 16 cores / 4
     monkeypatch.setattr(resources, 'total_ram', lambda: 0); assert resources.auto_workers(False) == 1 and resources.total_ram.__name__ == '<lambda>'
+
+
+def test_output_dims_are_multiples_of_16_when_the_aspect_allows_and_never_exceed_native():
+    from stratastills import sizeplan as S
+    assert S.output_dims(8064, 6048, 6016) == (6016, 4512) and S.output_dims(8064, 6048, 6000) == (6016, 4512) or S.output_dims(8064, 6048, 6000)[0] % 16 == 0
+    for w, h, ls in ((8064, 6048, 5000), (6048, 8064, 5000), (4032, 3024, 2048), (3000, 2000, 1700), (4000, 3001, 1999)):
+        ow, oh = S.output_dims(w, h, ls); assert max(ow, oh) <= max(w, h) and (ow < oh) == (w < h) and abs(ow / oh - w / h) < 0.01 * w / h
+    assert S.output_dims(8064, 6048, 8064) == (8064, 6048) and S.output_dims(8064, 6048, 9000) == (8064, 6048) and S.output_dims(8064, 6048, 2048) == (2048, 1536)
+    ow, oh = S.output_dims(8064, 6048, 5000); assert ow % 16 == 0 and oh % 16 == 0
+
+
+def test_auto_size_is_the_folders_median_so_every_picture_of_a_size_gets_the_same(proj):
+    from stratastills import sizeplan as S
+    pid, sid, iid = proj; item = P.get_item(pid, iid); native = tuple(images_dims(item)); calls = []
+    def measure(path): calls.append(path); return dict(ok=True, scale30=0.70)
+    a = S.folder_size(pid, item, native, measure, PL.source_variant); n = len(calls); b = S.folder_size(pid, item, native, lambda p: 1 / 0, PL.source_variant)                  # the second answer is from the cache
+    assert a == b and a % 64 == 0 and a >= 0.7 * max(native) and a < 0.7 * max(native) + 64 and n >= 1
+    assert S.folder_size(pid, item, (7, 7), measure, PL.source_variant) is None
+
+
+def images_dims(item):
+    from stratastills import images
+    return images.dims(next(v for v in item['variants'] if v['kind'] != 'generated')['path'])
