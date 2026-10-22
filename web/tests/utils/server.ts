@@ -28,4 +28,14 @@ export const handlers = [
     : HttpResponse.json({ applied: false })),
 ]
 
+export const detail = { ok: true, native: [8064, 6048], recommended: 6016, scale50: 0.35, scale30: 0.75, scale20: 0.88, f50: 0.17, f30: 0.37, f20: 0.44 }
+export const exportRecord = { file: 'C:\p\exports\A_1-6016x4512.jpg', name: 'A_1-6016x4512.jpg', bytes: 14954601, output: [6016, 4512], native: [8064, 6048], format: 'jpeg', created: '2026-10-22T03:50:29+01:00', stem: 'A_1', variant: 'raw', steps: ['developed from the raw', 'resized to 6016x4512'], size: { long_side: 6016, why: 'the detail limit measured on this picture' }, level: { applied: false, reason: 'already level' } }
+export const exportCalls: unknown[] = []
+handlers.push(
+  http.get('/api/project/detail', () => HttpResponse.json(detail)),
+  http.get('/api/project/exports', () => HttpResponse.json([exportRecord])),
+  http.post('/api/project/export', async ({ request }) => { exportCalls.push(await request.json()); return HttpResponse.json({ state: 'running', text: 'developing the full-size picture' }) }),
+  http.get('/api/project/export', () => HttpResponse.json({ state: 'done', result: exportRecord })),
+)
+
 export const server = setupServer(...handlers)

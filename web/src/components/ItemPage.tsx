@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, imageUrl, TRANSFORMS, type TransformInfo, type Variant } from '../api'
 import { href, useLoad } from '../route'
 import { Crumbs, Err, btnQuiet, projectCrumbs } from './ui'
+import ExportPanel from './ExportPanel'
 
 /** One sentence on what a transform did to the picture (or why it did nothing). */
 export function describe(id: string, i: TransformInfo | null): string {
@@ -91,6 +92,7 @@ export default function ItemPage({ project, item, source }: { project: string; i
                 {compare && transform !== 'original' && <Picture project={project} item={item} variant={v} transform="original" label="Original" info={infos.original ?? null} />}
                 <Picture project={project} item={item} variant={v} transform={transform} label={TRANSFORMS.find(t => t.id === transform)?.label ?? transform} info={infos[transform] ?? null} />
               </div>
+              <ExportPanel project={project} item={item} stem={data.stem} variant={v} />
             </>
           )}
         </>

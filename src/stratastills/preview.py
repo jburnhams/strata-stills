@@ -6,7 +6,7 @@ import json, os
 
 import cv2
 
-from stratastills import images, meta, projects as P, transforms
+from stratastills import develop, images, meta, projects as P, transforms
 
 WORK_PX = 2048
 
@@ -26,7 +26,7 @@ def render(pid, iid, variant=None, transform='original', px=1600):
     v = next((x for x in item['variants'] if x['id'] == vid), None)
     if v is None: raise P.ProjectError(f'item {iid!r} has no variant {vid!r}')
     pdir = P.folder(pid); px = max(64, min(int(px), WORK_PX))
-    key = images.cache_key(v['path'], 'render', transform, transforms.VERSION[transform], px); out = images.cache_path(pdir, key); side = images.cache_path(pdir, key, '.json')
+    key = images.cache_key(v['path'], 'render', transform, transforms.VERSION[transform], px, develop.VERSION); out = images.cache_path(pdir, key); side = images.cache_path(pdir, key, '.json')
     if os.path.exists(out) and os.path.exists(side):
         try: return out, json.load(open(side))
         except ValueError: pass

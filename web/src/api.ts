@@ -6,6 +6,10 @@ export type ItemKind = 'still' | 'pano' | 'video'
 export interface Variant { id: string; label: string; path: string; kind: 'raw' | 'jpeg' | 'derived'; ext: string }
 export interface Item { id: string; stem: string; kind: ItemKind; parent: string | null; primary: string | null; chosen: boolean; variants: Variant[]; n_sidecars: number; video: string | null }
 export interface TransformInfo { applied: boolean; angle?: number; confidence?: number; lines?: number; max_deg?: number; reason?: string | null; nadir?: boolean; pitch?: number | null }
+export interface Detail { ok: boolean; reason?: string; native?: [number, number]; recommended?: number | null; f50?: number; f30?: number; f20?: number; scale50?: number; scale30?: number; scale20?: number; alpha?: number }
+export interface ExportOptions { variant?: string | null; size: string; format: 'jpeg' | 'tiff'; level: boolean; sharpen: boolean; quality?: number }
+export interface ExportRecord { file: string; name: string; bytes: number; output: [number, number]; native: [number, number]; format: string; created: string; stem: string; variant: string; steps: string[]; size: { long_side: number; why: string }; level?: { applied: boolean; angle?: number; reason?: string } }
+export interface ExportJob { state: 'idle' | 'running' | 'done' | 'failed'; text?: string; result?: ExportRecord | null; error?: string | null }
 export interface Transform { id: string; label: string }
 
 /** The transforms the server offers on a picture, in order (transforms.py ORDER). */
@@ -32,6 +36,10 @@ export const api = {
   items: (id: string, source: string) => req<Item[]>('/api/project/items' + q(id) + '&source=' + encodeURIComponent(source)),
   item: (id: string, item: string) => req<Item>('/api/project/item' + q(id) + '&item=' + encodeURIComponent(item)),
   setPrimary: (id: string, item: string, variant: string) => req<Item>('/api/project/primary' + q(id) + '&item=' + encodeURIComponent(item), send('PUT', { variant })),
+  detail: (id: string, item: string, variant: string) => req<Detail>('/api/project/detail' + q(id) + '&item=' + encodeURIComponent(item) + '&variant=' + encodeURIComponent(variant)),
+  startExport: (id: string, item: string, o: ExportOptions) => req<ExportJob>('/api/project/export' + q(id) + '&item=' + encodeURIComponent(item), send('POST', o)),
+  exportStatus: (id: string, item: string) => req<ExportJob>('/api/project/export' + q(id) + '&item=' + encodeURIComponent(item)),
+  exports: (id: string, stem: string) => req<ExportRecord[]>('/api/project/exports' + q(id) + '&stem=' + encodeURIComponent(stem)),
   transform: (id: string, item: string, variant: string, transform: string) => req<TransformInfo>('/api/project/transform' + q(id) + '&item=' + encodeURIComponent(item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform),
 }
 
@@ -39,3 +47,5 @@ export const api = {
 export function imageUrl(id: string, item: string, variant: string | null, transform = 'original', px = 1600) {
   return '/api/project/image' + q(id) + '&item=' + encodeURIComponent(item) + (variant ? '&variant=' + encodeURIComponent(variant) : '') + '&transform=' + transform + '&px=' + px
 }
+
+export const exportFileUrl = (id: string, name: string) => '/api/project/export/file' + q(id) + '&name=' + encodeURIComponent(name)

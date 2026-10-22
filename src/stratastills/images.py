@@ -2,7 +2,7 @@
 
 `load(path, px)` gives a BGR uint8 array, the right way up, at most `px` on its longest side:
   JPEG / PNG / TIFF / WebP   Pillow (EXIF orientation applied)
-  camera raw (.dng ...)      LibRaw through rawpy: half-size demosaic with the camera white balance (fast, and plenty for a preview or analysis; a full-size develop is a later stage)
+  camera raw (.dng ...)      developed from the raw (develop.py), half size: plenty for a preview or for measuring the tilt; the export develops at full size
   Lightroom linear / merged-pano DNG (LibRaw refuses these)  the biggest reduced-size level inside the file that is at least `px`, read with tifffile (JPEG XL needs imagecodecs)
 `cached(project_dir, path, kind, px, make)` keeps the result of `make()` as a JPEG under `<project>/cache/`, keyed by the file's path, size and modification time, so a changed file is a new picture and nothing stale is served."""
 import hashlib, json, os
@@ -30,10 +30,10 @@ def _read_pillow(path, px):
 
 
 def _read_raw(path, px):
-    import rawpy
-    with rawpy.imread(path) as r:
-        rgb = r.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
-    return _fit(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), px)
+    """The picture developed from the raw as in develop.py (half-size demosaic, lens corrections, exposure, tone; colour noise only is removed, the luminance denoise is for the export): quick enough for the app, and looks like the export."""
+    from stratastills import develop
+    rgb = develop.develop(path, half=True, denoise='chroma')
+    return _fit(cv2.cvtColor((rgb * 255 + 0.5).astype(np.uint8), cv2.COLOR_RGB2BGR), px)
 
 
 def _read_linear_dng(path, px):
@@ -74,7 +74,8 @@ def write_jpeg(path, bgr):
 
 def working(project_dir, path, px=2048):
     """The working image of a file (BGR, long side <= px), from the cache when there."""
-    p = cache_path(project_dir, cache_key(path, 'working', px))
+    from stratastills import develop
+    p = cache_path(project_dir, cache_key(path, 'working', px, develop.VERSION))
     if os.path.exists(p):
         im = cv2.imread(p)
         if im is not None: return im

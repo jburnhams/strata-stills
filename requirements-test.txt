@@ -19,3 +19,5 @@ pytest-timeout
 pytest-xdist
 diff-cover
 tzdata                         # IANA timezone database, needed on Windows for zoneinfo
+tifffile                       # Lightroom linear DNG and the 16 bit TIFF export
+imagecodecs                    # JPEG XL inside those DNGs

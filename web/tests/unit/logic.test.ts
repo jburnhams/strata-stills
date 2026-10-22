@@ -31,3 +31,12 @@ describe('describe a transform', () => {
     expect(say('original', { applied: false })).toMatch(/as it comes/)
   })
 })
+
+import { detailText } from '../../src/components/ExportPanel'
+describe('detail text', () => {
+  it('turns the measurement into pixels across', () => {
+    expect(detailText(null)).toMatch(/Measuring/)
+    expect(detailText({ ok: true, native: [8064, 6048], scale50: 0.35, scale30: 0.75 })).toMatch(/about 2822 px across and 30 % at 6048 px/)
+    expect(detailText({ ok: false, reason: 'too little texture to measure' })).toMatch(/Could not measure.*too little texture/)
+  })
+})
