@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { api, imageUrl, TRANSFORMS, type TransformInfo, type Variant } from '../api'
+import { api, generatedFileUrl, imageUrl, TRANSFORMS, type TransformInfo, type Variant } from '../api'
 import { href, useLoad } from '../route'
 import { Crumbs, Err, btnQuiet, projectCrumbs } from './ui'
-import ExportPanel from './ExportPanel'
+import GeneratePanel, { mb } from './GeneratePanel'
 import Loupe, { pointIn, type Point } from './Loupe'
 
 /** One sentence on what a transform did to the picture (or why it did nothing). */
@@ -78,7 +78,9 @@ export default function ItemPage({ project, item, source }: { project: string; i
             {data.variants.map(x => (
               <div key={x.id} className={`rounded-lg border px-3 py-2 text-sm ${x.id === v ? 'border-blue-500 bg-blue-50 dark:bg-blue-950' : 'border-stone-300 dark:border-stone-700'}`}>
                 <button role="radio" aria-checked={x.id === v} className="font-medium" onClick={() => setVariant(x.id)}>{x.label}</button>
-                <div className="font-mono text-xs text-stone-500">{x.path.split(/[\\/]/).pop()}</div>
+                {x.kind === 'generated'
+                  ? <div className="text-xs text-stone-500 max-w-64">{x.summary}{x.quality ? ` (q${x.quality})` : ''}{x.bytes ? ` · ${mb(x.bytes)}` : ''}<br /><a className="text-blue-600 hover:underline" href={generatedFileUrl(project, item, x.id)}>Download</a></div>
+                  : <div className="font-mono text-xs text-stone-500">{x.path.split(/[\\/]/).pop()}</div>}
                 {x.id === data.primary
                   ? <span className="text-xs text-blue-600">★ primary</span>
                   : <button className={btnQuiet + ' mt-1'} onClick={() => choose(x)}>Make primary</button>}
@@ -101,7 +103,7 @@ export default function ItemPage({ project, item, source }: { project: string; i
                 <Picture project={project} item={item} variant={v} transform={transform} label={TRANSFORMS.find(t => t.id === transform)?.label ?? transform} info={infos[transform] ?? null} {...pic} />
               </div>
               <Loupe project={project} item={item} variants={data.variants} point={point} locked={locked} />
-              <ExportPanel project={project} item={item} stem={data.stem} variant={v} />
+              <GeneratePanel project={project} item={item} variant={data.variants.find(x => x.id === v)?.kind === 'generated' ? null : v} onGenerated={id => { it.reload(); setVariant(id) }} onShow={id => setVariant(id)} />
             </>
           )}
         </>

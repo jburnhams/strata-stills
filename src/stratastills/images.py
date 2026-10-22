@@ -29,6 +29,15 @@ def _read_pillow(path, px):
         return _fit(cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR), px)
 
 
+def _read_tiff(path, px):
+    """A TIFF Pillow cannot open (16 bit RGB, as the app's own TIFF exports are): read with tifffile, to 8 bit."""
+    import tifffile
+    a = tifffile.imread(path)
+    if a.ndim == 2: a = np.dstack([a] * 3)
+    a = a[..., :3]; a = (a >> 8).astype(np.uint8) if a.dtype == np.uint16 else a.astype(np.uint8)
+    return _fit(cv2.cvtColor(a, cv2.COLOR_RGB2BGR), px)
+
+
 def _read_raw(path, px):
     """The picture developed from the raw as in develop.py (half-size demosaic, lens corrections, exposure, tone; colour noise only is removed, the luminance denoise is for the export): quick enough for the app, and looks like the export."""
     from stratastills import develop
@@ -56,7 +65,11 @@ def load(path, px=2048):
             try: return _read_linear_dng(path, px)
             except Exception as e2: raise ImageError(f'cannot read {os.path.basename(path)}: {e}; {e2}')
     try: return _read_pillow(path, px)
-    except Exception as e: raise ImageError(f'cannot read {os.path.basename(path)}: {e}')
+    except Exception as e:
+        if ext in ('.tif', '.tiff'):
+            try: return _read_tiff(path, px)
+            except Exception: pass
+        raise ImageError(f'cannot read {os.path.basename(path)}: {e}')
 
 
 def cache_key(path, *parts):

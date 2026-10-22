@@ -41,25 +41,3 @@ def test_sources_items_primary_and_image(client, tmp_path):
 def test_settings_roundtrip(client, tmp_path):
     assert client.put('/api/settings', json=dict(projects_dir='relative')).status_code == 400
     assert client.get('/api/settings').json()['projects_dir'] == str(tmp_path / 'projects')
-
-
-def test_detail_export_job_and_download(client, tmp_path):
-    import time
-    from PIL import Image
-    import numpy as np
-    src = tmp_path / 's'; src.mkdir(); rng = np.random.default_rng(0); Image.fromarray((rng.random((600, 800, 3)) * 255).astype('uint8')).save(src / 'Y_1.JPG')
-    client.post('/api/projects', json=dict(name='Demo', sources=[str(src)])); (s,) = client.get('/api/project/sources', params=dict(id='demo')).json()
-    iid = client.get('/api/project/items', params=dict(id='demo', source=s['id'])).json()[0]['id']
-    assert client.get('/api/project/export', params=dict(id='demo', item=iid)).json()['state'] == 'idle'
-    assert 'ok' in client.get('/api/project/detail', params=dict(id='demo', item=iid)).json()
-    assert client.get('/api/project/detail', params=dict(id='demo', item=iid, variant='raw')).status_code == 400
-    assert client.post('/api/project/export', params=dict(id='demo', item=iid), json=dict(format='bmp')).status_code == 400
-    assert client.post('/api/project/export', params=dict(id='demo', item=iid), json=dict(size='native', format='jpeg', level=False, sharpen=False)).json()['state'] in ('running', 'done')
-    for _ in range(100):
-        j = client.get('/api/project/export', params=dict(id='demo', item=iid)).json()
-        if j['state'] != 'running': break
-        time.sleep(0.1)
-    assert j['state'] == 'done', j
-    (e,) = client.get('/api/project/exports', params=dict(id='demo', stem='Y_1')).json(); assert e['output'] == [800, 600]
-    f = client.get('/api/project/export/file', params=dict(id='demo', name=e['name'])); assert f.status_code == 200 and f.content[:2] == b'\xff\xd8'
-    assert client.get('/api/project/export/file', params=dict(id='demo', name='../x')).status_code == 404

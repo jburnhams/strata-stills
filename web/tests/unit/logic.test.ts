@@ -32,7 +32,7 @@ describe('describe a transform', () => {
   })
 })
 
-import { detailText } from '../../src/components/ExportPanel'
+import { detailText } from '../../src/components/GeneratePanel'
 describe('detail text', () => {
   it('turns the measurement into pixels across', () => {
     expect(detailText(null)).toMatch(/Measuring/)

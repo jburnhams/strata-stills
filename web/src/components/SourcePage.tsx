@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api, imageUrl, type Item } from '../api'
 import { href, useLoad } from '../route'
 import { Crumbs, Err, projectCrumbs } from './ui'
+import AutoGenerate from './AutoGenerate'
 
 const BADGE: Record<string, string> = { pano: 'bg-purple-600', video: 'bg-stone-600', still: 'bg-blue-600' }
 
@@ -15,7 +16,7 @@ export function Thumb({ project, item }: { project: string; item: Item }) {
         <div className="font-mono truncate" title={item.stem}>{item.stem.replace(/^DJI_/, '')}</div>
         <div className="flex gap-1 mt-1 flex-wrap">
           <span className={`text-white rounded px-1 ${BADGE[item.kind]}`}>{item.kind}</span>
-          {item.variants.map(v => <span key={v.id} className={`rounded px-1 border ${v.id === item.primary ? 'border-blue-500 text-blue-600' : 'border-stone-300 dark:border-stone-600 text-stone-500'}`}>{v.ext.slice(1)}</span>)}
+          {item.variants.map(v => <span key={v.id} className={`rounded px-1 border ${v.id === item.primary ? 'border-blue-500 text-blue-600' : 'border-stone-300 dark:border-stone-600 text-stone-500'}`}>{v.kind === 'generated' ? 'gen' : v.ext.slice(1)}</span>)}
         </div>
       </div>
     </a>
@@ -35,6 +36,7 @@ export default function SourcePage({ project, source }: { project: string; sourc
       <Crumbs items={[...projectCrumbs(project, proj.data?.name), { label: path ?? 'Source' }]} />
       <h1 className="text-lg font-semibold">Contents</h1>
       {path && <p className="text-xs text-stone-500 mb-2 font-mono break-all">{path}</p>}
+      <AutoGenerate project={project} source={source} onDone={items.reload} />
       <Err msg={items.error} />
       {items.data && nVideo > 0 && <label className="text-sm text-stone-500 flex items-center gap-2 mb-3"><input type="checkbox" checked={videos} onChange={e => setVideos(e.target.checked)} />Show {nVideo} videos (not processed yet)</label>}
       {!items.data && !items.error && <p className="text-stone-500">Loading…</p>}

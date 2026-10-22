@@ -3,7 +3,7 @@
     ./stratastills serve [--host 127.0.0.1] [--port 8361]
 
 API (JSON): GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
-GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same point of any variant and transform); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; POST /api/project/export?id=&item= {variant, size, format, level, sharpen, quality} (runs in the background); GET /api/project/export?id=&item= (its progress); GET /api/project/exports?id=&stem=; GET /api/project/export/file?id=&name=; GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
+GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same point of any variant and transform); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST/GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 import os, threading
 
@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stratastills import export as X, preview, projects as P, settings
+from stratastills import export as X, pipeline as PL, preview, projects as P, settings
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 LANDING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'landing.html')
@@ -32,15 +32,21 @@ class PrimaryIn(BaseModel):
     variant: str
 
 
-class ExportIn(BaseModel):
-    variant: str | None = None
-    size: str = 'auto'                  # 'auto' (the measured detail limit), 'native' or a long side in pixels
-    format: str = 'jpeg'
-    level: bool = True
-    sharpen: bool = True
-    highlight_contrast: float = 0.8      # more contrast inside the bright areas (0 = none), brightness unchanged
-    sharpen_amount: float = 1.5          # 1 restores the measured blur; above 1 goes past it (crisper)
-    quality: int = 95
+class GenerateIn(BaseModel):
+    """What to make: a preset (default 'best') with the Advanced panel's flat options laid over it, or the full `stages` of a custom pipeline."""
+    variant: str | None = None          # the source variant to start from (default: the item's primary)
+    preset: str | None = None
+    options: dict | None = None         # size, format, quality, level, sharpen, sharpen_amount, highlight_contrast
+    stages: list[dict] | None = None
+
+
+class PresetIn(BaseModel):
+    label: str | None = None
+    stages: list[dict]
+
+
+class RulesIn(BaseModel):
+    rules: list[dict]
 
 
 class SettingsIn(BaseModel):
@@ -49,7 +55,8 @@ class SettingsIn(BaseModel):
 
 def create_app():
     app = FastAPI(title='strata-stills', docs_url='/api/docs', openapi_url='/api/openapi.json')
-    jobs = {}                                                           # (project, item) -> {state: running|done|failed, text, result, error}: exports take a minute, so they run in a thread and are polled
+    jobs = {}                                                           # (project, item) -> {state: running|done|failed, text, result, error}: generating takes a minute or two, so it runs in a thread and is polled
+    batches = {}                                                        # project -> {state, done, total, text, failed, stop}: applying the rules to a whole source
 
     def guard(fn, *a, **kw):
         try: return fn(*a, **kw)
@@ -114,29 +121,68 @@ def create_app():
         try: return X.measure_detail(id, v['path'])
         except Exception as e: raise HTTPException(400, str(e))
 
-    @app.post('/api/project/export')
-    def start_export(id: str, item: str, b: ExportIn):
-        guard(P.get_item, id, item); key = (id, item)
-        if jobs.get(key, {}).get('state') == 'running': raise HTTPException(409, 'an export of this item is already running')
-        if b.format not in X.FORMATS: raise HTTPException(400, 'unknown format')
-        job = jobs[key] = dict(state='running', text='starting', result=None, error=None)
+    # ---- pipelines: presets, generating a variant, rules for a whole source -------------------------------------------------------------------------------------------------------------------------------------
+    @app.get('/api/pipelines')
+    def get_pipelines(): return PL.list_presets()
+
+    @app.put('/api/pipeline')
+    def put_pipeline(name: str, b: PresetIn): return guard(PL.save_preset, name, b.label, b.stages)
+
+    @app.delete('/api/pipeline')
+    def delete_pipeline(name: str): guard(PL.delete_preset, name); return PL.list_presets()
+
+    @app.post('/api/project/generate/check')
+    def check_generate(id: str, item: str, b: GenerateIn):
+        key, have = guard(PL.find_existing, id, item, b.variant, b.stages, b.preset, b.options); st = guard(PL.resolve, b.preset, b.options, b.stages)
+        return dict(key=key, exists=have is not None, variant=have['id'] if have else None, stages=st, summary=PL.summary(st))
+
+    @app.post('/api/project/generate')
+    def start_generate(id: str, item: str, b: GenerateIn):
+        key, have = guard(PL.find_existing, id, item, b.variant, b.stages, b.preset, b.options)
+        if have is not None: return dict(state='exists', variant=have['id'])
+        if jobs.get((id, item), {}).get('state') == 'running': raise HTTPException(409, 'a picture of this item is already being generated')
+        job = jobs[(id, item)] = dict(state='running', text='starting', result=None, error=None)
 
         def run():
-            try: job['result'] = X.export_item(id, item, b.variant, b.size, b.format, b.level, b.sharpen, b.quality, progress=lambda t: job.update(text=t), sharpen_amount=b.sharpen_amount, highlight_contrast=b.highlight_contrast); job['state'] = 'done'
+            try: job['result'] = PL.generate(id, item, b.variant, b.preset, b.options, b.stages, progress=lambda t: job.update(text=t)); job['state'] = 'done'
             except Exception as e: job.update(state='failed', error=str(e))
         threading.Thread(target=run, daemon=True).start(); return job
 
-    @app.get('/api/project/export')
-    def export_status(id: str, item: str): return jobs.get((id, item), dict(state='idle'))
+    @app.get('/api/project/generate')
+    def generate_status(id: str, item: str): return jobs.get((id, item), dict(state='idle'))
 
-    @app.get('/api/project/exports')
-    def list_exports(id: str, stem: str | None = None): return guard(X.list_exports, id, stem)
+    @app.get('/api/project/generated/file')
+    def generated_file(id: str, item: str, variant: str):
+        v = next((x for x in guard(P.get_item, id, item)['variants'] if x['id'] == variant and x['kind'] == 'generated'), None)
+        if v is None or not os.path.isfile(v['path']): raise HTTPException(404, 'no such generated picture')
+        return FileResponse(v['path'], filename=f"{item.split('~')[-1]}-{v['output'][0]}x{v['output'][1]}{v['ext']}")
 
-    @app.get('/api/project/export/file')
-    def export_file(id: str, name: str):
-        p = os.path.join(guard(X.exports_dir, id), os.path.basename(name))
-        if not os.path.isfile(p): raise HTTPException(404, 'no such export')
-        return FileResponse(p, filename=os.path.basename(p))
+    @app.get('/api/project/rules')
+    def get_rules(id: str): return dict(rules=guard(PL.rules, id), pending=len(guard(PL.pending, id)))
+
+    @app.put('/api/project/rules')
+    def put_rules(id: str, b: RulesIn): guard(PL.set_rules, id, b.rules); return dict(rules=PL.rules(id), pending=len(PL.pending(id)))
+
+    @app.post('/api/project/apply')
+    def start_apply(id: str):
+        guard(PL.rules, id)
+        if batches.get(id, {}).get('state') == 'running': raise HTTPException(409, 'this project is already being processed')
+        job = batches[id] = dict(state='running', done=0, total=0, text='starting', failed=[], stop=False)
+
+        def run():
+            def prog(i, n, t): job.update(done=i, total=n, text=t)
+            try:
+                r = PL.apply_rules(id, prog, stop=lambda: job['stop']); job.update(state='stopped' if job['stop'] else 'done', done=r['done'] + len(r['failed']), total=r['total'], failed=r['failed'])
+            except Exception as e: job.update(state='failed', text=str(e))
+        threading.Thread(target=run, daemon=True).start(); return job
+
+    @app.get('/api/project/apply')
+    def apply_status(id: str): return batches.get(id, dict(state='idle'))
+
+    @app.delete('/api/project/apply')
+    def stop_apply(id: str):
+        if id in batches: batches[id]['stop'] = True
+        return batches.get(id, dict(state='idle'))
 
     @app.post('/api/project/sources')
     def add_source(id: str, b: SourcePath): return guard(P.add_source, id, b.path)

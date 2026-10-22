@@ -100,6 +100,25 @@ def shots(pid, root=None, recursive=False):
 # ---- sources, items and the choices made on them ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 STATE = 'items.json'                    # {item_id: {primary: variant_id}}: what the person chose, per item
+GENERATED = 'generated'                 # <project>/generated/<item id>/<key>.jpg|.tif + <key>.json: the variants made by the app (export.py); a variant is identified by the key of the settings it was made with
+
+
+def generated_dir(pid, iid, root=None):
+    return os.path.join(folder(pid, root), GENERATED, iid.replace('/', '_'))
+
+
+def generated_variants(pid, iid, root=None):
+    """The variants the app has made for an item, oldest first, in the same shape as a source file's: {id: 'gen-<key>', label, path, kind: 'generated', ext, key, preset, stages, summary, created, output, bytes, quality}. Only those whose picture file still exists."""
+    d = generated_dir(pid, iid, root); out = []
+    if not os.path.isdir(d): return out
+    for n in sorted(os.listdir(d)):
+        if not n.endswith('.json'): continue
+        try: r = json.load(open(os.path.join(d, n)))
+        except (OSError, ValueError): continue
+        if not os.path.exists(r.get('file', '')): continue
+        w, h = r['output']; ext = os.path.splitext(r['file'])[1].lower()
+        out.append(dict(id='gen-' + r['key'], label=f"Generated {w}×{h}", path=r['file'], kind='generated', ext=ext, key=r['key'], preset=r.get('preset'), stages=r.get('stages'), summary=r.get('summary'), created=r.get('created'), output=r['output'], bytes=r.get('bytes'), quality=r.get('quality')))
+    return sorted(out, key=lambda v: v['created'] or '')
 
 
 def source_id(path):
@@ -154,7 +173,7 @@ def source_items(pid, sid, root=None):
     """The items of one source: [{id, stem, kind, parent, primary, variants: [...]}] (videos included, marked by kind)."""
     s = _source(pid, sid, root); st = load_state(pid, root); out = []
     for sh in ingest.scan(s['path']):
-        iid = item_id(sid, sh.stem); vs = sh.variants(); prim = st.get(iid, {}).get('primary')
+        iid = item_id(sid, sh.stem); vs = sh.variants() + generated_variants(pid, iid, root); prim = st.get(iid, {}).get('primary')
         if prim not in {v['id'] for v in vs}: prim = default_primary(sh)
         out.append(dict(id=iid, stem=sh.stem, kind=sh.kind, parent=sh.parent, primary=prim, chosen=iid in st, variants=vs, n_sidecars=len(sh.sidecars), video=sh.video))
     return out

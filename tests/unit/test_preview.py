@@ -58,3 +58,10 @@ def test_crop_takes_the_same_point_of_each_variant_and_transform(proj):
     assert cv2.imdecode(np.frombuffer(preview.crop(pid, iid, 'enhanced.jpg', 'level', 0.1, 0.9, 60, 1), np.uint8), cv2.IMREAD_COLOR).shape[:2] == (60, 60)
     assert cv2.imdecode(np.frombuffer(preview.crop(pid, iid, None, 'original', -5, 9, 5000, 99), np.uint8), cv2.IMREAD_COLOR).shape[0] == 300 * 6          # clamped to the picture (300 px high) and 6x
     with pytest.raises(P.ProjectError): preview.crop(pid, iid, 'raw', 'original')
+
+
+def test_a_16_bit_tiff_is_readable(tmp_path):
+    import tifffile
+    p = tmp_path / 'a.tif'; a = np.zeros((40, 60, 3), np.uint16); a[..., 0] = 65535; tifffile.imwrite(p, a, photometric='rgb')
+    im = images.load(str(p)); assert im.shape == (40, 60, 3) and im[0, 0].tolist() == [0, 0, 255]                          # BGR: red
+    g = tmp_path / 'g.tif'; tifffile.imwrite(g, np.full((20, 30), 40000, np.uint16)); assert images.load(str(g)).shape == (20, 30, 3)
