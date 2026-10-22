@@ -177,3 +177,21 @@ def test_a_picture_too_big_for_the_card_is_developed_in_tiles_and_otherwise_not(
     monkeypatch.setattr(gpu, 'max_pixels', lambda: 1000); D.develop('x.dng', backend='gpu'); assert calls == ['tiled']
     calls.clear(); monkeypatch.setattr(gpu, 'max_pixels', lambda: None); D.develop('x.dng', backend='gpu'); assert calls == []
     monkeypatch.setattr(gpu, 'max_pixels', lambda: 4800); monkeypatch.setattr(T, 'develop_tiled', lambda *a, **k: (_ for _ in ()).throw(T.Unsupported('x'))); out = D.develop('x.dng', backend='gpu'); assert out.shape[0] * out.shape[1] <= 4800     # falls back to a reduced copy
+
+
+def test_the_cpu_tiled_development_agrees_with_the_whole_picture_one(monkeypatch):
+    from stratastills import cpu_tiled
+    synthetic_dng(monkeypatch, h=520, w=680); u16 = D._raw_u16('x.dng', False); a, b = {}, {}
+    for denoise in ('auto', 'chroma', 'off'):
+        whole = D.develop('x.dng', denoise=denoise, backend='cpu', analysis=a); tiled = cpu_tiled.develop_tiled('x.dng', u16, 'auto', denoise, 0.35, D.HIGHLIGHT_CONTRAST, b, tile=192)
+        assert tiled.shape == whole.shape and tiled.dtype == np.float32 and np.isfinite(tiled).all() and np.abs(a['luma'] - b['luma']).max() < 1e-5
+        d = np.abs(tiled - whole); assert d.mean() < 1.5e-3 and np.percentile(d, 99.9) < 0.04, (denoise, d.mean(), np.percentile(d, 99.9))
+        seam = np.zeros(d.shape[:2], bool); seam[190:194] = True; seam[:, 190:194] = True; assert d[seam].mean() < 3 * d.mean() + 1e-3
+
+
+def test_the_cpu_development_goes_through_tiles_when_memory_is_short(monkeypatch):
+    from stratastills import cpu_tiled, resources
+    synthetic_dng(monkeypatch, h=120, w=160); calls = []; monkeypatch.setattr(cpu_tiled, 'develop_tiled', lambda *a, **k: calls.append(a[-1] if len(a) > 7 else k.get('tile')) or np.zeros((120, 160, 3), np.float32))
+    monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu'); assert calls == [512]
+    calls.clear(); monkeypatch.setattr(resources, 'cpu_tile', lambda px: None); D.develop('x.dng', backend='cpu'); assert calls == []
+    monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu', denoise=4.0); assert calls == []                                          # a numeric denoise is not tiled

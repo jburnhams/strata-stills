@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
-from stratastills import denoise_ai, gpu, gpu_tiled, inputs, lineardng
+from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lineardng, resources
 
 VERSION = 9
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
@@ -376,26 +376,32 @@ def _raw_u16(path, half):
 def _raw_linear(path, half): return _raw_u16(path, half).astype(np.float32) / 65535.0
 
 
-def analysis_luma(path):
+def analysis_luma(path, u16=None):
     """The luminance of the raw at full size, gamma-encoded 0..1, with nothing done to it that changes its sharpness (no lens warp, no denoise, no local tone): what detail.effective_resolution measures."""
-    img = _raw_linear(path, False); y = img @ np.array([0.2126, 0.7152, 0.0722], np.float32); med = max(float(np.median(y[::8, ::8])), 1e-5)
+    img = _raw_linear(path, False) if u16 is None else u16.astype(np.float32) / 65535.0; y = img @ np.array([0.2126, 0.7152, 0.0722], np.float32); med = max(float(np.median(y[::8, ::8])), 1e-5)
     return srgb_oetf(np.clip(y * (0.18 / med), 0, 1)).astype(np.float32)
 
 
-def develop_parts(path, half=False, ev='auto', recover=0.35):
+def cpu_colour(img, tags):
+    """The camera matrices (and the profile's hue/saturation map) on an (H, W, 3) picture: camera RGB to linear sRGB. Pointwise, so it can be run on a tile."""
+    if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
+        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3)
+        cm, w = color_matrix_weight(cm1, cm2, n); table = hue_sat_table(tags, w) if HUE_SAT_MAP else None
+        if table is None: img = img @ camera_to_srgb(cm, n).T.astype(np.float32)
+        else: img = apply_hue_sat_map(img @ camera_to_prophoto(cm, n).T.astype(np.float32), table) @ prophoto_to_srgb().T.astype(np.float32)
+    return img
+
+
+def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None):
     """The development up to, but not including, the final tone curve: {linear: exposed linear sRGB-primaries picture (float32), lut, noise: the NoiseProfile scaled for the exposure gain (or None), gain: the lens-shading field (or None), gain_ev}. `develop` finishes it; experiments and the export can look inside."""
-    tags = read_dng_tags(path); img = _raw_linear(path, half); field = None
+    tags = read_dng_tags(path); img = _raw_linear(path, half) if u16 is None else u16.astype(np.float32) / 65535.0; field = None
     if 'OpcodeList3' in tags:
         for oid, p in parse_opcodes(tags['OpcodeList3']):
             if oid == 9:
                 m, plane, planes, _box, _sp, _org = gain_map(p); img, field = apply_gain_map(img, m, plane, planes)
             elif oid == 1:
                 coef, centre = warp_params(p); img = warp_rectilinear(img, coef, centre)
-    if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
-        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3)
-        cm, w = color_matrix_weight(cm1, cm2, n); table = hue_sat_table(tags, w) if HUE_SAT_MAP else None
-        if table is None: img = img @ camera_to_srgb(cm, n).T.astype(np.float32)
-        else: img = apply_hue_sat_map(img @ camera_to_prophoto(cm, n).T.astype(np.float32), table) @ prophoto_to_srgb().T.astype(np.float32)
+    img = cpu_colour(img, tags)
     be =float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(inputs.tone_curve(tags))
     g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else float(ev)); img = img * g
@@ -410,8 +416,14 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
       'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere.
     `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
     if backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available()): return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis)
-    if analysis is not None: analysis['luma'] = analysis_luma(path)
-    P = develop_parts(path, half, ev, recover); img, lut, npf, field = P['linear'], P['lut'], P['noise'], P['gain']
+    u16 = _raw_u16(path, half)
+    if denoise in ('auto', 'chroma', 'off'):                                                                                  # a picture too big for the memory it may use is developed in tiles (cpu_tiled.py)
+        tile = resources.cpu_tile(u16.shape[0] * u16.shape[1])
+        if tile:
+            try: return cpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tile)
+            except cpu_tiled.Unsupported: pass
+    if analysis is not None: analysis['luma'] = analysis_luma(path, None if half else u16)
+    P = develop_parts(path, half, ev, recover, u16=u16); img, lut, npf, field = P['linear'], P['lut'], P['noise'], P['gain']
     classical = denoise in ('auto', 'ai', 'chroma') and npf is not None
     if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)

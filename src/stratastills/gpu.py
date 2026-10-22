@@ -75,7 +75,8 @@ _slots = None
 PEAK_PIXELS = 48.8e6           # the size of the picture PEAK_BYTES was measured on
 
 
-TILE_PEAK_BYTES = 2.7e9         # what one picture needs on the card when it goes through in tiles (measured 2.0 to 2.7 GB, whatever the picture's size)
+TILE_BYTES_PER_PX = 190         # card memory per pixel of a tile with its margin (measured: 2048 px tiles + 128 margin = 0.91 GB, 1024: 0.29, 512: 0.11)
+TILE_PEAK_BYTES = 1.2e9         # what one picture needs on the card when it goes through in the largest tiles (0.91 GB measured, with room)
 _tiled_batch = False
 
 
@@ -98,6 +99,16 @@ def tile_slots():
     if total: return max(1, int(total * 0.9 // TILE_PEAK_BYTES))
     try: return 2 if dev().type == 'mps' else 1
     except Exception: return 1
+
+
+def tile_size(halo=128):
+    """The tile side to use on this device: the largest (multiple of 64, 256 to 2048) whose region fits in the card's memory share of one picture in the batch (90 % of it over the slots in use), so a small card gets small tiles (1024 px tiles cost 11 % more time than 2048, 512 80 % more); MPS shares the machine's memory (1024); 2048 otherwise. STRATASTILLS_TILE overrides."""
+    from stratastills import resources
+    if os.environ.get('STRATASTILLS_TILE'): return max(64, int(os.environ['STRATASTILLS_TILE']))
+    total = _cuda_total()
+    if total: return resources.tile_for(0, TILE_BYTES_PER_PX, 0.0, halo, budget_bytes=total * 0.9 / max(1, slots()))
+    try: return 1024 if dev().type == 'mps' else resources.MAX_TILE
+    except Exception: return resources.MAX_TILE
 
 
 def tiling_pays(workers):

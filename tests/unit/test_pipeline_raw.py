@@ -15,7 +15,7 @@ def raw_project(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('path', ['gpu', 'cpu'])
-def test_the_raw_is_decoded_once_on_the_gpu_path_and_the_picture_is_made(monkeypatch, raw_project, path):
+def test_the_raw_is_decoded_once_and_the_picture_is_made(monkeypatch, raw_project, path):
     pid, iid = raw_project; synthetic_dng(monkeypatch); calls = []; real = D._raw_u16
     monkeypatch.setattr(D, '_raw_u16', lambda p, half: calls.append(half) or real(p, half))
     if path == 'gpu': gpu.use('cpu'); monkeypatch.setattr(gpu, 'available', lambda: True)                       # the GPU code path, run by torch on the CPU
@@ -23,4 +23,4 @@ def test_the_raw_is_decoded_once_on_the_gpu_path_and_the_picture_is_made(monkeyp
     try: r = PL.generate(pid, iid, 'raw', options=dict(size='native'))
     finally: gpu.use(None)
     assert r['steps'][0] == 'developed from the raw' and r['output'] == [320, 240] and 'detail' in r and 'level' in r
-    assert calls == ([False] if path == 'gpu' else [False, False])                                                  # one decode on the GPU path (the CPU reference decodes again for the analysis)
+    assert calls == [False]                                                                                         # one decode on either path (the CPU path used to decode again for the analysis)

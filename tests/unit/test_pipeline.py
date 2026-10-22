@@ -213,11 +213,31 @@ def test_tiling_is_chosen_for_batches_the_card_cannot_hold_whole(monkeypatch):
     pytest.importorskip('torch')
     from stratastills import gpu
     cuda = type('D', (), {'type': 'cuda'})(); monkeypatch.setattr(gpu, 'dev', lambda: cuda); monkeypatch.setattr(gpu, '_cuda_total', lambda: 12.3e9); monkeypatch.setattr(gpu, '_slots', None); monkeypatch.delenv('STRATASTILLS_GPU_SLOTS', raising=False); monkeypatch.delenv('STRATASTILLS_MAX_PIXELS', raising=False)
-    assert gpu.whole_slots() == 1 and gpu.tile_slots() == 4 and gpu.plan_workers() == 4 and gpu.tiling_pays(4) and not gpu.tiling_pays(1)
+    assert gpu.whole_slots() == 1 and gpu.tile_slots() == 9 and gpu.plan_workers() == 4 and gpu.tiling_pays(4) and not gpu.tiling_pays(1)
     assert gpu.max_pixels() > 50e6 and gpu.slots() == 1                                                                                  # alone: whole pictures, one on the card
-    with gpu.batch(4) as tiled: assert tiled and gpu.max_pixels() == 1 and gpu.slots() == 4                                           # a batch of 4: every picture in tiles, four on the card
+    with gpu.batch(4) as tiled: assert tiled and gpu.max_pixels() == 1 and gpu.slots() == 9                                           # a batch of 4: every picture in tiles
     assert gpu.max_pixels() > 50e6 and gpu.slots() == 1
-    monkeypatch.setattr(gpu, '_cuda_total', lambda: 24.5e9); monkeypatch.setattr(gpu, '_slots', None); assert gpu.whole_slots() == 3 and gpu.tile_slots() == 8 and gpu.plan_workers() == 4
-    monkeypatch.setattr(gpu, '_cuda_total', lambda: 6e9); assert gpu.tile_slots() == 2 and gpu.whole_slots() == 1 and gpu.plan_workers() == 3                  # a small card: still tiles, fewer at once
+    monkeypatch.setattr(gpu, '_cuda_total', lambda: 24.5e9); monkeypatch.setattr(gpu, '_slots', None); assert gpu.whole_slots() == 3 and gpu.tile_slots() == 18 and gpu.plan_workers() == 4
+    monkeypatch.setattr(gpu, '_cuda_total', lambda: 3e9); assert gpu.tile_slots() == 2 and gpu.whole_slots() == 1 and gpu.plan_workers() == 3                  # a small card: still tiles, fewer at once
     monkeypatch.setattr(gpu, '_cuda_total', lambda: None); monkeypatch.setattr(gpu, 'dev', lambda: type('D', (), {'type': 'cpu'})()); assert gpu.plan_workers() == 2 and not gpu.tiling_pays(8) and gpu.max_pixels() is None
     monkeypatch.setattr(gpu, '_slots', None)
+
+
+def test_tile_size_follows_the_memory_there_is(monkeypatch):
+    pytest.importorskip('torch')
+    from stratastills import gpu, resources
+    cuda = type('D', (), {'type': 'cuda'})(); monkeypatch.setattr(gpu, 'dev', lambda: cuda); monkeypatch.setattr(gpu, '_slots', None); monkeypatch.delenv('STRATASTILLS_GPU_SLOTS', raising=False); monkeypatch.delenv('STRATASTILLS_TILE', raising=False)
+    sizes = {}
+    for total in (24e9, 12.3e9, 3e9, 1e9, 0.3e9, 0.05e9):
+        monkeypatch.setattr(gpu, '_cuda_total', lambda total=total: total); monkeypatch.setattr(gpu, '_slots', None); sizes[total] = gpu.tile_size()
+    assert sizes[24e9] == 2048 and sizes[12.3e9] == 2048 and sizes[3e9] == 2048 and sizes[0.3e9] < sizes[1e9] <= 2048 and sizes[0.05e9] == resources.MIN_TILE and all(v % 64 == 0 for v in sizes.values())
+    monkeypatch.setenv('STRATASTILLS_TILE', '640'); assert gpu.tile_size() == 640
+
+
+def test_cpu_picture_is_developed_whole_only_if_its_peak_fits_its_share_of_memory(monkeypatch):
+    from stratastills import resources
+    monkeypatch.setattr(resources, 'total_ram', lambda: 64e9); assert resources.cpu_tile(48e6) is None                                  # 45 GB budget, 7 GB peak
+    monkeypatch.setattr(resources, 'total_ram', lambda: 16e9); assert resources.cpu_tile(48e6) is None and resources.cpu_tile(116e6) is not None
+    with resources.batch(4): t48 = resources.cpu_tile(48e6); assert t48 is not None and 256 <= t48 <= 2048                                 # four at once share 11 GB: 2.8 GB each, too little for a whole 48 MP picture
+    monkeypatch.setattr(resources, 'total_ram', lambda: 3e9); assert 256 <= resources.cpu_tile(48e6) < 2048; monkeypatch.setattr(resources, 'total_ram', lambda: 2e9); assert resources.cpu_tile(48e6) == resources.MIN_TILE      # a small machine: small tiles
+    monkeypatch.setattr(resources, 'total_ram', lambda: 0); assert resources.cpu_tile(48e6) is None
