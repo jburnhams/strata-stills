@@ -85,6 +85,7 @@ def test_denoise_treats_only_the_lifted_corners_when_given_the_gain_field():
 
 
 def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
+    monkeypatch.setattr(D.denoise_ai, 'available', lambda: False)
     rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32)
     neutral = (4096, 9776, 4096, 4096, 4096, 6393); cm = tuple(v for x in ((12758, 10000), (-6160, 10000), (916, 10000), (-5992, 10000), (14682, 10000), (5340, 10000), (-251, 10000), (792, 10000), (9511, 10000)) for v in x)
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=neutral, BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(np.repeat(np.linspace(0, 1, 16) ** 0.5, 2)[:0]) or tuple(v for x in np.linspace(0, 1, 16) for v in (x, x ** 0.5)),

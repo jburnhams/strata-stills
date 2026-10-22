@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
+from stratastills import denoise_ai
+
 VERSION = 4
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
@@ -189,6 +191,14 @@ def shoulder(img, knee=KNEE, white=WHITE):
     new = np.where(m > knee, knee + span * x * (1 + x / (w * w)) / (1 + x), m); return img * (new / np.maximum(m, 1e-6))
 
 
+def noise_map8(img, noise_profile, blur=8.0):
+    """The noise expected at each pixel of the finished picture, in 8-bit grey levels, from the file's NoiseProfile: sigma of the linear value (variance = S v + O, with the profile already scaled for the exposure gain) times the slope of the sRGB curve there, on a smoothed luminance (the noise level follows the brightness, not the texture)."""
+    h, w = img.shape[:2]; k = 1.0 / 8; y = img @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    v = cv2.GaussianBlur(cv2.resize(y, (max(8, round(w * k)), max(8, round(h * k))), interpolation=cv2.INTER_AREA), (0, 0), blur / 8 * 2); v = np.maximum(v, 1e-5)
+    slope = np.where(v < 0.0031308, 12.92, (1.055 / 2.4) * v ** (1 / 2.4 - 1)); s8 = 255.0 * np.sqrt(noise_profile[0] * v + noise_profile[1]) * slope
+    return cv2.resize(s8.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+
+
 def local_tone(img, strength=0.35, px=1200):
     """Recover shadows and highlights: split the log luminance into a smooth base (an edge-preserving blur on a reduced copy, so edges stay sharp and there are no halos) and the detail on top of it; squeeze the base towards its median by `strength` and put the detail back untouched.
     The camera's JPEG cannot do this (it has already clipped and crushed); from the raw the shadows under a roof and the sunlit wall beside them can both be shown. 0 = off. Colours scale with the luminance, so hues hold."""
@@ -231,7 +241,8 @@ def analysis_luma(path):
     return srgb_oetf(np.clip(y * (0.18 / med), 0, 1)).astype(np.float32)
 
 
-def develop(path, half=False, ev='auto', denoise='auto', recover=0.35):
+def develop_parts(path, half=False, ev='auto', recover=0.35):
+    """The development up to, but not including, the final tone curve: {linear: exposed linear sRGB-primaries picture (float32), lut, noise: the NoiseProfile scaled for the exposure gain (or None), gain: the lens-shading field (or None), gain_ev}. `develop` finishes it; experiments and the export can look inside."""
     tags = read_dng_tags(path); img = _raw_linear(path, half); field = None
     if 'OpcodeList3' in tags:
         for oid, p in parse_opcodes(tags['OpcodeList3']):
@@ -245,7 +256,16 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35):
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(tags.get('ProfileToneCurve'))
     g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else float(ev)); img = img * g
-    if denoise != 'off':
-        npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None          # the profile is for the raw values: after the gain, variance = S*g*v + O*g^2
-        img = denoise_linear(img, npf, denoise, field)
-    return finish(img, lut)
+    npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None          # the profile is for the raw values: after the gain, variance = S*g*v + O*g^2
+    return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
+
+
+def develop(path, half=False, ev='auto', denoise='auto', recover=0.35):
+    """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`: 'auto' (colour noise smoothed; luminance cleaned by the learned model where the NoiseProfile says the noise is visible, or by the light corner pass if the model is not installed), 'ai' (the same, insisting on the model),
+    'chroma' (colour only), 'off', or a number (non-local-means h, 8-bit grey levels, everywhere)."""
+    P = develop_parts(path, half, ev, recover); img, lut, npf, field = P['linear'], P['lut'], P['noise'], P['gain']
+    use_ai = denoise in ('auto', 'ai') and npf is not None and denoise_ai.available()
+    if denoise != 'off': img = denoise_linear(img, npf, 'chroma' if use_ai else denoise, field)                                          # colour noise always; luminance by the learned model below, or the light corner pass when there is no model
+    sig8 = noise_map8(img, npf) if use_ai else None
+    out = finish(img, lut)
+    return denoise_ai.adaptive(out, sig8) if use_ai else out
