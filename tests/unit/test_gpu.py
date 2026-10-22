@@ -147,3 +147,15 @@ def test_sharpening_matches_the_cpu_filter_and_picture():
     ref = detail.sharpen(img, detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)); out = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF))); assert np.abs(out - ref).max() < 2e-3
     a = detail.sharpen_picture(img, f, m, 0.746, 1.5, backend='cpu'); b = detail._sharpen_picture_gpu(img, f, m, 0.746, 1.5); assert np.abs(a - b).max() < 3e-3 and np.abs(a - b).mean() < 1e-4
     flat = np.full((64, 64, 3), 0.4, np.float32); assert np.allclose(detail._sharpen_picture_gpu(flat, f, m, 1.0, 1.5), 0.4, atol=1e-3)
+
+
+@pytest.mark.parametrize('blend', [0.0, 0.5, 1.0])
+def test_finish_with_the_hue_preserving_tone_curve_matches(blend):
+    img = picture(11, scale=3.0); lut = np.cumsum(RNG.random(4096)).astype(np.float32); lut /= lut[-1]; lut = np.sqrt(lut); lt = gpu.torch_().from_numpy(lut).to(gpu.dev())
+    assert np.abs(c(gpu.finish(g(img), lt, D.KNEE, D.WHITE, blend)) - D.finish(img, lut, blend)).max() < 1e-3
+
+
+def test_hue_sat_map_and_chroma_limit_match():
+    x = (RNG.random((50, 60, 3)) * 1.5).astype(np.float32); tb = np.stack([RNG.normal(0, 8, (36, 10)), 1 + RNG.normal(0, .1, (36, 10)), 1 + RNG.normal(0, .05, (36, 10))], -1).astype(np.float32)
+    assert np.abs(c(gpu.apply_hue_sat_map(g(x), gpu.torch_().from_numpy(tb).to(gpu.dev()), rows=16)) - D.apply_hue_sat_map(x, tb)).max() < 1e-4
+    y = RNG.random((50, 60, 3)).astype(np.float32); assert np.abs(c(gpu.limit_chroma(g(y), 0.2, 0.45)) - D.limit_chroma(y, 0.2, 0.45)).max() < 1e-4

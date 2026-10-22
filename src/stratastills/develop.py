@@ -3,8 +3,8 @@
   1  LibRaw: black level, white balance (as shot), demosaic, highlight blend; output in camera RGB, linear, 16 bit (no colour matrix, no curve, no brightening)
   2  OpcodeList3: the lens shading GainMap (vignetting) and the per-channel WarpRectilinear (distortion and lateral colour fringing), as the maker wrote them
   3  denoise from the file's NoiseProfile (chroma strongly; luminance only when the noise is visible), in linear light
-  4  colour: the camera matrices (ColorMatrix1/2 blended by the white balance's colour temperature) to XYZ, Bradford-adapted to D65, to linear sRGB
-  5  exposure (BaselineExposure + automatic, so the median lands where the camera's own JPEGs put it), a highlight shoulder, and the profile's tone curve (ProfileToneCurve, which includes the gamma; plain sRGB when the file has none)
+  4  colour: the camera matrices (ColorMatrix1/2 blended by the white balance's colour temperature) to XYZ, Bradford-adapted to ProPhoto (D50), the profile's own hue/saturation map (ProfileHueSatMap) there, then to linear sRGB
+  5  exposure (BaselineExposure + automatic, so the median lands where the camera's own JPEGs put it), a highlight shoulder, and the profile's tone curve (ProfileToneCurve, which includes the gamma; plain sRGB when the file has none), a roll-off of the very strongest colours (limit_chroma)
 
 `develop(path, half=False, ev=0, denoise='auto')` returns a float32 RGB array in 0..1 (sRGB encoded), the right way up. `half=True` is a quarter-size version (LibRaw's half-size demosaic) for previews that follows the same recipe.
 Files that are not DNG-with-opcodes simply skip the steps they lack. Bump VERSION when the look changes: previews cached under the old one are not reused."""
@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import denoise_ai, gpu
 
-VERSION = 8
+VERSION = 9
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -30,7 +30,7 @@ class DevelopError(RuntimeError): pass
 def read_dng_tags(path):
     """The DNG tags this module uses, from the raw IFD (and the main IFD): {name: value}. Missing ones are left out."""
     import tifffile
-    want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel')
+    want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding')
     out = {}
     with tifffile.TiffFile(path) as t:
         pages = [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or [])
@@ -99,15 +99,73 @@ def _cct_to_xy(t):
     return x, y
 
 
-def color_matrix(cm1, cm2, neutral):
-    """The XYZ -> camera matrix for this white balance: ColorMatrix1 (illuminant A) and ColorMatrix2 (D65) blended by inverse colour temperature, found by iterating (the temperature depends on the matrix)."""
+def color_matrix_weight(cm1, cm2, neutral):
+    """(the XYZ -> camera matrix for this white balance, the weight of illuminant 1): ColorMatrix1 (illuminant A) and ColorMatrix2 (D65) blended by inverse colour temperature, found by iterating (the temperature depends on the matrix). The same weight blends the two profile tables."""
     t = T_D65
     for _ in range(20):
         w = float(np.clip((1 / t - 1 / T_D65) / (1 / T_A - 1 / T_D65), 0, 1)); cm = w * cm1 + (1 - w) * cm2
         xyz = np.linalg.solve(cm, neutral); xy = xyz[:2] / xyz.sum(); t2 = float(np.clip(_xy_to_cct(xy), T_A - 800, 10000))
         if abs(t2 - t) < 5: break
         t = t2
-    return cm
+    return cm, w
+
+
+def color_matrix(cm1, cm2, neutral): return color_matrix_weight(cm1, cm2, neutral)[0]
+
+
+# ---- the camera's own colour profile: the hue / saturation map ---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+D50_WHITE = np.array([0.96422, 1.0, 0.82521])
+XYZ_TO_PROPHOTO = np.array([[1.3459433, -0.2556075, -0.0511118], [-0.5445989, 1.5081673, 0.0205351], [0.0, 0.0, 1.2118128]])        # D50 XYZ to linear ProPhoto (ROMM) RGB: the space the DNG profile maps are defined in
+HUE_SAT_MAP = True              # apply the profile's ProfileHueSatMap (the camera maker's colour rendering) when the file has one
+
+
+def _bradford(src_white, dst_white):
+    src, dst = BRADFORD @ src_white, BRADFORD @ dst_white; return np.linalg.inv(BRADFORD) @ np.diag(dst / src) @ BRADFORD
+
+
+def camera_to_prophoto(cm, neutral):
+    """3x3 matrix taking white-balanced linear camera RGB to linear ProPhoto RGB (D50): camera -> XYZ of the scene's own white -> Bradford to D50 -> ProPhoto. The scene's white lands on (1, 1, 1)."""
+    white = np.linalg.solve(cm, neutral); white = white / white[1]; to_xyz = np.linalg.inv(cm) @ np.diag(neutral)
+    m = XYZ_TO_PROPHOTO @ _bradford(white, D50_WHITE) @ to_xyz; return m / m.sum(axis=1, keepdims=True)
+
+
+def prophoto_to_srgb():
+    """3x3 matrix from linear ProPhoto (D50) to linear sRGB (D65). With camera_to_prophoto it composes to camera_to_srgb (Bradford adaptations compose exactly)."""
+    m = XYZ_TO_SRGB @ _bradford(D50_WHITE, D65) @ np.linalg.inv(XYZ_TO_PROPHOTO); return m / m.sum(axis=1, keepdims=True)
+
+
+def hue_sat_table(tags, weight):
+    """The profile's hue/saturation map as float32 (hue divisions, saturation divisions, 3: hue shift in degrees, saturation scale, value scale), the two illuminants' tables blended by `weight` (that of illuminant 1); None when the file has no map or one with value divisions (not used by these cameras)."""
+    dims = tags.get('ProfileHueSatMapDims'); d1 = tags.get('ProfileHueSatMapData1')
+    if dims is None or d1 is None or int(dims[2]) != 1: return None
+    h, s = int(dims[0]), int(dims[1]); a = np.asarray(d1, np.float32).reshape(h, s, 3); d2 = tags.get('ProfileHueSatMapData2')
+    if d2 is None: return a
+    return (weight * a + (1 - weight) * np.asarray(d2, np.float32).reshape(h, s, 3)).astype(np.float32)
+
+
+def rgb_to_hsv(rgb):
+    """HSV of linear RGB (..., 3) as the DNG SDK does it: v = max, s = (max - min) / max, hue 0..6 (sextants). Negative channels are clipped to 0."""
+    rgb = np.maximum(rgb, 0); r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]; mx = rgb.max(-1); mn = rgb.min(-1); d = mx - mn; ds = np.where(d > 0, d, 1.0)
+    h = np.where(mx == r, ((g - b) / ds) % 6.0, np.where(mx == g, (b - r) / ds + 2.0, (r - g) / ds + 4.0)); h = np.where(d > 0, h, 0.0); s = np.where(mx > 0, d / np.where(mx > 0, mx, 1.0), 0.0)
+    return np.stack([h, s, mx], -1)
+
+
+def hsv_to_rgb(hsv):
+    h, s, v = hsv[..., 0] % 6.0, hsv[..., 1], hsv[..., 2]; c = v * s; x = c * (1 - np.abs(h % 2.0 - 1)); m = v - c; k = np.floor(h).astype(int) % 6
+    r = np.choose(k, [c, x, 0 * c, 0 * c, x, c]); g = np.choose(k, [x, c, c, x, 0 * c, 0 * c]); b = np.choose(k, [0 * c, 0 * c, x, c, c, x]); return np.stack([r + m, g + m, b + m], -1)
+
+
+def apply_hue_sat_map(rgb, table, rows=256):
+    """The DNG ProfileHueSatMap applied to linear ProPhoto `rgb` (H, W, 3): each pixel's hue and saturation index the table (hue wraps, saturation 0 and 1 are the first and last columns), the four neighbours are blended bilinearly into a (hue shift, saturation scale, value scale), and the pixel is shifted, scaled and converted back.
+    Done in bands of `rows` rows so the index arrays stay small."""
+    hd, sd = table.shape[:2]; out = np.empty_like(rgb, dtype=np.float32)
+    for r0 in range(0, rgb.shape[0], rows):
+        hsv = rgb_to_hsv(rgb[r0:r0 + rows]); hs = hsv[..., 0] * (hd / 6.0); i0 = np.floor(hs).astype(int) % hd; fh = hs - np.floor(hs); i1 = (i0 + 1) % hd
+        ss = np.clip(hsv[..., 1], 0, 1) * (sd - 1); j0 = np.minimum(np.floor(ss).astype(int), sd - 2); fs = ss - j0; j1 = j0 + 1
+        d = (table[i0, j0] * ((1 - fh) * (1 - fs))[..., None] + table[i1, j0] * (fh * (1 - fs))[..., None] + table[i0, j1] * ((1 - fh) * fs)[..., None] + table[i1, j1] * (fh * fs)[..., None])
+        hsv[..., 0] = (hsv[..., 0] + d[..., 0] * (6.0 / 360.0)) % 6.0; hsv[..., 1] = np.minimum(hsv[..., 1] * d[..., 1], 1.0); hsv[..., 2] = hsv[..., 2] * d[..., 2]; out[r0:r0 + rows] = hsv_to_rgb(hsv)
+    return out
 
 
 def camera_to_srgb(cm, neutral):
@@ -253,11 +311,32 @@ def local_tone(img, strength=0.35, px=1200, highlights=None):
     return img * (2.0 ** (new - ly))[..., None]
 
 
-def finish(img, lut):
-    """Shoulder, profile tone curve and sRGB curve of linear sRGB-primaries data (0..inf): the last steps of the development."""
-    img = np.clip(shoulder(np.clip(img, 0, None)), 0, 1)
+TONE_BLEND = 1.0                # how much of the profile tone curve is applied to each colour channel separately (1) rather than to the brightest channel with the colour ratios kept (0): see `finish`
+
+
+def finish(img, lut, blend=None):
+    """Shoulder, profile tone curve and sRGB curve of linear sRGB-primaries data (0..inf): the last steps of the development.
+    The profile curve (it maps linear to display-encoded values, gamma included, so no sRGB curve follows it) can be applied two ways. PER CHANNEL, it darkens the weaker channels of a colour more than the strongest (the curve is convex at the bottom), which raises saturation: measured against the camera's JPEG
+    on a sunlit orange roof it made the colour 25 to 33 % more saturated and a dozen lightness units darker, a heavy orange. On the BRIGHTEST CHANNEL with the colour ratios kept (the way Adobe's own profile curves are applied) the colour ratios stay as they were: median chroma matched the JPEG's. `blend` (default TONE_BLEND) is the share of the first way."""
+    blend = TONE_BLEND if blend is None else blend; img = np.clip(shoulder(np.clip(img, 0, None)), 0, 1)
     if lut is None: return srgb_oetf(img).astype(np.float32)
-    return np.interp(img, np.linspace(0, 1, len(lut)), lut).astype(np.float32)           # the profile curve maps linear to display-encoded values (it includes the gamma): no sRGB curve after it
+    xs = np.linspace(0, 1, len(lut)); per = np.interp(img, xs, lut).astype(np.float32) if blend > 0 else None
+    if blend >= 1: return per
+    mx = img.max(axis=2, keepdims=True); mn = img.min(axis=2, keepdims=True); fx, fn = np.interp(mx, xs, lut), np.interp(mn, xs, lut); d = mx - mn
+    ratio = (fn + (fx - fn) * np.where(d > 1e-6, (img - mn) / np.maximum(d, 1e-6), 0.0)).astype(np.float32)                    # Adobe's RGBTone: the curve on the largest and smallest channel, the middle one in proportion between them, so the hue holds
+    return ratio if per is None else (blend * per + (1 - blend) * ratio).astype(np.float32)
+
+
+CHROMA_KNEE = 0.20              # limit_chroma: colour (distance from the grey of the same luma, display-encoded 0..1) up to here is untouched
+CHROMA_CEIL = 0.45              # ... and rolls off smoothly towards this at most
+
+
+def limit_chroma(rgb, knee=None, ceil=None):
+    """Roll off the strongest colours of a finished (display-encoded) picture: up to `knee` the colour is as it was, beyond it the excess is compressed towards `ceil`. Sunlit orange and similar are the ones the tone curve over-saturates (it darkens the weaker channels most); the camera's own JPEG is gentler there. Luma is kept."""
+    knee = CHROMA_KNEE if knee is None else knee; ceil = CHROMA_CEIL if ceil is None else ceil
+    if knee <= 0 or ceil <= knee: return rgb
+    w = np.array([0.2126, 0.7152, 0.0722], np.float32); y = (rgb @ w)[..., None]; d = rgb - y; c = np.sqrt((d * d).sum(-1, keepdims=True)) + 1e-9; room = ceil - knee; ex = np.maximum(c - knee, 0)
+    new = np.where(c > knee, knee + room * ex / (ex + room), c); return np.clip(y + d * (new / c), 0, 1).astype(np.float32)
 
 
 HIGHLIGHTS = 0.55               # how hard local_tone squeezes bright regions towards the median (0..1)
@@ -309,8 +388,10 @@ def develop_parts(path, half=False, ev='auto', recover=0.35):
                 coef, centre = warp_params(p); img = warp_rectilinear(img, coef, centre)
     if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
         n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3)
-        img = img @ camera_to_srgb(color_matrix(cm1, cm2, n), n).T.astype(np.float32)
-    be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
+        cm, w = color_matrix_weight(cm1, cm2, n); table = hue_sat_table(tags, w) if HUE_SAT_MAP else None
+        if table is None: img = img @ camera_to_srgb(cm, n).T.astype(np.float32)
+        else: img = apply_hue_sat_map(img @ camera_to_prophoto(cm, n).T.astype(np.float32), table) @ prophoto_to_srgb().T.astype(np.float32)
+    be =float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(tags.get('ProfileToneCurve'))
     g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else float(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None          # the profile is for the raw values: after the gain, variance = S*g*v + O*g^2
@@ -330,7 +411,7 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
     sig8 = noise_map8(img, npf, gain=field) if npf is not None else None
-    out = finish(img, lut)
+    out = limit_chroma(finish(img, lut))
     if classical:
         out = clean_colour(out, sig8)
         if denoise in ('auto', 'ai'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
@@ -359,8 +440,10 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
             elif oid == 1:
                 coef, centre = warp_params(p); img = gpu.warp_rectilinear(img, coef, centre)
     if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
-        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3); M = t.from_numpy(camera_to_srgb(color_matrix(cm1, cm2, n), n).astype(np.float32)).to(img.device)
-        c, h, w = img.shape; img = (M @ img.reshape(3, -1)).reshape(3, h, w)
+        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3); cm, wt = color_matrix_weight(cm1, cm2, n); table = hue_sat_table(tags, wt) if HUE_SAT_MAP else None
+        mat = lambda m: t.from_numpy(np.asarray(m, np.float32)).to(img.device); c, h, w = img.shape
+        if table is None: img = (mat(camera_to_srgb(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w)
+        else: img = (mat(prophoto_to_srgb()) @ gpu.apply_hue_sat_map((mat(camera_to_prophoto(cm, n)) @ img.reshape(3, -1)).reshape(3, h, w), mat(table)).reshape(3, -1)).reshape(3, h, w)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(tags.get('ProfileToneCurve')); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
     sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else float(ev)); img = img * g
@@ -371,7 +454,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
         if sc > 0.3: cc = gpu.gaussian(cc, sc)
         img = (y[None] + cc).clamp_(min=0)
     sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
-    out = gpu.finish(img, lut_t, KNEE, WHITE); del img
+    out = gpu.limit_chroma(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), CHROMA_KNEE, CHROMA_CEIL); del img
     if classical:
         out = gpu.clean_colour(out, sig8)
         if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)

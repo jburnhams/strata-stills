@@ -165,3 +165,32 @@ def test_the_contrast_boost_runs_after_the_grain_is_cored(monkeypatch):
     monkeypatch.setattr(D, 'read_dng_tags', lambda p: dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16)); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     monkeypatch.setattr(D, 'core_luma', lambda r, s, k=None: order.append('core') or r); monkeypatch.setattr(D, 'highlight_detail', lambda r, a=1.0, lo=0.62, hi=0.92: order.append('contrast') or r)
     D.develop('x.dng', half=True, backend='cpu'); assert order == ['core', 'contrast']
+
+
+def test_rgbtone_keeps_the_hue_per_channel_does_not():
+    lut = (np.linspace(0, 1, 4096) ** 0.55).astype(np.float32); orange = np.full((4, 4, 3), 0.0, np.float32); orange[...] = [0.55, 0.25, 0.08]
+    per = D.finish(orange, lut, 1.0); tone = D.finish(orange, lut, 0.0); mix = D.finish(orange, lut, 0.5)
+    f = lambda v: np.interp(v, np.linspace(0, 1, 4096), lut); assert np.allclose(tone[0, 0, 0], f(D.shoulder(orange)[0, 0, 0]), atol=1e-4) and np.allclose(tone[0, 0, 2], f(D.shoulder(orange)[0, 0, 2]), atol=1e-4)      # largest and smallest channel go through the curve
+    mid = lambda a: (a[0, 0, 1] - a[0, 0, 2]) / (a[0, 0, 0] - a[0, 0, 2]); assert abs(mid(tone) - mid(D.shoulder(orange))) < 1e-4 and abs(mid(per) - mid(D.shoulder(orange))) > 0.02 and mid(tone) < mid(mix) < mid(per)      # the middle channel keeps its place between the others (the hue)
+    assert np.allclose(D.finish(orange, None, 0.0), D.finish(orange, None, 1.0)) and D.finish(orange, lut)[0, 0, 0] == per[0, 0, 0]
+
+
+def test_colour_through_prophoto_composes_to_the_direct_matrix_and_an_identity_map_changes_nothing():
+    cm = np.array([[0.9, -0.2, -0.1], [-0.3, 1.1, 0.1], [0.0, 0.1, 0.8]]); n = np.array([0.5, 1.0, 0.6])
+    assert np.allclose(D.prophoto_to_srgb() @ D.camera_to_prophoto(cm, n), D.camera_to_srgb(cm, n), atol=1e-6); assert np.allclose(D.camera_to_prophoto(cm, n) @ np.ones(3), 1)
+    x = (np.random.default_rng(0).random((30, 40, 3)) * 1.5).astype(np.float32); ident = np.zeros((36, 10, 3), np.float32); ident[..., 1:] = 1
+    assert np.allclose(D.hsv_to_rgb(D.rgb_to_hsv(x)), x, atol=1e-5) and np.abs(D.apply_hue_sat_map(x, ident) - x).max() < 1e-5
+
+
+def test_hue_sat_map_shifts_hue_scales_saturation_and_blends_the_two_illuminants():
+    red = np.full((2, 2, 3), 0.0, np.float32); red[..., 0] = 0.8; red[..., 1] = 0.2; red[..., 2] = 0.2; tb = np.zeros((36, 10, 3), np.float32); tb[..., 1:] = 1
+    tb[..., 1] = 0.5; out = D.apply_hue_sat_map(red, tb); assert np.allclose(out[0, 0], [0.8, 0.5, 0.5], atol=1e-5)                                  # saturation halved: 0.75 -> 0.375 of the maximum
+    tb[..., 1] = 1; tb[..., 0] = 60; out = D.rgb_to_hsv(D.apply_hue_sat_map(red, tb)); assert abs(out[0, 0, 0] - 1.0) < 1e-5                                    # 60 degrees = one sextant
+    tags = dict(ProfileHueSatMapDims=(36, 10, 1), ProfileHueSatMapData1=np.ones(1080), ProfileHueSatMapData2=np.full(1080, 3.0)); mixed = D.hue_sat_table(tags, 0.25); assert np.allclose(mixed, 0.25 * 1 + 0.75 * 3)
+    assert D.hue_sat_table({}, 0.5) is None
+
+
+def test_limit_chroma_leaves_soft_colour_alone_and_rolls_off_strong_colour_keeping_luma():
+    soft = np.full((2, 2, 3), 0.5, np.float32); soft[..., 0] = 0.55; strong = np.zeros((2, 2, 3), np.float32); strong[...] = [0.95, 0.45, 0.05]
+    assert np.allclose(D.limit_chroma(soft), soft, atol=1e-6); out = D.limit_chroma(strong); w = np.array([0.2126, 0.7152, 0.0722])
+    assert abs(out[0, 0] @ w - strong[0, 0] @ w) < 1e-4 and (out[0, 0].max() - out[0, 0].min()) < (strong[0, 0].max() - strong[0, 0].min())

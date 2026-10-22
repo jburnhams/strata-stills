@@ -242,10 +242,42 @@ def srgb_oetf(x):
     t = torch_(); x = x.clamp(0, 1); return t.where(x <= 0.0031308, 12.92 * x, 1.055 * x.pow(1 / 2.4) - 0.055)
 
 
-def finish(img, lut, knee, white):
-    """develop.finish: shoulder, then the profile tone curve (lut a CUDA tensor) or the sRGB curve."""
+def srgb_eotf(v):
+    t = torch_(); v = v.clamp(0, 1); return t.where(v <= 0.04045, v / 12.92, ((v + 0.055) / 1.055).pow(2.4))
+
+
+def finish(img, lut, knee, white, blend=1.0):
+    """develop.finish: shoulder, then the profile tone curve (lut a tensor) per channel (`blend` 1), on the brightest channel with the colour ratios kept (0), or a mix; or the sRGB curve."""
     img = shoulder(img.clamp(min=0), knee, white).clamp_(0, 1)
-    return srgb_oetf(img) if lut is None else apply_lut(img, lut)
+    if lut is None: return srgb_oetf(img)
+    if blend >= 1: return apply_lut(img, lut)
+    mx = img.amax(dim=0, keepdim=True); mn = img.amin(dim=0, keepdim=True); fx, fn = apply_lut(mx, lut), apply_lut(mn, lut); d = mx - mn
+    ratio = fn + (fx - fn) * torch_().where(d > 1e-6, (img - mn) / d.clamp(min=1e-6), torch_().zeros_like(img))
+    return ratio if blend <= 0 else blend * apply_lut(img, lut) + (1 - blend) * ratio
+
+
+def limit_chroma(rgb, knee, ceil):
+    """develop.limit_chroma on a (3, H, W) tensor."""
+    t = torch_()
+    if knee <= 0 or ceil <= knee: return rgb
+    y = luma(rgb)[None]; d = rgb - y; c = (d * d).sum(0, keepdim=True).sqrt() + 1e-9; room = ceil - knee; ex = (c - knee).clamp(min=0)
+    new = t.where(c > knee, knee + room * ex / (ex + room), c); return (y + d * (new / c)).clamp_(0, 1)
+
+
+def apply_hue_sat_map(rgb, table, rows=512):
+    """develop.apply_hue_sat_map on a (3, H, W) tensor with the table as a (hue, saturation, 3) tensor, in bands of `rows` rows."""
+    t = torch_(); hd, sd = table.shape[:2]; out = t.empty_like(rgb)
+    for r0 in range(0, rgb.shape[1], rows):
+        x = rgb[:, r0:r0 + rows].clamp(min=0); mx = x.amax(0); mn = x.amin(0); d = mx - mn; ds = t.where(d > 0, d, t.ones_like(d)); r, g, b = x[0], x[1], x[2]
+        h = t.where(mx == r, ((g - b) / ds) % 6.0, t.where(mx == g, (b - r) / ds + 2.0, (r - g) / ds + 4.0)); h = t.where(d > 0, h, t.zeros_like(h)); s = t.where(mx > 0, d / t.where(mx > 0, mx, t.ones_like(mx)), t.zeros_like(mx))
+        hs = h * (hd / 6.0); fl = hs.floor(); i0 = fl.long() % hd; fh = (hs - fl).unsqueeze(-1); i1 = (i0 + 1) % hd
+        ss = s.clamp(0, 1) * (sd - 1); j0 = ss.floor().clamp(max=sd - 2).long(); fs = (ss - j0).unsqueeze(-1); j1 = j0 + 1
+        dd = table[i0, j0] * (1 - fh) * (1 - fs) + table[i1, j0] * fh * (1 - fs) + table[i0, j1] * (1 - fh) * fs + table[i1, j1] * fh * fs
+        h = (h + dd[..., 0] * (6.0 / 360.0)) % 6.0; s = (s * dd[..., 1]).clamp(max=1.0); v = mx * dd[..., 2]
+        c = v * s; xx = c * (1 - (h % 2.0 - 1).abs()); m = v - c; k = h.floor().long() % 6; z = t.zeros_like(c)
+        cand = t.stack([t.stack([c, xx, z]), t.stack([xx, c, z]), t.stack([z, c, xx]), t.stack([z, xx, c]), t.stack([xx, z, c]), t.stack([c, z, xx])])        # (6, 3, rows, W)
+        out[:, r0:r0 + rows] = cand.gather(0, k[None, None].expand(1, 3, *k.shape))[0] + m
+    return out
 
 
 def noise_map8(img, noise_profile, blur=8.0, gain=None):
