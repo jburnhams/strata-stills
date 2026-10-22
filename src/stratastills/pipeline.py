@@ -17,7 +17,7 @@ import datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, preview, projects as P, settings, sizeplan, transforms
+from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, match, preview, projects as P, settings, sizeplan, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
@@ -34,7 +34,10 @@ def _num(params, k, lo, hi, default):
     return v
 
 
-def _develop_params(p): return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST))
+def _develop_params(p):
+    m = str(p.get('match', 'auto')).lower()
+    if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
+    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m)                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
@@ -82,10 +85,24 @@ class State:
         return self._res
 
 
+def _reference_picture(item):
+    """A developed (half size) neighbouring frame to match a panorama to: its raw when it has one, else its JPEG."""
+    v = next((x for x in item['variants'] if x['kind'] == 'raw'), None) or next((x for x in item['variants'] if x['kind'] == 'jpeg'), None)
+    if v is None: return None
+    if X._is_camera_raw(v['path']): return develop.develop(v['path'], half=True)
+    return images.load(v['path'], 100000)[:, :, ::-1].astype(np.float32) / 255.0
+
+
 def run_develop(st, p):
     st.say('developing the full-size picture'); an = {}
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast']) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
     st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
+    if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
+        refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
+        if not refs: st.rec['match'] = dict(applied=False, reason='no neighbouring frames found by time stamp'); return
+        st.say('matching the levels of the neighbouring frames'); pics = [r for r in (_reference_picture(it) for it in refs) if r is not None]
+        st.rgb, rec = match.match_levels(st.rgb, pics); st.rec['match'] = dict(rec, references=[it['stem'] for it in refs])
+        if rec['applied']: st.rec['steps'].append(f"levels matched to {', '.join(it['stem'] for it in refs)} ({rec['points']} points, rms {rec['rms_before']:.3f} -> {rec['rms_after']:.3f})")
 
 
 def run_level(st, p):
@@ -157,7 +174,7 @@ def normalize(stages):
 def apply_options(stages, options):
     """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
     st = [dict(s) for s in stages]; o = dict(options or {})
-    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast'}
+    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match'}
     if unknown: raise P.ProjectError(f'unknown option {sorted(unknown)[0]!r}')
 
     def get(name): return next((s for s in st if s['stage'] == name), None)
@@ -168,6 +185,7 @@ def apply_options(stages, options):
             s = dict(stage=name); st.append(s); st.sort(key=lambda x: ORDER.index(x['stage']))
         s.update(kw); return s
     if o.get('highlight_contrast') is not None: ensure('develop', highlight_contrast=o['highlight_contrast'])
+    if o.get('match') is not None: ensure('develop', match=o['match'])
     if o.get('size') is not None: ensure('resize', size=o['size'])
     if o.get('level') is False: st = [s for s in st if s['stage'] != 'level']
     elif o.get('level') is True: ensure('level')
@@ -225,7 +243,7 @@ def resolve(preset=None, options=None, stages=None):
 
 def stage_key(iid, variant_id, stages):
     """A short identity of what is made: the item, the source variant, and every stage's settings and version."""
-    return hashlib.sha1(json.dumps([iid, variant_id, [(s, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
+    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k == 'match' and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
 
 
 def summary(stages):
