@@ -43,6 +43,13 @@ def test_a_device_profile_supplies_the_tone_curve_only_when_the_file_has_none():
     assert inputs.tone_curve(dict(Make='Nobody', Model='X1')) is None and inputs.tone_curve({}) is None
 
 
+def test_lightroom_adobe_standard_files_get_the_cameras_own_colour_profile_back():
+    adobe = dict(ProfileName='Adobe Standard', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2), ProfileHueSatMapDims=(90, 30, 1), AsShotNeutral=(4, 10, 1, 1, 6, 10)); out = inputs.adjust_tags(dict(adobe))
+    assert out['ProfileHueSatMapDims'] == (36, 10, 1) and len(out['ProfileToneCurve']) == 256 and len(out['ColorMatrix1']) == 18 and out['AsShotNeutral'] == adobe['AsShotNeutral']       # the white balance stays the file's own
+    own = dict(ProfileName='Embedded', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2)); assert inputs.adjust_tags(dict(own)) == own
+    other = dict(adobe, Make='Nobody'); assert inputs.adjust_tags(dict(other)) == other                                                          # no device profile: left alone
+
+
 def test_describe_tells_the_kind_of_file(tmp_path):
     p = tmp_path / 'a.jpg'; p.write_bytes(b'x'); assert inputs.describe(str(p)) == dict(kind='rendered', make=None, model=None, profile=None)
     assert inputs.profile('DJI', 'FC8482')['label'] == 'DJI Mini 4 Pro' and inputs.profile('x', 'y') == {}

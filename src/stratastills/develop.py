@@ -30,14 +30,14 @@ class DevelopError(RuntimeError): pass
 def read_dng_tags(path):
     """The DNG tags this module uses, from the raw IFD (and the main IFD): {name: value}. Missing ones are left out."""
     import tifffile
-    want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding', 'Make', 'Model')
+    want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding', 'Make', 'Model', 'ProfileName')
     out = {}
     with tifffile.TiffFile(path) as t:
         pages = [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or [])
         for pg in pages:
             for tag in pg.tags.values():
                 if tag.name in want and tag.name not in out: out[tag.name] = tag.value
-    return out
+    return inputs.adjust_tags(out)
 
 
 def _rationals(v): return np.array([a / b if b else 0.0 for a, b in zip(v[0::2], v[1::2])], float)
