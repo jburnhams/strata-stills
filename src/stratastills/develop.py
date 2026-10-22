@@ -342,8 +342,14 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
 
 
 def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None):
+    """The raw is decoded first (LibRaw, on the CPU, holding no device slot, so another picture can be on the card meanwhile); then the picture takes a device slot for the rest."""
+    u16 = _raw_u16(path, half)
+    with gpu.slot(): return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis)
+
+
+def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None):
     """`develop` on the GPU: the same recipe step for step (see gpu.py for the functions and tests/unit/test_gpu.py for the proof they agree with the CPU ones); the picture stays on the card until the finished float32 array comes back."""
-    t = gpu.torch_(); tags = read_dng_tags(path); img = gpu.to_gpu_u16(_raw_u16(path, half)); field = None
+    t = gpu.torch_(); tags = read_dng_tags(path); img = gpu.to_gpu_u16(u16); field = None
     if analysis is not None:                                                                                      # analysis_luma from this decode: nothing done that changes sharpness, exposed so the median is 0.18, gamma-encoded
         y = gpu.luma(img); med = max(gpu._median(y[::8, ::8]), 1e-5); analysis['luma'] = gpu.to_numpy(gpu.srgb_oetf(y * (0.18 / med))); del y
     if 'OpcodeList3' in tags:

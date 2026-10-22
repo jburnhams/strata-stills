@@ -103,10 +103,11 @@ def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
 def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
     """sharpen_picture on the device: both filters and the brightness blend, the picture going over once and coming back once."""
     from stratastills import gpu
-    t = gpu.torch_(); x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
-    base = gpu.sharpen(x, g(ROLLOFF)); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
-    if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT)) * k
-    out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
+    with gpu.slot():                                                                                       # one device slot while the picture is on the card (several pictures may be in flight)
+        x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
+        base = gpu.sharpen(x, g(ROLLOFF)); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
+        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT)) * k
+        out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
 
 
 def sharpen(rgb, gain, overshoot=0.05):

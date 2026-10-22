@@ -5,7 +5,7 @@ functions on the torch CPU device (`use('cpu')`), so a machine with no GPU still
 Conventions: a picture is a float32 tensor (3, H, W) on the device (channels first, so a filter is a convolution over planes), one plane is (H, W); values as in the CPU code. Borders reflect without repeating the edge pixel (OpenCV's default, torch 'reflect').
 Memory: a 48 MP plane is 193 MB and a picture 580 MB; the functions keep a handful alive at a time and the long per-pixel table lookups are chunked, so the whole development stays under about 6 GB (a 12 GB card, or an M4's unified memory, is plenty).
 Operations a backend lacks are probed once (`cubic_ok`) and have a fallback, so Apple's Metal backend, which has had gaps in torch, degrades to slower rather than failing. Only float32 is used (MPS has no float64)."""
-import math, os
+import contextlib, math, os, threading
 
 import numpy as np
 
@@ -68,6 +68,40 @@ def cubic_ok():
             x = t.zeros(1, 1, 4, 4, device=dev()); gr = t.zeros(1, 2, 2, 2, device=dev()); t.nn.functional.grid_sample(x, gr, mode='bicubic', padding_mode='reflection', align_corners=False); _cubic_ok = True
         except Exception: _cubic_ok = False
     return _cubic_ok
+
+
+PEAK_BYTES = 6.5e9              # what one 48 MP develop needs on the device at its peak (measured 5.7 GB)
+_slots = None
+
+
+_slots_lock = threading.Lock()
+
+
+def _semaphore():
+    """The device's slot semaphore, made once (under a lock: several threads ask at the start of a batch, and two semaphores would make a release go to the wrong one)."""
+    global _slots
+    with _slots_lock:
+        if _slots is None:
+            n = os.environ.get('STRATASTILLS_GPU_SLOTS')
+            if n: k = max(1, int(n))
+            else:
+                try: d = dev(); k = max(1, int(torch_().cuda.mem_get_info()[1] * 0.9 // PEAK_BYTES)) if d.type == 'cuda' else 1
+                except Exception: k = 1
+            _slots = threading.BoundedSemaphore(k); _slots.n = k
+        return _slots
+
+
+def slots():
+    """How many pictures may be on the device at once: what fits in a CUDA card's memory (90 % of it, in steps of PEAK_BYTES; one on a 12 GB card), one for MPS (it shares the machine's memory), at least 1; STRATASTILLS_GPU_SLOTS overrides."""
+    return _semaphore().n
+
+
+@contextlib.contextmanager
+def slot():
+    """Hold one of the device's slots while a picture is on it: with several pictures being made at once, their CPU parts (decode, encode, files) overlap and only as many pictures as fit in memory use the card together; the rest wait here."""
+    s = _semaphore(); s.acquire()
+    try: yield
+    finally: s.release()                                                                                              # the same semaphore that was acquired, whatever happens to the module's variable meanwhile
 
 
 def free():

@@ -3,7 +3,7 @@
     ./stratastills serve [--host 127.0.0.1] [--port 8361]
 
 API (JSON): GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
-GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST/GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
+GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 import os, threading
 
@@ -168,7 +168,7 @@ def create_app():
     def put_rules(id: str, b: RulesIn): guard(PL.set_rules, id, b.rules); return dict(rules=PL.rules(id), pending=len(PL.pending(id)))
 
     @app.post('/api/project/apply')
-    def start_apply(id: str):
+    def start_apply(id: str, workers: int | None = None):
         guard(PL.rules, id)
         if batches.get(id, {}).get('state') == 'running': raise HTTPException(409, 'this project is already being processed')
         job = batches[id] = dict(state='running', done=0, total=0, text='starting', failed=[], stop=False)
@@ -176,7 +176,7 @@ def create_app():
         def run():
             def prog(i, n, t): job.update(done=i, total=n, text=t)
             try:
-                r = PL.apply_rules(id, prog, stop=lambda: job['stop']); job.update(state='stopped' if job['stop'] else 'done', done=r['done'] + len(r['failed']), total=r['total'], failed=r['failed'])
+                r = PL.apply_rules(id, prog, stop=lambda: job['stop'], workers=workers); job.update(state='stopped' if job['stop'] else 'done', done=r['done'] + len(r['failed']), total=r['total'], failed=r['failed'], workers=r['workers'])
             except Exception as e: job.update(state='failed', text=str(e))
         threading.Thread(target=run, daemon=True).start(); return job
 

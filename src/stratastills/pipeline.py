@@ -300,12 +300,22 @@ def pending(pid):
     return out
 
 
-def apply_rules(pid, progress=None, stop=lambda: False):
-    """Generate everything the rules ask for and is missing; returns {done, failed: [(item, message)], total}. `progress(done, total, text)` is called after each picture; `stop()` is polled between pictures."""
-    todo = pending(pid); done = 0; failed = []
-    for i, (iid, vid, name) in enumerate(todo):
-        if stop(): break
-        try: generate(pid, iid, vid, name, progress=lambda t, i=i: progress and progress(i, len(todo), f'{iid.split("~")[-1]}: {t}')); done += 1
-        except Exception as e: failed.append((iid, str(e)))
-        if progress: progress(i + 1, len(todo), f'{iid.split("~")[-1]} done')
-    return dict(done=done, failed=failed, total=len(todo))
+def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
+    """Generate everything the rules ask for and is missing, several pictures at once; returns {done, failed: [(item, message)], total, workers}. `progress(done, total, text)` is called as pictures finish and as the running ones move on; `stop()` is polled before each picture is started (those already running finish).
+    `workers`: how many at once (default resources.auto_workers: 2 with a GPU, where the device slots (gpu.slots) decide how many are on the card and the CPU parts of the others (decode, encode, files, the network share) overlap its work; fewer without one). One picture is made by one thread and distinct pictures write distinct files, so nothing is shared."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from stratastills import gpu, resources
+    todo = pending(pid); total = len(todo); done = [0]; failed = []; lock = threading.Lock(); n = max(1, workers or resources.auto_workers(gpu.available()))
+
+    def work(iid, vid, name):
+        if stop(): return
+        short = iid.split('~')[-1]
+        try: generate(pid, iid, vid, name, progress=lambda t: progress and progress(done[0] + len(failed), total, f'{short}: {t}'))
+        except Exception as e:
+            with lock: failed.append((iid, str(e)))
+        else:
+            with lock: done[0] += 1
+        if progress: progress(done[0] + len(failed), total, f'{short} done')
+    with ThreadPoolExecutor(n) as ex: list(ex.map(lambda a: work(*a), todo))
+    return dict(done=done[0], failed=failed, total=total, workers=n)

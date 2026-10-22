@@ -117,3 +117,58 @@ def test_apply_rules_reports_a_failure_and_goes_on(proj, monkeypatch):
         if i.endswith('S_0001'): raise RuntimeError('boom')
         return real(p, i, *a, **k)
     monkeypatch.setattr(PL, 'generate', flaky); r = PL.apply_rules(pid); assert r['done'] == 1 and r['failed'] == [(iid, 'boom')]
+
+
+def test_apply_rules_makes_several_pictures_at_once_without_mixing_them_up(proj, tmp_path):
+    import threading
+    pid, sid, iid = proj; src = tmp_path / 'src'
+    for k in range(3, 8): Image.fromarray((np.random.default_rng(k).random((120, 160, 3)) * 255).astype('uint8')).save(src / f'S_{k:04d}.JPG')
+    PL.set_rules(pid, [dict(source=sid, pipeline='web')]); todo = PL.pending(pid); assert len(todo) == 7
+    seen = []; lock = threading.Lock(); real = PL.generate; running = [0]; peak = [0]
+
+    def spy(p, i, *a, **k):
+        with lock: running[0] += 1; peak[0] = max(peak[0], running[0])
+        try: return real(p, i, *a, **k)
+        finally:
+            with lock: running[0] -= 1; seen.append(i)
+    import pytest as _p; mp = _p.MonkeyPatch(); mp.setattr(PL, 'generate', spy)
+    try: r = PL.apply_rules(pid, workers=3)
+    finally: mp.undo()
+    assert r['failed'] == [], r['failed']
+    assert r['done'] == 7 and r['total'] == 7 and r['workers'] == 3 and sorted(seen) == sorted(i for i, _, _ in todo) and peak[0] >= 2        # each once, and really overlapping
+    assert PL.pending(pid) == [] and all(len(generated(pid, i)) == 1 for i, _, _ in todo)
+
+
+def test_a_failure_among_parallel_pictures_is_isolated_and_stop_prevents_new_ones(proj, monkeypatch):
+    pid, sid, iid = proj; PL.set_rules(pid, [dict(source=sid, pipeline='web')]); real = PL.generate
+
+    def flaky(p, i, *a, **k):
+        if i.endswith('S_0001'): raise RuntimeError('boom')
+        return real(p, i, *a, **k)
+    monkeypatch.setattr(PL, 'generate', flaky); r = PL.apply_rules(pid, workers=2); assert r['done'] == 1 and r['failed'] == [(iid, 'boom')]
+    PL.set_rules(pid, [dict(source=sid, pipeline='archive')]); r = PL.apply_rules(pid, stop=lambda: True, workers=2); assert r['done'] == 0 and r['failed'] == []
+
+
+def test_the_device_slot_limits_how_many_pictures_are_on_the_card(monkeypatch):
+    pytest.importorskip('torch')
+    import threading, time
+    from stratastills import gpu
+    monkeypatch.setenv('STRATASTILLS_GPU_SLOTS', '2'); monkeypatch.setattr(gpu, '_slots', None); assert gpu.slots() == 2
+    inside = [0]; peak = [0]; lock = threading.Lock()
+
+    def work():
+        with gpu.slot():
+            with lock: inside[0] += 1; peak[0] = max(peak[0], inside[0])
+            time.sleep(0.05)
+            with lock: inside[0] -= 1
+    ts = [threading.Thread(target=work) for _ in range(6)]; [t.start() for t in ts]; [t.join() for t in ts]
+    assert peak[0] == 2 and inside[0] == 0
+    monkeypatch.setattr(gpu, '_slots', None)
+
+
+def test_worker_count_follows_the_machine(monkeypatch):
+    from stratastills import resources
+    assert resources.auto_workers(True) == 2
+    monkeypatch.setattr(resources, 'total_ram', lambda: 16e9); monkeypatch.setattr(resources.os, 'cpu_count', lambda: 16); assert resources.auto_workers(False) == 1                          # 16 GB holds one 7 GB picture at 80 %
+    monkeypatch.setattr(resources, 'total_ram', lambda: 64e9); assert resources.auto_workers(False) == 4                                                                                          # 16 cores / 4
+    monkeypatch.setattr(resources, 'total_ram', lambda: 0); assert resources.auto_workers(False) == 1 and resources.total_ram.__name__ == '<lambda>'
