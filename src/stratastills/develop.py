@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import denoise_ai
 
-VERSION = 4
+VERSION = 5
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -179,16 +179,49 @@ def srgb_eotf(v):
 
 # ---- exposure ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-TARGET_MEDIAN = 0.42            # the picture's median luminance in the finished (sRGB-encoded) picture, where the camera's own JPEGs sit
+TARGET_MEDIAN = 0.40            # the picture's median luminance in the finished (sRGB-encoded) picture, where the camera's own JPEGs sit
 MAX_EV = 3.5
 KNEE = 0.72                     # linear value above which highlights are rolled off towards white
 WHITE = 4.0                     # the linear value that the shoulder maps to white
 
 
-def shoulder(img, knee=KNEE, white=WHITE):
+def shoulder(img, knee=None, white=None):
     """Roll the highlights off smoothly (extended Reinhard above `knee`, driven by the brightest channel and applied to all three so hues hold) instead of clipping them; `white` is the input that maps to 1."""
-    m = img.max(axis=2, keepdims=True); span = 1.0 - knee; x = np.maximum(m - knee, 0.0) / span; w = (white - knee) / span
+    knee = KNEE if knee is None else knee; white = WHITE if white is None else white; m = img.max(axis=2, keepdims=True); span = 1.0 - knee; x = np.maximum(m - knee, 0.0) / span; w = (white - knee) / span
     new = np.where(m > knee, knee + span * x * (1 + x / (w * w)) / (1 + x), m); return img * (new / np.maximum(m, 1e-6))
+
+
+# ---- colour noise and fringes ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+def _guided(p, guide, r, eps):
+    """He et al.'s guided filter (box-filter form, one channel): smooths `p` but keeps the edges of `guide`. r: radius in pixels, eps: how much contrast (in guide units squared) still counts as an edge."""
+    k = (2 * r + 1, 2 * r + 1); mean = lambda a: cv2.boxFilter(a, -1, k, borderType=cv2.BORDER_REFLECT)
+    mg, mp = mean(guide), mean(p); cov = mean(guide * p) - mg * mp; var = mean(guide * guide) - mg * mg; a = cov / (var + eps); b = mp - a * mg
+    return mean(a) * guide + mean(b)
+
+
+def clean_colour(rgb, sig8, desat_from=0.86):
+    """What the camera's own JPEG does and a raw development must do by hand: keep colour noise, colour fringes and clipped-highlight colour out of the picture.
+    The picture is split into luminance Y and two colour differences (B-Y, R-Y). The colour differences are smoothed by a guided filter that follows the edges of Y (so real colour edges stay where the luminance edge is and nothing bleeds), at a radius that grows with the noise there
+    (`sig8`, per pixel, 8-bit grey levels: 2 px when it is low, up to 14 px where it is high: the dark, shading-lifted corners), then cored (the threshold is a third of the raw noise: the filter has already averaged most of it away): colour weaker than that goes to grey, so dark roof tiles are grey as they are, not speckled in every colour.
+    Near white the colour is rolled off (from luminance `desat_from`), because a clipped channel there gives purple and blue fringes. Luminance is not touched here."""
+    y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); cb, cr = rgb[..., 2] - y, rgb[..., 0] - y; sg = sig8 / 255.0
+    w = [np.clip((sg * 255 - lo) / (hi - lo), 0, 1) for lo, hi in ((2.0, 6.0), (5.0, 11.0))]                  # how much of the middle and the widest filter to use
+    out = []
+    for c in (cb, cr):
+        c1 = _guided(c, y, 2, 4e-4); c2 = _guided(c, y, 6, 1.5e-3); c3 = _guided(c, y, 14, 4e-3)
+        f = c1 * (1 - w[0]) + (c2 * (1 - w[1]) + c3 * w[1]) * w[0]
+        tau = 0.3 * sg; out.append(np.sign(f) * np.maximum(np.abs(f) - tau, 0))
+    roll = 1.0 - np.clip((y - desat_from) / (1.0 - desat_from), 0, 1) ** 2 * 0.9
+    cb, cr = out[0] * roll, out[1] * roll; r = y + cr; b = y + cb; g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
+    return np.clip(np.dstack([r, g, b]), 0, 1).astype(np.float32)
+
+
+def core_luma(rgb, sig8, k=0.6):
+    """Take the grain out of the finest detail without taking the texture: luminance is split into a smooth part and a fine band (Y minus its 1 px blur); fine detail weaker than `k` x the noise is shrunk to nothing (soft threshold) and stronger detail (the edge of a tile, a brick line) is kept as it is.
+    Unlike a non-local-means pass, which averages texture away, strong structure passes through unchanged."""
+    y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); low = cv2.GaussianBlur(y, (0, 0), 1.0); d = y - low; tau = k * sig8 / 255.0
+    dn = np.sign(d) * np.maximum(np.abs(d) - tau, 0); return np.clip(rgb + (low + dn - y)[..., None], 0, 1).astype(np.float32)
 
 
 def noise_map8(img, noise_profile, blur=8.0):
@@ -199,14 +232,14 @@ def noise_map8(img, noise_profile, blur=8.0):
     return cv2.resize(s8.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
 
 
-def local_tone(img, strength=0.35, px=1200):
+def local_tone(img, strength=0.35, px=1200, highlights=None):
     """Recover shadows and highlights: split the log luminance into a smooth base (an edge-preserving blur on a reduced copy, so edges stay sharp and there are no halos) and the detail on top of it; squeeze the base towards its median by `strength` and put the detail back untouched.
     The camera's JPEG cannot do this (it has already clipped and crushed); from the raw the shadows under a roof and the sunlit wall beside them can both be shown. 0 = off. Colours scale with the luminance, so hues hold."""
     if strength <= 0: return img
     h, w = img.shape[:2]; y = np.maximum(img @ np.array([0.2126, 0.7152, 0.0722], np.float32), 1e-5); ly = np.log2(y)
     k = min(1.0, px / max(h, w)); small = cv2.resize(ly, (max(8, round(w * k)), max(8, round(h * k))), interpolation=cv2.INTER_AREA)
     base_s = cv2.bilateralFilter(small, 9, 0.5, max(4.0, 0.012 * max(small.shape))); base = cv2.resize(base_s, (w, h), interpolation=cv2.INTER_CUBIC)
-    mid = float(np.median(base[::8, ::8])); new = mid + (base - mid) * (1 - strength) + (ly - base)
+    mid = float(np.median(base[::8, ::8])); hl = HIGHLIGHTS if highlights is None else highlights; k = np.where(base > mid, 1 - hl * min(1.0, strength / 0.35), 1 - strength); new = mid + (base - mid) * k + (ly - base)
     return img * (2.0 ** (new - ly))[..., None]
 
 
@@ -217,13 +250,23 @@ def finish(img, lut):
     return np.interp(img, np.linspace(0, 1, len(lut)), lut).astype(np.float32)           # the profile curve maps linear to display-encoded values (it includes the gamma): no sRGB curve after it
 
 
+HIGHLIGHTS = 0.55               # how hard local_tone squeezes bright regions towards the median (0..1)
+HIGHLIGHT_PCT = 99.5
+HIGHLIGHT_TARGET = 1.0          # the linear value the 99.5th percentile may reach after exposure (the shoulder and the tone curve take it the rest of the way to white)
+MAX_DARKER = 1.0                # protecting highlights may take the exposure at most this many stops below the median target (the shadows are lifted by the local tone recovery instead)
+
+
 def auto_ev(img, lut, target=TARGET_MEDIAN):
-    """The exposure change (stops, -1..MAX_EV) that puts the median luminance of the finished picture at `target`: found by bisection on a sample of the picture, through the whole finish."""
-    s = img[::8, ::8].reshape(-1, 3); y = s @ np.array([0.2126, 0.7152, 0.0722], np.float32); lo, hi = -1.0, MAX_EV
+    """The exposure change (stops, -1..MAX_EV): the one that puts the median luminance of the finished picture at `target` (found by bisection on a sample, through the whole finish), but no brighter than lets the brightest 0.5 % of the picture stay below white: white walls and windows keep their tone
+    (a median-only rule pushed them into a flat plateau, while the camera's JPEG kept them). Never more than MAX_DARKER stops below the median rule."""
+    s = img[::8, ::8].reshape(-1, 3); w = np.array([0.2126, 0.7152, 0.0722], np.float32); y = s @ w; lo, hi = -1.0, MAX_EV
     for _ in range(12):
-        mid = (lo + hi) / 2; med = float(np.median(finish((s * 2.0 ** mid)[None], lut) @ np.array([0.2126, 0.7152, 0.0722], np.float32)))
+        mid = (lo + hi) / 2; med = float(np.median(finish((s * 2.0 ** mid)[None], lut) @ w))
         lo, hi = (mid, hi) if med < target else (lo, mid)
-    return (lo + hi) / 2 if y.size else 0.0
+    ev_med = (lo + hi) / 2 if y.size else 0.0
+    if not y.size: return ev_med
+    ev_hl = float(np.log2(HIGHLIGHT_TARGET / max(float(np.percentile(y, HIGHLIGHT_PCT)), 1e-4)))
+    return float(np.clip(min(ev_med, max(ev_hl, ev_med - MAX_DARKER)), -1.0, MAX_EV))
 
 
 # ---- the whole development ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -260,12 +303,21 @@ def develop_parts(path, half=False, ev='auto', recover=0.35):
     return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
 
 
-def develop(path, half=False, ev='auto', denoise='auto', recover=0.35):
-    """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`: 'auto' (colour noise smoothed; luminance cleaned by the learned model where the NoiseProfile says the noise is visible, or by the light corner pass if the model is not installed), 'ai' (the same, insisting on the model),
-    'chroma' (colour only), 'off', or a number (non-local-means h, 8-bit grey levels, everywhere)."""
+def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None):
+    """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`:
+      'auto'    the classical clean-up (default): colour noise and fringes removed edge-aware and cored to grey, colour rolled off near white, the finest luminance grain cored (clean_colour, core_luma), the light corner pass on luminance where the lens-shading gain lifted the noise
+      'ai'      'auto' plus a learned model (`model`, `strength`: denoise_ai) where the noise is visible
+      'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere."""
     P = develop_parts(path, half, ev, recover); img, lut, npf, field = P['linear'], P['lut'], P['noise'], P['gain']
-    use_ai = denoise in ('auto', 'ai') and npf is not None and denoise_ai.available()
-    if denoise != 'off': img = denoise_linear(img, npf, 'chroma' if use_ai else denoise, field)                                          # colour noise always; luminance by the learned model below, or the light corner pass when there is no model
-    sig8 = noise_map8(img, npf) if use_ai else None
+    classical = denoise in ('auto', 'ai', 'chroma') and npf is not None
+    if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # the corner luminance pass (only where the shading gain is high)
+    elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
+    sig8 = noise_map8(img, npf) if npf is not None else None
     out = finish(img, lut)
-    return denoise_ai.adaptive(out, sig8) if use_ai else out
+    if classical:
+        out = clean_colour(out, sig8)
+        if denoise in ('auto', 'ai'): out = core_luma(out, sig8)
+    if denoise == 'ai' and sig8 is not None:
+        model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
+        if denoise_ai.available(model): out = denoise_ai.adaptive(out, sig8, model, strength)
+    return out

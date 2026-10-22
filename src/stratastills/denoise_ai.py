@@ -1,37 +1,66 @@
-"""Learned denoising on the GPU: SCUNet (`scunet_color_real_psnr`, Zhang et al., Apache-2.0, loaded with spandrel), the model strata-360 found cleanest for real camera noise (it removes noise and blocky patterns without inventing texture; docs/progress/2026-10-music-upscale.md there).
-What 360 learned and this module follows: denoise BEFORE any enlarging, and never at full strength everywhere (SCUNet over-smooths low-contrast, low-light texture). So `denoise` returns the cleaned picture and `adaptive` blends it back into the original by a weight map that comes from the noise itself (develop.py gives it the
-noise expected at each pixel from the file's NoiseProfile): full strength where the noise is plainly visible, none where it is below what the eye sees, so texture in clean areas is left exactly as the sensor recorded it.
+"""Learned denoising on the GPU, with the models strata-360 compared (docs/progress/2026-10-music-upscale.md there), chosen here by eye on drone crops:
 
-Runs in tiles of TILE px with OVERLAP px of feathered overlap (a 48 MP picture does not fit the 12 GB card at once), in half precision. Weights: `models/scunet/scunet_color_real_psnr.pth` (gitignored): see `fetch()`."""
+  esrgan  Real-ESRGAN `realesr-general-x4v3` (BSD-3-Clause) used as a SUPERSAMPLED cleaner: each tile is enlarged 4x by the model and averaged back down, which removes noise and keeps (the user's words: "left texture in") the fine texture. `strength` blends the weights of the
+          general model (0: keeps most grain and texture) with its `wdn` (weak-denoise-noise-trained) sibling (1: cleanest), as the Real-ESRGAN `--denoise_strength` option does. The default.
+  scunet  SCUNet `scunet_color_real_psnr` (Apache-2.0): the cleanest, and too smooth for these pictures (it takes roof-tile and brick texture with the grain); kept as an option.
+
+Both are loaded with spandrel and run in half precision in tiles on the GPU. `adaptive` blends the cleaned picture into the original by a weight map from the noise expected at each pixel (develop.noise_map8: the file's NoiseProfile), so areas whose noise is below what the eye sees are left exactly as the sensor recorded them,
+and the model's slight shifts of broad brightness and colour are taken back (`keep_tones`). Weights live in `models/` (gitignored): `fetch()` downloads what a model needs."""
 import os, urllib.request
 
 import numpy as np
 
-URL = 'https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth'
-WEIGHTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'models', 'scunet', 'scunet_color_real_psnr.pth')
-TILE = 1024
-OVERLAP = 64
-_model = {}
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'models')
+FILES = {
+    'scunet': [('scunet/scunet_color_real_psnr.pth', 'https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth')],
+    'esrgan': [('realesrgan/realesr-general-x4v3.pth', 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth'),
+               ('realesrgan/realesr-general-wdn-x4v3.pth', 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth')],
+}
+MODELS = tuple(FILES)
+DEFAULT = 'esrgan'
+DEFAULT_STRENGTH = 0.6          # esrgan: how far towards the stronger-denoise weights (0..1)
+TILE = {'scunet': 1024, 'esrgan': 512}
+OVERLAP = {'scunet': 64, 'esrgan': 32}
+_models = {}
 
 
-def available(): return os.path.exists(WEIGHTS)
+def paths(model): return [os.path.join(ROOT, f) for f, _ in FILES[model]]
+def available(model=DEFAULT): return all(os.path.exists(p) for p in paths(model))
 
 
-def fetch():
-    os.makedirs(os.path.dirname(WEIGHTS), exist_ok=True)
-    if not available(): urllib.request.urlretrieve(URL, WEIGHTS)
-    return WEIGHTS
+def fetch(model=DEFAULT):
+    for (f, url), p in zip(FILES[model], paths(model)):
+        if not os.path.exists(p): os.makedirs(os.path.dirname(p), exist_ok=True); urllib.request.urlretrieve(url, p)
+    return paths(model)
 
 
-def _load():
-    if 'm' not in _model:
+def _device():
+    import torch
+    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def _load(model, strength):
+    key = (model, round(float(strength), 2) if model == 'esrgan' else 0)
+    if key not in _models:
         import torch
         from spandrel import ModelLoader
-        dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        m = ModelLoader().load_from_file(WEIGHTS).model.eval().to(dev)
-        if dev.type == 'cuda': m = m.half()
-        _model['m'] = (m, dev)
-    return _model['m']
+        dev = _device()
+        if model == 'esrgan':
+            a, b = (torch.load(p, map_location='cpu') for p in paths(model)); a, b = a.get('params', a), b.get('params', b)
+            net = ModelLoader().load_from_state_dict({k: (1 - strength) * a[k] + strength * b[k] for k in a}).model
+        else: net = ModelLoader().load_from_file(paths(model)[0]).model
+        net = net.eval().to(dev); _models[key] = net.half() if dev.type == 'cuda' else net
+    return _models[key]
+
+
+def _run(net, tile, multiple, post):
+    """One tile (float32 HxWx3, 0..1) through the network: padded to a multiple of `multiple` (reflect), run, `post` (network output, padded shape -> cleaned), cropped back."""
+    import torch
+    dev = next(net.parameters()).device; th, tw = tile.shape[:2]; ph, pw = (-th) % multiple, (-tw) % multiple
+    tp = np.pad(tile, ((0, ph), (0, pw), (0, 0)), mode='reflect') if ph or pw else tile
+    x = torch.from_numpy(np.ascontiguousarray(tp.transpose(2, 0, 1)))[None].to(dev)
+    with torch.no_grad(): y = net(x.half() if dev.type == 'cuda' else x).float()[0].cpu().numpy().transpose(1, 2, 0)
+    return post(y, tp.shape)[:th, :tw]
 
 
 def _feather(n, at_start, at_end, overlap):
@@ -42,38 +71,39 @@ def _feather(n, at_start, at_end, overlap):
     return w
 
 
-def denoise(rgb, tile=TILE, overlap=OVERLAP, need=None):
-    """The SCUNet-cleaned copy of `rgb` (float32 HxWx3, 0..1, display-encoded: it is trained on gamma-encoded pictures). `need(y0, y1, x0, x1)` (optional) says whether a tile has to be cleaned at all; a tile that does not is passed through (saves most of the time when only some areas are noisy)."""
-    import torch
-    m, dev = _load(); h, w = rgb.shape[:2]; out = np.zeros_like(rgb); wsum = np.zeros((h, w, 1), np.float32); step = tile - 2 * overlap
+def denoise(rgb, model=DEFAULT, strength=DEFAULT_STRENGTH, tile=None, overlap=None, need=None):
+    """The cleaned copy of `rgb` (float32 HxWx3, 0..1, display-encoded: both models are trained on gamma-encoded pictures). `need(y0, y1, x0, x1)` (optional) says whether a tile has to be cleaned at all; a tile that does not is passed through (saves most of the time when only some areas are noisy)."""
+    import cv2
+    if model not in MODELS: raise ValueError(f'unknown denoise model {model!r} (one of {", ".join(MODELS)})')
+    net = _load(model, strength); tile = tile or TILE[model]; overlap = overlap if overlap is not None else OVERLAP[model]
+    if model == 'esrgan': post, mult = (lambda y, shape: cv2.resize(y, (shape[1], shape[0]), interpolation=cv2.INTER_AREA)), 4                      # x4 from the network, averaged back down: the supersampled clean
+    else: post, mult = (lambda y, shape: y), 64
+    h, w = rgb.shape[:2]; out = np.zeros_like(rgb); wsum = np.zeros((h, w, 1), np.float32); step = tile - 2 * overlap
     for y0 in range(0, max(h - overlap, 1), step):
         for x0 in range(0, max(w - overlap, 1), step):
             y1, x1 = min(y0 + tile, h), min(x0 + tile, w); y0c, x0c = max(0, y1 - tile), max(0, x1 - tile); t = rgb[y0c:y1, x0c:x1]; th, tw = t.shape[:2]
             wt = np.outer(_feather(th, y0c == 0, y1 == h, overlap), _feather(tw, x0c == 0, x1 == w, overlap))[..., None].astype(np.float32)
-            if need is not None and not need(y0c, y1, x0c, x1): out[y0c:y1, x0c:x1] += t * wt; wsum[y0c:y1, x0c:x1] += wt; continue
-            ph, pw = (-th) % 64, (-tw) % 64; tp = np.pad(t, ((0, ph), (0, pw), (0, 0)), mode='reflect') if ph or pw else t
-            x = torch.from_numpy(np.ascontiguousarray(tp.transpose(2, 0, 1)))[None].to(dev)
-            with torch.no_grad(): y = m(x.half() if dev.type == 'cuda' else x).float()[0].cpu().numpy().transpose(1, 2, 0)[:th, :tw]
+            y = t if need is not None and not need(y0c, y1, x0c, x1) else _run(net, t, mult, post)
             out[y0c:y1, x0c:x1] += y * wt; wsum[y0c:y1, x0c:x1] += wt
-    return out / np.maximum(wsum, 1e-6)
+    return np.clip(out / np.maximum(wsum, 1e-6), 0, 1)
 
 
-def weight_map(sigma8, lo=1.5, hi=5.0, top=0.85):
+def weight_map(sigma8, lo=1.5, hi=5.0, top=0.9):
     """How much of the cleaned picture to use at each pixel, from the noise expected there in 8-bit grey levels: nothing below `lo` (invisible: leave the texture), `top` (not 1: a little of the original grain stays, which looks natural) from `hi`."""
     return (np.clip((sigma8 - lo) / (hi - lo), 0, 1) * top).astype(np.float32)
 
 
-def adaptive(rgb, sigma8):
-    """`rgb` cleaned where its noise (`sigma8`, a per-pixel map or a number, in 8-bit grey levels) is visible, left alone where it is not."""
-    w = weight_map(np.asarray(sigma8, np.float32)); w = w if w.ndim == 3 else (w[..., None] if w.ndim == 2 else w)
-    if float(np.max(w)) <= 0: return rgb
-    den = keep_tones(rgb, denoise(rgb, need=lambda y0, y1, x0, x1: float(w[y0:y1, x0:x1].max()) > 0.02))
-    return rgb * (1 - w) + den * w
-
-
 def keep_tones(orig, den, scale=8):
-    """The model shifts broad brightness and colour a little (a sky comes out lighter): give `den` back the smooth colour and brightness of `orig`, keeping only what the model changed at fine scale (the difference of the two, smoothed on a 1/`scale` copy, is subtracted)."""
+    """The models shift broad brightness and colour a little (a sky comes out lighter): give `den` back the smooth colour and brightness of `orig`, keeping only what the model changed at fine scale (the difference of the two, smoothed on a 1/`scale` copy, is subtracted)."""
     import cv2
     h, w = orig.shape[:2]; small = lambda a: cv2.resize(a, (max(4, w // scale), max(4, h // scale)), interpolation=cv2.INTER_AREA)
     d = cv2.resize(cv2.GaussianBlur(small(den) - small(orig), (0, 0), 1.5), (w, h), interpolation=cv2.INTER_CUBIC)
     return np.clip(den - d, 0, 1)
+
+
+def adaptive(rgb, sigma8, model=DEFAULT, strength=DEFAULT_STRENGTH):
+    """`rgb` cleaned where its noise (`sigma8`, a per-pixel map or a number, in 8-bit grey levels) is visible, left alone where it is not."""
+    w = weight_map(np.asarray(sigma8, np.float32)); w = w if w.ndim == 3 else (w[..., None] if w.ndim == 2 else w)
+    if float(np.max(w)) <= 0: return rgb
+    den = keep_tones(rgb, denoise(rgb, model, strength, need=lambda y0, y1, x0, x1: float(w[y0:y1, x0:x1].max()) > 0.02))
+    return rgb * (1 - w) + den * w

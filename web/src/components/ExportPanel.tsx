@@ -17,7 +17,7 @@ export function detailText(d: Detail | null): string {
 export default function ExportPanel({ project, item, stem, variant }: { project: string; item: string; stem: string; variant: string }) {
   const det = useLoad(() => api.detail(project, item, variant), [project, item, variant])
   const past = useLoad(() => api.exports(project, stem), [project, stem])
-  const [size, setSize] = useState('auto'), [custom, setCustom] = useState('4000'), [format, setFormat] = useState<'jpeg' | 'tiff'>('jpeg'), [level, setLevel] = useState(true), [sharpen, setSharpen] = useState(true)
+  const [size, setSize] = useState('auto'), [custom, setCustom] = useState('4000'), [format, setFormat] = useState<'jpeg' | 'tiff'>('jpeg'), [level, setLevel] = useState(true), [sharpen, setSharpen] = useState(true), [amount, setAmount] = useState('1.5')
   const [job, setJob] = useState<ExportJob | null>(null), [err, setErr] = useState<string | null>(null), timer = useRef<number | null>(null)
   const stop = () => { if (timer.current != null) { window.clearInterval(timer.current); timer.current = null } }
   useEffect(() => stop, [])
@@ -31,7 +31,7 @@ export default function ExportPanel({ project, item, stem, variant }: { project:
   }
   const go = async () => {
     setErr(null)
-    try { setJob(await api.startExport(project, item, { variant, size: size === 'custom' ? custom : size, format, level, sharpen })); poll() } catch (e) { setErr((e as Error).message) }
+    try { setJob(await api.startExport(project, item, { variant, size: size === 'custom' ? custom : size, format, level, sharpen, sharpen_amount: Number(amount) })); poll() } catch (e) { setErr((e as Error).message) }
   }
   const d = det.data, rec = d?.recommended, running = job?.state === 'running'
   return (
@@ -55,6 +55,13 @@ export default function ExportPanel({ project, item, stem, variant }: { project:
         </label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={level} onChange={e => setLevel(e.target.checked)} />Level</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={sharpen} onChange={e => setSharpen(e.target.checked)} />Sharpen to the measured blur</label>
+        {sharpen && (
+          <label className="flex items-center gap-2">Sharpness
+            <select aria-label="Sharpness" className="rounded-md border border-stone-300 dark:border-stone-700 bg-transparent px-2 py-1" value={amount} onChange={e => setAmount(e.target.value)}>
+              <option value="1">Restore (undo the measured blur, no more)</option><option value="1.5">Crisp (like the camera's JPEG)</option><option value="2">Extra</option>
+            </select>
+          </label>
+        )}
         <button className={btn} disabled={running} onClick={go}>{running ? 'Exporting…' : 'Export'}</button>
       </div>
       {running && <p role="status" className="text-sm text-stone-500 mt-2">{job?.text}… (a 48 MP raw takes about a minute)</p>}

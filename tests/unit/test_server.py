@@ -32,6 +32,8 @@ def test_sources_items_primary_and_image(client, tmp_path):
     assert client.put('/api/project/primary', params=dict(id='demo', item=it['id']), json=dict(variant='zzz')).status_code == 400
     r = client.get('/api/project/image', params=dict(id='demo', item=it['id'], transform='level', px=64)); assert r.status_code == 200 and r.headers['content-type'] == 'image/jpeg'
     assert client.get('/api/project/transform', params=dict(id='demo', item=it['id'], transform='level')).json()['applied'] is False
+    c = client.get('/api/project/crop', params=dict(id='demo', item=it['id'], x=0.3, y=0.6, size=32, zoom=3)); assert c.status_code == 200 and c.headers['content-type'] == 'image/jpeg'
+    assert client.get('/api/project/crop', params=dict(id='demo', item='nope~x')).status_code == 400
     assert client.get('/api/project/image', params=dict(id='demo', item='nope~x')).status_code == 400
     assert client.get('/api/project/item', params=dict(id='demo', item=it['id'])).json()['stem'] == 'X_1'
 

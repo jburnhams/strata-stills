@@ -3,12 +3,12 @@
     ./stratastills serve [--host 127.0.0.1] [--port 8361]
 
 API (JSON): GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
-GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; POST /api/project/export?id=&item= {variant, size, format, level, sharpen, quality} (runs in the background); GET /api/project/export?id=&item= (its progress); GET /api/project/exports?id=&stem=; GET /api/project/export/file?id=&name=; GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
+GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same point of any variant and transform); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; POST /api/project/export?id=&item= {variant, size, format, level, sharpen, quality} (runs in the background); GET /api/project/export?id=&item= (its progress); GET /api/project/exports?id=&stem=; GET /api/project/export/file?id=&name=; GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 import os, threading
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -38,6 +38,7 @@ class ExportIn(BaseModel):
     format: str = 'jpeg'
     level: bool = True
     sharpen: bool = True
+    sharpen_amount: float = 1.5          # 1 restores the measured blur; above 1 goes past it (crisper)
     quality: int = 95
 
 
@@ -97,6 +98,10 @@ def create_app():
     def get_image(id: str, item: str, variant: str | None = None, transform: str = 'original', px: int = 1600):
         path, _ = guard(preview.render, id, item, variant, transform, px); return FileResponse(path, media_type='image/jpeg')
 
+    @app.get('/api/project/crop')
+    def get_crop(id: str, item: str, variant: str | None = None, transform: str = 'original', x: float = 0.5, y: float = 0.5, size: int = 200, zoom: int = 2):
+        return Response(guard(preview.crop, id, item, variant, transform, x, y, size, zoom), media_type='image/jpeg')
+
     @app.get('/api/project/transform')
     def get_transform(id: str, item: str, variant: str | None = None, transform: str = 'original'):
         _, info = guard(preview.render, id, item, variant, transform, 1600); return info
@@ -116,7 +121,7 @@ def create_app():
         job = jobs[key] = dict(state='running', text='starting', result=None, error=None)
 
         def run():
-            try: job['result'] = X.export_item(id, item, b.variant, b.size, b.format, b.level, b.sharpen, b.quality, progress=lambda t: job.update(text=t)); job['state'] = 'done'
+            try: job['result'] = X.export_item(id, item, b.variant, b.size, b.format, b.level, b.sharpen, b.quality, progress=lambda t: job.update(text=t), sharpen_amount=b.sharpen_amount); job['state'] = 'done'
             except Exception as e: job.update(state='failed', error=str(e))
         threading.Thread(target=run, daemon=True).start(); return job
 

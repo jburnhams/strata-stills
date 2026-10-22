@@ -7,7 +7,7 @@ export interface Variant { id: string; label: string; path: string; kind: 'raw' 
 export interface Item { id: string; stem: string; kind: ItemKind; parent: string | null; primary: string | null; chosen: boolean; variants: Variant[]; n_sidecars: number; video: string | null }
 export interface TransformInfo { applied: boolean; angle?: number; confidence?: number; lines?: number; max_deg?: number; reason?: string | null; nadir?: boolean; pitch?: number | null }
 export interface Detail { ok: boolean; reason?: string; native?: [number, number]; recommended?: number | null; f50?: number; f30?: number; f20?: number; scale50?: number; scale30?: number; scale20?: number; alpha?: number }
-export interface ExportOptions { variant?: string | null; size: string; format: 'jpeg' | 'tiff'; level: boolean; sharpen: boolean; quality?: number }
+export interface ExportOptions { variant?: string | null; size: string; format: 'jpeg' | 'tiff'; level: boolean; sharpen: boolean; sharpen_amount?: number; quality?: number }
 export interface ExportRecord { file: string; name: string; bytes: number; output: [number, number]; native: [number, number]; format: string; created: string; stem: string; variant: string; steps: string[]; size: { long_side: number; why: string }; level?: { applied: boolean; angle?: number; reason?: string } }
 export interface ExportJob { state: 'idle' | 'running' | 'done' | 'failed'; text?: string; result?: ExportRecord | null; error?: string | null }
 export interface Transform { id: string; label: string }

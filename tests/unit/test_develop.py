@@ -85,7 +85,7 @@ def test_denoise_treats_only_the_lifted_corners_when_given_the_gain_field():
 
 
 def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
-    monkeypatch.setattr(D.denoise_ai, 'available', lambda: False)
+    monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32)
     neutral = (4096, 9776, 4096, 4096, 4096, 6393); cm = tuple(v for x in ((12758, 10000), (-6160, 10000), (916, 10000), (-5992, 10000), (14682, 10000), (5340, 10000), (-251, 10000), (792, 10000), (9511, 10000)) for v in x)
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=neutral, BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(np.repeat(np.linspace(0, 1, 16) ** 0.5, 2)[:0]) or tuple(v for x in np.linspace(0, 1, 16) for v in (x, x ** 0.5)),
@@ -99,3 +99,36 @@ def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
 def test_analysis_luma_is_gamma_encoded_and_full_size(monkeypatch):
     monkeypatch.setattr(D, '_raw_linear', lambda p, half: np.full((20, 30, 3), 0.02, np.float32)); y = D.analysis_luma('x.dng')
     assert y.shape == (20, 30) and float(y.mean()) == pytest.approx(float(D.srgb_oetf(np.float32(0.18))), abs=0.01)
+
+
+LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+
+def test_clean_colour_greys_colour_noise_keeps_real_colour_and_leaves_luminance_alone():
+    rng = np.random.default_rng(6); h, w = 160, 240; y = np.full((h, w), 0.15, np.float32) + 0.02 * cv2.GaussianBlur(rng.standard_normal((h, w)).astype(np.float32), (0, 0), 1.5)
+    noise = rng.normal(0, 0.03, (h, w, 2)).astype(np.float32); img = np.dstack([y + noise[..., 0], y, y + noise[..., 1]]); img[:, 120:] = np.clip(np.dstack([y[:, 120:] * 0.5, y[:, 120:] * 1.0, y[:, 120:] * 3.0]), 0, 1)       # left: grey with colour noise; right: a real blue
+    out = D.clean_colour(np.clip(img, 0, 1), np.full((h, w), 8.0, np.float32)); chroma = lambda a: (a[..., 2] - a @ LUMA)
+    assert chroma(out)[:, :100].std() < chroma(img)[:, :100].std() * 0.35
+    assert chroma(out)[:, 130:].mean() > chroma(img)[:, 130:].mean() * 0.7 and np.abs(out @ LUMA - np.clip(img, 0, 1) @ LUMA).max() < 0.02
+
+
+def test_clean_colour_rolls_colour_off_near_white_and_does_not_bleed_across_luminance_edges():
+    img = np.full((64, 96, 3), 0.97, np.float32); img[:, :, 0] += 0.03; img[:, :, 1] -= 0.03; fringe = D.clean_colour(np.clip(img, 0, 1), np.full((64, 96), 2.0, np.float32))
+    assert abs(float((fringe[..., 0] - fringe[..., 1]).mean())) < abs(float((np.clip(img, 0, 1)[..., 0] - np.clip(img, 0, 1)[..., 1]).mean())) * 0.7
+    edge = np.full((64, 96, 3), 0.2, np.float32); edge[:, 48:] = [0.8, 0.4, 0.4]; o = D.clean_colour(edge, np.full((64, 96), 8.0, np.float32)); assert o[:, 52:].mean(0).mean(0)[0] - o[:, 52:].mean(0).mean(0)[1] > 0.2 and abs(o[:, :44, 0] - o[:, :44, 1]).max() < 0.03
+
+
+def test_core_luma_removes_fine_grain_but_keeps_strong_edges():
+    rng = np.random.default_rng(7); y = np.full((120, 160), 0.2, np.float32); y[:, 80:] = 0.5; img = np.dstack([y] * 3) + rng.normal(0, 0.02, (120, 160, 1)).astype(np.float32); out = D.core_luma(np.clip(img, 0, 1), np.full((120, 160), 6.0, np.float32))
+    assert out[:, :60].std() < img[:, :60].std() * 0.6 and abs(float(out[:, 90:].mean() - out[:, :70].mean()) - 0.3) < 0.02
+
+
+def test_exposure_protects_the_highlights_but_never_more_than_a_stop():
+    img = np.full((80, 80, 3), 0.03, np.float32); img[:20] = 0.45                                                            # a quarter of the picture is a bright wall, the rest dark
+    ev = D.auto_ev(img, None); ev_median_only = D.auto_ev(np.where(img > 0.1, 0.03, img).astype(np.float32), None)
+    assert 0.45 * 2.0 ** ev <= 1.05 and ev < ev_median_only - 0.3 and ev >= ev_median_only - D.MAX_DARKER - 0.05
+
+
+def test_local_tone_compresses_big_bright_regions_more_than_a_flat_squeeze():
+    img = np.full((200, 300, 3), 0.1, np.float32); img[:, 150:] = 0.8; rng = np.random.default_rng(8); img *= (1 + 0.05 * rng.standard_normal((200, 300, 1))).astype(np.float32)
+    a = D.local_tone(img, 0.35, highlights=0.0); b = D.local_tone(img, 0.35, highlights=0.55); assert b[:, 180:].mean() < a[:, 180:].mean() * 0.95

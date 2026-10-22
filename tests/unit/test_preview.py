@@ -50,3 +50,11 @@ def test_unreadable_file_is_an_image_error(tmp_path):
     with pytest.raises(images.ImageError): images.load(str(f))
     r = tmp_path / 'bad.dng'; r.write_bytes(b'not a raw')
     with pytest.raises(images.ImageError): images.load(str(r))
+
+
+def test_crop_takes_the_same_point_of_each_variant_and_transform(proj):
+    pid, sid = proj; iid = P.item_id(sid, 'A_0001')
+    c = cv2.imdecode(np.frombuffer(preview.crop(pid, iid, 'jpeg', 'original', 0.5, 0.5, 100, 2), np.uint8), cv2.IMREAD_COLOR); assert c.shape[:2] == (200, 200)
+    assert cv2.imdecode(np.frombuffer(preview.crop(pid, iid, 'enhanced.jpg', 'level', 0.1, 0.9, 60, 1), np.uint8), cv2.IMREAD_COLOR).shape[:2] == (60, 60)
+    assert cv2.imdecode(np.frombuffer(preview.crop(pid, iid, None, 'original', -5, 9, 5000, 99), np.uint8), cv2.IMREAD_COLOR).shape[0] == 300 * 6          # clamped to the picture (300 px high) and 6x
+    with pytest.raises(P.ProjectError): preview.crop(pid, iid, 'raw', 'original')

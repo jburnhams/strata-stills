@@ -83,7 +83,10 @@ def write_picture(path, rgb, fmt, quality=95, exif=None):
         Image.fromarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)).save(path, 'JPEG', quality=quality, subsampling=0, optimize=True, icc_profile=_icc(), **({'exif': exif} if exif else {}))
 
 
-def export_item(pid, iid, variant=None, size='auto', fmt='jpeg', level=True, sharpen=True, quality=95, progress=None, **develop_kw):
+SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
+
+
+def export_item(pid, iid, variant=None, size='auto', fmt='jpeg', level=True, sharpen=True, quality=95, progress=None, sharpen_amount=SHARPEN_AMOUNT, **develop_kw):
     """Make the final picture; returns the sidecar dict (with `file`). `progress(text)` is called as the steps go. `develop_kw` are the develop() options (ev, denoise, recover)."""
     say = progress or (lambda t: None)
     if fmt not in FORMATS: raise P.ProjectError(f'unknown format {fmt!r}')
@@ -101,7 +104,7 @@ def export_item(pid, iid, variant=None, size='auto', fmt='jpeg', level=True, sha
     if s < 0.999:
         say('resizing'); rgb = cv2.resize(rgb, (round(w * s), round(h * s)), interpolation=cv2.INTER_LANCZOS4 if s > 0.5 else cv2.INTER_AREA); rec['steps'].append(f'resized to {rgb.shape[1]}x{rgb.shape[0]}')
     if sharpen and res.get('ok'):
-        say('sharpening to the measured blur'); g = detail.sharpen_gain(np.array(res['freq']), np.array(res['mtf']), rgb.shape[:2], s); rgb = detail.sharpen(rgb, g); rec['steps'].append('sharpened with the Wiener filter of the measured MTF')
+        say('sharpening to the measured blur'); g = detail.sharpen_gain(np.array(res['freq']), np.array(res['mtf']), rgb.shape[:2], s, amount=sharpen_amount); rgb = detail.sharpen(rgb, g); rec['sharpen_amount'] = sharpen_amount; rec['steps'].append(f'sharpened with the Wiener filter of the measured MTF (amount {sharpen_amount:g})')
     rec['output'] = [int(rgb.shape[1]), int(rgb.shape[0])]
     name = f"{item['stem']}{'' if vid in ('raw', 'jpeg') else '-' + vid.split('.')[0]}-{rgb.shape[1]}x{rgb.shape[0]}.{'tif' if fmt == 'tiff' else 'jpg'}"
     out = os.path.join(exports_dir(pid), name); say('writing'); write_picture(out, rgb, fmt, quality, _exif_of(item)); rec['file'] = out; rec['bytes'] = os.path.getsize(out); rec['format'] = fmt

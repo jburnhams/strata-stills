@@ -43,3 +43,8 @@ def test_sharpening_restores_a_known_blur_without_halos():
     assert np.abs(out - sharp).mean() < np.abs(blurred - sharp).mean() * 0.85                  # closer to the truth than the blurred picture
     assert out.min() >= blurred.min() - 0.06 and out.max() <= blurred.max() + 0.06            # no overshoot beyond the local range
     flat = np.full((64, 64, 3), 0.4, np.float32); assert np.allclose(detail.sharpen(flat, detail.sharpen_gain(np.array(r['freq']), np.array(r['mtf']), (64, 64), 1.0)), 0.4, atol=1e-3)
+
+
+def test_sharpen_amount_goes_past_restoration():
+    f = np.linspace(0.002, 0.498, 128); m = np.exp(-2 * np.pi ** 2 * 1.5 ** 2 * f ** 2); g1 = detail.sharpen_gain(f, m, (64, 64), 1.0); g2 = detail.sharpen_gain(f, m, (64, 64), 1.0, amount=1.6)
+    assert g2.max() >= g1.max() and (g2 >= g1 - 1e-6).all() and g2.max() <= 4.0 + 1e-6

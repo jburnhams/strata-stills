@@ -63,3 +63,11 @@ def test_flat_picture_exports_at_native_size(tmp_path, monkeypatch):
     monkeypatch.setenv('STRATASTILLS_PROJECTS', str(tmp_path / 'p')); monkeypatch.setenv('STRATASTILLS_HOME', str(tmp_path / 'h')); s = tmp_path / 's'; s.mkdir(); Image.new('RGB', (900, 700), 'gray').save(s / 'F_1.JPG')
     d = P.create('F', [str(s)]); iid = P.item_id(P.source_summaries(d['id'])[0]['id'], 'F_1'); r = X.export_item(d['id'], iid)
     assert r['output'] == [900, 700] and not r['detail']['ok'] and 'could not be measured' in r['size']['why']
+
+
+def test_sharpen_amount_is_recorded_and_stronger_amount_changes_more(proj):
+    pid, iid = proj
+    a = X.export_item(pid, iid, None, 'native', 'jpeg', level=False, sharpen_amount=1.0); ia = np.asarray(Image.open(a['file'])).astype(float)
+    b = X.export_item(pid, iid, None, 'native', 'jpeg', level=False, sharpen_amount=2.0); ib = np.asarray(Image.open(b['file'])).astype(float)
+    off = X.export_item(pid, iid, None, 'native', 'jpeg', level=False, sharpen=False); io = np.asarray(Image.open(off['file'])).astype(float)
+    assert a['sharpen_amount'] == 1.0 and b['sharpen_amount'] == 2.0 and 'sharpen_amount' not in off and np.abs(ib - io).mean() > np.abs(ia - io).mean()

@@ -81,8 +81,13 @@ describe('export', () => {
     expect(await screen.findByText('A_1-6016x4512.jpg')).toHaveAttribute('href', expect.stringContaining('/api/project/export/file?id=demo&name=A_1-6016x4512.jpg'))
     await userEvent.selectOptions(screen.getByLabelText('Format'), 'tiff'); await userEvent.click(screen.getByLabelText('Level'))
     await userEvent.click(screen.getByRole('button', { name: 'Export' }))
-    expect(exportCalls.at(-1)).toMatchObject({ variant: 'raw', size: 'auto', format: 'tiff', level: false, sharpen: true })
+    expect(exportCalls.at(-1)).toMatchObject({ variant: 'raw', size: 'auto', format: 'tiff', level: false, sharpen: true, sharpen_amount: 1.5 })
     expect(await screen.findByText(/Done: A_1-6016x4512.jpg/, {}, { timeout: 4000 })).toBeInTheDocument()
+  })
+  it('sends the chosen sharpness', async () => {
+    const { exportCalls } = await import('../utils/server') as { exportCalls: unknown[] }
+    open('#/p/demo/i/abcd1234~A_1'); await screen.findByText(/Contrast is half gone/)
+    await userEvent.selectOptions(screen.getByLabelText('Sharpness'), '2'); await userEvent.click(screen.getByRole('button', { name: 'Export' })); await waitFor(() => expect(exportCalls.at(-1)).toMatchObject({ sharpen_amount: 2 }))
   })
   it('sends a custom size', async () => {
     const { exportCalls } = await import('../utils/server') as { exportCalls: unknown[] }

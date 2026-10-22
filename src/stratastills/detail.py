@@ -69,12 +69,12 @@ def recommended_size(res, long_side, round_to=64):
     return int(min(long_side, int(np.ceil(res[RECOMMEND] * long_side / round_to)) * round_to))
 
 
-def sharpen_gain(mtf_freq, mtf, shape, scale, noise=0.01, max_gain=4.0):
-    """The Wiener filter (2D, for an image of `shape` = (h, w)) that undoes the measured blur: gain m/(m^2 + noise) at each frequency, where m is the measured MTF at that frequency of the NATIVE picture (an output pixel is 1/`scale` native pixels, so output frequency f is native frequency f * scale), limited to `max_gain`.
+def sharpen_gain(mtf_freq, mtf, shape, scale, noise=0.01, max_gain=4.0, amount=1.0):
+    """The Wiener filter (2D, for an image of `shape` = (h, w)) that undoes the measured blur: gain m/(m^2 + noise) at each frequency, where m is the measured MTF at that frequency of the NATIVE picture (an output pixel is 1/`scale` native pixels, so output frequency f is native frequency f * scale), limited to `max_gain`. `amount` 1 restores the measured blur and no more; above 1 goes past it (the gain is raised to that power), which adds the local contrast the eye reads as crispness, as a camera's own JPEG sharpening does (at the cost of more of the noise).
     Above the measured detail limit the gain falls back towards 1 instead of boosting what is only noise. Isotropic: the lens blur seen from a drone is close to it."""
     h, w = shape; r = np.hypot(*np.meshgrid(np.fft.fftfreq(w), np.fft.fftfreq(h)))
     m = np.interp(np.minimum(r, 0.5) * scale, mtf_freq, mtf, left=1.0, right=mtf[-1]); m = np.clip(m, 0.02, 1.0)
-    g = np.minimum(m / (m * m + noise), max_gain); return np.where(r * scale < mtf_freq[0], 1.0, g).astype(np.float32)
+    g = np.minimum((m / (m * m + noise)) ** amount, max_gain); return np.where(r * scale < mtf_freq[0], 1.0, g).astype(np.float32)
 
 
 def sharpen(rgb, gain, overshoot=0.05):
