@@ -35,7 +35,7 @@ def _num(params, k, lo, hi, default):
 
 
 def _develop_params(p): return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST))
-def _level_params(p): return {}
+def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
 def _resize_params(p):
@@ -91,8 +91,8 @@ def run_develop(st, p):
 def run_level(st, p):
     st.say('levelling')
     if st.analysis is not None:                                                                                      # the tilt is measured on the analysis luminance the develop pass already made (reduced to 2048 px): no second develop
-        a = st.analysis; k = min(1.0, 2048 / max(a.shape)); small = cv2.resize(a, (round(a.shape[1] * k), round(a.shape[0] * k)), interpolation=cv2.INTER_AREA); info = transforms.level_info((small * 255 + 0.5).astype(np.uint8), preview._ctx(st.item))
-    else: work = images.working(P.folder(st.pid), st.path, preview.WORK_PX); info = transforms.apply('level', work, preview._ctx(st.item))[1]
+        a = st.analysis; k = min(1.0, 2048 / max(a.shape)); small = cv2.resize(a, (round(a.shape[1] * k), round(a.shape[0] * k)), interpolation=cv2.INTER_AREA); info = transforms.level_info((small * 255 + 0.5).astype(np.uint8), dict(preview._ctx(st.item), level_nadir=p['nadir']))
+    else: work = images.working(P.folder(st.pid), st.path, preview.WORK_PX); info = transforms.apply('level', work, dict(preview._ctx(st.item), level_nadir=p['nadir']))[1]
     st.rec['level'] = {k: info[k] for k in ('applied', 'angle', 'confidence', 'reason') if k in info}
     if info.get('applied'): st.rgb = transforms.rotate_fill(st.rgb, info['angle']); st.rec['steps'].append(f"levelled by {info['angle']:+.2f} degrees")
 

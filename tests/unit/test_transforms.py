@@ -38,3 +38,15 @@ def test_inscribed_scale_fills_the_frame():
 def test_unknown_transform():
     with pytest.raises(KeyError): T.apply('nope', np.zeros((4, 4, 3), np.uint8), {})
     img = np.zeros((4, 4, 3), np.uint8); assert T.apply('original', img, {})[0] is img
+
+
+def test_a_picture_whose_parts_disagree_about_the_tilt_is_not_levelled():
+    a, b = grid(6.0, 400, 600), grid(-3.0, 400, 600); img = np.concatenate([a, b], 1)                          # left half tilted one way, right half the other
+    r = T.estimate_level(gray(img), True); assert r['spread'] > T.MAX_SPREAD_DEG
+    out, info = T.level(img, dict(nadir=True)); assert not info['applied'] and 'disagree' in info['reason'] and out is img
+    assert T.estimate_level(gray(grid(6.0)), True)['spread'] < T.MAX_SPREAD_DEG                                  # one consistent tilt: the parts agree
+
+
+def test_nadir_levelling_can_be_switched_off_and_oblique_is_unaffected():
+    img = grid(6.0); out, info = T.level(img, dict(nadir=True, level_nadir=False)); assert not info['applied'] and 'straight-down' in info['reason']
+    assert T.level(img, dict(nadir=True))[1]['applied']                                                       # the transform on its own still levels

@@ -11,13 +11,15 @@ import math
 
 import cv2, numpy as np
 
-VERSION = dict(original=1, level=1)
+VERSION = dict(original=1, level=2)
 LABELS = dict(original='Original', level='Levelled')
 ORDER = ('original', 'level')
 MAX_OBLIQUE_DEG = 10.0
 MIN_APPLY_DEG = 0.15            # a smaller turn is not worth a resample
 MIN_CONFIDENCE = 0.35
 MIN_LINES = 12
+MAX_SPREAD_DEG = 1.5            # the estimates of the picture's quadrants may differ by this much at most (a real tilt shows everywhere; perspective and a few misleading edges do not)
+MIN_PART_LINES = 8
 WORK_PX = 1400
 
 
@@ -27,26 +29,37 @@ def line_angles(gray):
     if s < 1: gray = cv2.resize(gray, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA)
     gray = cv2.GaussianBlur(gray, (3, 3), 0); med = float(np.median(gray)); e = cv2.Canny(gray, max(10, 0.66 * med), max(40, 1.33 * med))
     L = max(gray.shape); segs = cv2.HoughLinesP(e, 1, np.pi / 720, threshold=60, minLineLength=max(30, int(0.06 * L)), maxLineGap=int(0.01 * L))
-    if segs is None: return np.zeros(0), np.zeros(0)
+    if segs is None: return np.zeros(0), np.zeros(0), np.zeros((0, 2))
     d = np.asarray(segs).reshape(-1, 4).astype(float)                  # (N,1,4) in OpenCV 4, (N,4) in 5
     dx, dy = d[:, 2] - d[:, 0], d[:, 3] - d[:, 1]
     th = np.degrees(np.arctan2(dy, dx)); dev = (th + 45.0) % 90.0 - 45.0
-    return dev, np.hypot(dx, dy)
+    return dev, np.hypot(dx, dy), np.stack([(d[:, 0] + d[:, 2]) / 2 / gray.shape[1], (d[:, 1] + d[:, 3]) / 2 / gray.shape[0]], 1)
+
+
+def _angle(dev, w, nadir, max_deg):
+    """(angle, confidence) of one set of segments; None when there are too few to say."""
+    if nadir:                                                       # axial data with a period of 90 degrees: average in the 4x angle
+        a = np.radians(dev * 4.0); c, s = (w * np.cos(a)).sum(), (w * np.sin(a)).sum(); return float(np.degrees(math.atan2(s, c)) / 4.0), float(math.hypot(c, s) / w.sum())
+    k = np.abs(dev) <= max_deg
+    if k.sum() < 3: return None
+    d, ww = dev[k], w[k]; o = np.argsort(d); cw = np.cumsum(ww[o]); med = float(d[o][np.searchsorted(cw, cw[-1] / 2)]); return med, float(ww[np.abs(d - med) <= 1.5].sum() / w.sum())
 
 
 def estimate_level(gray, nadir):
-    """{angle, confidence, lines, max_deg, reason}: `angle` is how far (degrees, positive = the scene is turned clockwise on screen) the lines are from square; the picture should be turned the other way by it."""
+    """{angle, confidence, lines, max_deg, spread, reason}: `angle` is how far (degrees, positive = the scene is turned clockwise on screen) the lines are from square; the picture should be turned the other way by it.
+    `spread` is how far apart the estimates of the four quadrants are (those with enough lines): a real tilt shows everywhere, so when they disagree by more than MAX_SPREAD_DEG the estimate is not trusted (nadir shots with few long edges swung by 1-2 degrees from crop to crop)."""
     max_deg = 45.0 if nadir else MAX_OBLIQUE_DEG
-    dev, w = line_angles(gray); r = dict(angle=0.0, confidence=0.0, lines=int(len(dev)), max_deg=max_deg, reason=None)
+    dev, w, pos = line_angles(gray); r = dict(angle=0.0, confidence=0.0, lines=int(len(dev)), max_deg=max_deg, spread=0.0, reason=None)
     if len(dev) < MIN_LINES: r['reason'] = f'too few straight lines ({len(dev)})'; return r
-    if nadir:                                                       # axial data with a period of 90 degrees: average in the 4x angle
-        a = np.radians(dev * 4.0); c, s = (w * np.cos(a)).sum(), (w * np.sin(a)).sum()
-        r['angle'] = float(np.degrees(math.atan2(s, c)) / 4.0); r['confidence'] = float(math.hypot(c, s) / w.sum())
-    else:
-        k = np.abs(dev) <= max_deg
-        if k.sum() < MIN_LINES: r['reason'] = 'too few lines near vertical or horizontal'; return r
-        d, ww = dev[k], w[k]; o = np.argsort(d); cw = np.cumsum(ww[o]); med = float(d[o][np.searchsorted(cw, cw[-1] / 2)])
-        r['angle'] = med; r['confidence'] = float(ww[np.abs(d - med) <= 1.5].sum() / w.sum())
+    if not nadir and (np.abs(dev) <= max_deg).sum() < MIN_LINES: r['reason'] = 'too few lines near vertical or horizontal'; return r
+    r['angle'], r['confidence'] = _angle(dev, w, nadir, max_deg); parts = []
+    for qx in (0, 1):
+        for qy in (0, 1):
+            m = ((pos[:, 0] >= 0.5) == bool(qx)) & ((pos[:, 1] >= 0.5) == bool(qy))
+            if m.sum() >= MIN_PART_LINES and (e := _angle(dev[m], w[m], nadir, max_deg)) is not None: parts.append(e[0])
+    if len(parts) >= 3:
+        diff = np.array(parts)[:, None] - np.array(parts)[None]; diff = (diff + 45.0) % 90.0 - 45.0 if nadir else diff; r['spread'] = float(np.abs(diff).max())
+        if r['spread'] > MAX_SPREAD_DEG: r['reason'] = f"the parts of the picture disagree about the tilt (by {r['spread']:.1f} degrees)"
     return r
 
 
@@ -62,7 +75,8 @@ def rotate_fill(bgr, deg):
 
 def level_info(gray, ctx):
     """What levelling would do to the picture whose 8 bit grey version is `gray`: {angle, confidence, lines, max_deg, reason, applied}: applied is False, with the reason, when the evidence is weak or the turn not worth a resample."""
-    r = estimate_level(gray, bool(ctx.get('nadir'))); r['applied'] = False
+    nadir = bool(ctx.get('nadir')); r = estimate_level(gray, nadir); r['applied'] = False
+    if nadir and not ctx.get('level_nadir', True) and r['reason'] is None: r['reason'] = 'straight-down shots are not levelled (their lines carry little evidence of tilt)'
     if r['reason'] is None and r['confidence'] < MIN_CONFIDENCE: r['reason'] = f"the lines do not agree (confidence {r['confidence']:.2f})"
     if r['reason'] is None and abs(r['angle']) < MIN_APPLY_DEG: r['reason'] = 'already level'
     r['applied'] = r['reason'] is None; return r
