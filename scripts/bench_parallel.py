@@ -25,8 +25,8 @@ def run(workers, amount):
     return time.time() - t, float(np.mean(times)), (torch.cuda.max_memory_allocated() / 1e9 if torch else 0.0)
 
 
-run(1, 1.31); res = {}
-for w, a in [(1, 1.41), (3, 1.42), (2, 1.43), (4, 1.44), (1, 1.45), (3, 1.46), (2, 1.47), (4, 1.48)]:
+amounts = iter(np.arange(float(os.environ.get("BENCH_START", "1.31")), 2.99, 0.01)); WORKERS = [int(x) for x in os.environ.get('BENCH_WORKERS', '1,2,3,4').split(',')]; run(1, round(next(amounts), 2)); res = {}
+for w, a in [(w, round(next(amounts), 2)) for w in WORKERS]:
     el, mean, peak = run(w, a); res.setdefault(w, []).append(el); print('workers %d: %5.1f s for %d pictures = %4.1f s each overall (one picture takes %5.1f s end to end), peak VRAM %.1f GB' % (w, el, len(iids), el / len(iids), mean, peak), flush=True)
 base = min(res[1]); print('\nbest of two runs each:')
 for w in sorted(res): b = min(res[w]); print('  %d at once: %5.1f s (%4.1f s per picture) speed-up x%.2f' % (w, b, b / len(iids), base / b), flush=True)

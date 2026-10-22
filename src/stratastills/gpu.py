@@ -77,6 +77,7 @@ PEAK_PIXELS = 48.8e6           # the size of the picture PEAK_BYTES was measured
 
 def max_pixels():
     """The largest picture (pixels) one develop fits on the device, or None when it is not limited by a card's memory (MPS shares the machine's, CPU has no card): 90 % of a CUDA card's memory over the peak bytes per pixel. A bigger one does not fail, it thrashes through system memory (minutes instead of seconds)."""
+    if os.environ.get('STRATASTILLS_MAX_PIXELS'): return int(os.environ['STRATASTILLS_MAX_PIXELS'])                  # a knob (and the way to measure tiling on pictures that would fit)
     try:
         d = dev()
         if d.type == 'cuda': return int(torch_().cuda.mem_get_info()[1] * 0.9 / PEAK_BYTES * PEAK_PIXELS)
