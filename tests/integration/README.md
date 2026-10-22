@@ -31,7 +31,7 @@ Not gated. `pytest tests/integration -n auto --cov --cov-fail-under=0 --cov-repo
 | Area | Tests |
 | --- | --- |
 | `cli.py` | `test_cli.py`: doctor, scan (shots, kinds, drone metadata), project and source commands, settings, a real process |
-| `pipeline.py`, `develop.py`, `lineardng.py`, `inputs.py`, `match.py` | `test_pipeline.py`: a JPEG shot, a levelled oblique shot, a linear DNG panorama, rules, tiled against whole on both code paths |
+| `pipeline.py`, `develop.py`, `lineardng.py`, `inputs.py`, `match.py` | `test_pipeline_end_to_end.py`: a JPEG shot, a levelled oblique shot, a linear DNG panorama, rules, tiled against whole on both code paths |
 | `server/app.py` | `test_server_api.py`: browse, generate, download, a rule |
 
 ## Known issues
