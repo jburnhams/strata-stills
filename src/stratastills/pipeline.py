@@ -74,22 +74,25 @@ class State:
     """What flows through the stages of one run."""
     def __init__(self, pid, iid, item, variant, say):
         self.pid, self.iid, self.item, self.variant, self.say = pid, iid, item, variant, say
-        self.path = variant['path']; self.rgb = None; self.native = None; self.scale = 1.0; self._res = None; self.rec = dict(steps=[]); self.quality = None; self.file = None
+        self.path = variant['path']; self.rgb = None; self.native = None; self.scale = 1.0; self._res = None; self.rec = dict(steps=[]); self.quality = None; self.file = None; self.analysis = None
 
     @property
     def res(self):
-        if self._res is None: self.say('measuring the real detail'); self._res = X.measure_detail(self.pid, self.path)
+        if self._res is None: self.say('measuring the real detail'); self._res = X.measure_detail(self.pid, self.path, luma=self.analysis)
         return self._res
 
 
 def run_develop(st, p):
-    st.say('developing the full-size picture')
-    st.rgb, how = X._read_full(st.path, highlight_contrast=p['highlight_contrast']) if X._is_camera_raw(st.path) else X._read_full(st.path)
+    st.say('developing the full-size picture'); an = {}
+    st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast']) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
     st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
 
 
 def run_level(st, p):
-    st.say('levelling'); work = images.working(P.folder(st.pid), st.path, preview.WORK_PX); info = transforms.apply('level', work, preview._ctx(st.item))[1]
+    st.say('levelling')
+    if st.analysis is not None:                                                                                      # the tilt is measured on the analysis luminance the develop pass already made (reduced to 2048 px): no second develop
+        a = st.analysis; k = min(1.0, 2048 / max(a.shape)); small = cv2.resize(a, (round(a.shape[1] * k), round(a.shape[0] * k)), interpolation=cv2.INTER_AREA); info = transforms.level_info((small * 255 + 0.5).astype(np.uint8), preview._ctx(st.item))
+    else: work = images.working(P.folder(st.pid), st.path, preview.WORK_PX); info = transforms.apply('level', work, preview._ctx(st.item))[1]
     st.rec['level'] = {k: info[k] for k in ('applied', 'angle', 'confidence', 'reason') if k in info}
     if info.get('applied'): st.rgb = transforms.rotate_fill(st.rgb, info['angle']); st.rec['steps'].append(f"levelled by {info['angle']:+.2f} degrees")
 

@@ -87,15 +87,26 @@ ROLLOFF_BRIGHT = (0.06, 0.16)   # a tighter roll-off for bright areas (walls, re
 BRIGHT_FROM, BRIGHT_SPAN = 0.60, 0.28
 
 
-def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0):
+def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
     """The whole sharpening of an export: `sharpen` with the Wiener filter of the measured blur, but with the tighter roll-off (ROLLOFF_BRIGHT) blended in where the picture is bright (smoothed luminance from BRIGHT_FROM up over BRIGHT_SPAN, smoothstep), so the grain of bright walls is not lifted as it is in the dark and mid tones.
-    `rgb` float32 HxWx3 0..1; `scale` is the output size over the native size (see sharpen_gain)."""
+    `rgb` float32 HxWx3 0..1; `scale` is the output size over the native size (see sharpen_gain). Runs on the GPU (gpu.sharpen) when there is one and `backend` is 'auto' or 'gpu' (about 20 times faster); this CPU code is the reference."""
     import cv2
+    from stratastills import gpu
+    if backend == 'gpu' or (backend == 'auto' and gpu.available()): return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount)
     h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount)); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
     if float(k.max()) <= 0: return base
     alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT))
     return base * (1 - k) + alt * k
+
+
+def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
+    """sharpen_picture on the device: both filters and the brightness blend, the picture going over once and coming back once."""
+    from stratastills import gpu
+    t = gpu.torch_(); x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
+    base = gpu.sharpen(x, g(ROLLOFF)); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
+    if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT)) * k
+    out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
 
 
 def sharpen(rgb, gain, overshoot=0.05):

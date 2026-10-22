@@ -33,6 +33,12 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-test.txt
       - run: pip install -r requirements-test.txt
+      - name: PyTorch (CPU build: the GPU code is tested on the torch CPU device; a runner has no GPU)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        if: matrix.python-version == '3.13' && matrix.os != 'macos-latest'
+      - name: PyTorch on macOS (the default wheel; the MPS tests run only where Metal is available, which a CI VM may not have)
+        run: pip install torch
+        if: matrix.os == 'macos-latest'
       - name: Lint (syntax errors and undefined names)
         run: ruff check src tests
       - name: Unit tests with coverage (unit suite only)

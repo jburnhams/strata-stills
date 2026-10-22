@@ -13,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
-from stratastills import denoise_ai
+from stratastills import denoise_ai, gpu
 
-VERSION = 7
+VERSION = 8
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -136,9 +136,9 @@ def noise_sigma(noise_profile, level):
     s, o = noise_profile[0], noise_profile[1]; return float(np.sqrt(max(s * level + o, 1e-12)))
 
 
-def visible_noise(img, noise_profile):
+def visible_noise(img, noise_profile, stride=8):
     """How strong the noise is in the finished picture, in 8-bit grey levels, for `img` (linear, already exposed) whose noise follows `noise_profile` (scale S, offset O of the values as they are now): the noise at the median brightness times the slope of the sRGB curve there."""
-    m = max(float(np.median(img[::8, ::8] @ np.array([0.2126, 0.7152, 0.0722], np.float32))), 1e-4)
+    m = max(float(np.median(img[::stride, ::stride] @ np.array([0.2126, 0.7152, 0.0722], np.float32))), 1e-4)
     return 255.0 * noise_sigma(noise_profile, m) * (1.055 / 2.4) * m ** (1 / 2.4 - 1)
 
 
@@ -147,26 +147,17 @@ def _nlm(y, h):
     return srgb_eotf(den.astype(np.float32) / 65535)
 
 
-CORNER_GAIN = 2.0               # lens-shading gain from which the automatic luminance denoise starts to be blended in
-CORNER_H_MAX = 3.0
-
-
 def denoise_linear(img, noise_profile, strength='auto', gain=None):
     """Remove noise in linear light without taking texture with it.
-    Colour noise is blurred in proportion to the noise (it carries no detail; capped, so edges keep their colour). Luminance carries the texture (roof tiles, brick, foliage), and a non-local-means pass takes that with the noise: measured on the Hazelmere roofs it halved the fine detail, so
-    'auto' NEVER smooths luminance in the middle of the picture. The one place it is needed is the corners, which the lens-shading gain (`gain`, the field the picture was multiplied by) lifted several stops, noise with it: from CORNER_GAIN upwards a light pass (h <= CORNER_H_MAX grey levels)
-    is blended in, in proportion to the gain. `strength` a number applies a luminance pass of that h (8-bit grey levels) everywhere; 'chroma' does the colour part only; 0 does nothing to luminance."""
+    Colour noise is blurred in proportion to the noise (it carries no detail; capped, so edges keep their colour). LUMINANCE carries the texture (roof tiles, brick, foliage), and a non-local-means pass takes that with the noise (measured on the Hazelmere roofs it halved the fine detail), so 'auto' and 'chroma' leave it to the band coring (`core_luma`),
+    which is driven by the noise map. The corners, which the lens-shading gain lifted several stops and the noise with it, used to get a light non-local-means pass here; the noise map now includes that gain (`noise_map8(gain=)`), so the coring treats the corners harder by itself, which measured cleaner (bottom corner grain 2.96 against 3.99 grey levels, roof structure kept) and 2.6 times faster.
+    `strength` a number applies a non-local-means luminance pass of that h (8-bit grey levels) everywhere; `gain` is accepted for the callers that have it and is not used here."""
     if noise_profile is None and strength == 'auto': return img
     sig8 = visible_noise(img, noise_profile) if noise_profile is not None else 0.0
     y = img @ np.array([0.2126, 0.7152, 0.0722], np.float32); c = img - y[..., None]
     sc = float(np.clip(sig8 * 0.6, 0.0, 1.5))
     if sc > 0.3: c = cv2.GaussianBlur(c, (0, 0), sc)
-    if strength not in ('auto', 'chroma'):
-        if float(strength) > 0: y = _nlm(y, float(strength))
-    elif strength == 'auto' and gain is not None and float(gain.max()) > CORNER_GAIN:
-        gmax = float(np.percentile(gain[::8, ::8], 99.5)); h = min(CORNER_H_MAX, 0.5 * sig8 * (gmax / max(float(np.median(gain[::8, ::8])), 1.0)) ** 0.5)
-        if h > 0.5:
-            w = np.clip((gain - CORNER_GAIN) / max(gmax - CORNER_GAIN, 1e-3), 0, 1); y = y * (1 - w) + _nlm(y, h) * w
+    if strength not in ('auto', 'chroma') and float(strength) > 0: y = _nlm(y, float(strength))
     return np.clip(y[..., None] + c, 0, None)
 
 
@@ -241,11 +232,13 @@ def core_luma(rgb, sig8, k=None):
     return np.clip(rgb + (out - y)[..., None], 0, 1).astype(np.float32)
 
 
-def noise_map8(img, noise_profile, blur=8.0):
+def noise_map8(img, noise_profile, blur=8.0, gain=None):
     """The noise expected at each pixel of the finished picture, in 8-bit grey levels, from the file's NoiseProfile: sigma of the linear value (variance = S v + O, with the profile already scaled for the exposure gain) times the slope of the sRGB curve there, on a smoothed luminance (the noise level follows the brightness, not the texture)."""
     h, w = img.shape[:2]; k = 1.0 / 8; y = img @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     v = cv2.GaussianBlur(cv2.resize(y, (max(8, round(w * k)), max(8, round(h * k))), interpolation=cv2.INTER_AREA), (0, 0), blur / 8 * 2); v = np.maximum(v, 1e-5)
-    slope = np.where(v < 0.0031308, 12.92, (1.055 / 2.4) * v ** (1 / 2.4 - 1)); s8 = 255.0 * np.sqrt(noise_profile[0] * v + noise_profile[1]) * slope
+    slope = np.where(v < 0.0031308, 12.92, (1.055 / 2.4) * v ** (1 / 2.4 - 1))
+    if gain is None: s8 = 255.0 * np.sqrt(noise_profile[0] * v + noise_profile[1]) * slope
+    else: gs = cv2.GaussianBlur(cv2.resize(gain, (v.shape[1], v.shape[0]), interpolation=cv2.INTER_AREA), (0, 0), blur / 8 * 2); s8 = 255.0 * np.sqrt(noise_profile[0] * gs * v + noise_profile[1] * gs * gs) * slope       # the lens-shading gain lifts the noise with the signal, beyond the global exposure gain the profile is scaled for
     return cv2.resize(s8.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
 
 
@@ -274,10 +267,10 @@ HIGHLIGHT_CONTRAST = 0.8        # highlight_detail: how much more contrast the b
 MAX_DARKER = 1.0                # protecting highlights may take the exposure at most this many stops below the median target (the shadows are lifted by the local tone recovery instead)
 
 
-def auto_ev(img, lut, target=TARGET_MEDIAN):
+def auto_ev(img, lut, target=TARGET_MEDIAN, stride=8):
     """The exposure change (stops, -1..MAX_EV): the one that puts the median luminance of the finished picture at `target` (found by bisection on a sample, through the whole finish), but no brighter than lets the brightest 0.5 % of the picture stay below white: white walls and windows keep their tone
     (a median-only rule pushed them into a flat plateau, while the camera's JPEG kept them). Never more than MAX_DARKER stops below the median rule."""
-    s = img[::8, ::8].reshape(-1, 3); w = np.array([0.2126, 0.7152, 0.0722], np.float32); y = s @ w; lo, hi = -1.0, MAX_EV
+    s = img[::stride, ::stride].reshape(-1, 3); w = np.array([0.2126, 0.7152, 0.0722], np.float32); y = s @ w; lo, hi = -1.0, MAX_EV
     for _ in range(12):
         mid = (lo + hi) / 2; med = float(np.median(finish((s * 2.0 ** mid)[None], lut) @ w))
         lo, hi = (mid, hi) if med < target else (lo, mid)
@@ -289,11 +282,14 @@ def auto_ev(img, lut, target=TARGET_MEDIAN):
 
 # ---- the whole development ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-def _raw_linear(path, half):
+def _raw_u16(path, half):
+    """The demosaiced raw as LibRaw gives it: uint16 (H, W, 3), camera RGB, white-balanced, linear."""
     import rawpy
     with rawpy.imread(path) as r:
-        rgb = r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
-    return rgb.astype(np.float32) / 65535.0
+        return r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+
+
+def _raw_linear(path, half): return _raw_u16(path, half).astype(np.float32) / 65535.0
 
 
 def analysis_luma(path):
@@ -321,16 +317,19 @@ def develop_parts(path, half=False, ev='auto', recover=0.35):
     return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
 
 
-def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST):
+def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST, backend='auto', analysis=None):
     """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`:
-      'auto'    the classical clean-up (default): colour noise and fringes removed edge-aware and cored to grey, colour rolled off near white, the finest luminance grain cored (clean_colour, core_luma), the light corner pass on luminance where the lens-shading gain lifted the noise
+      'auto'    the classical clean-up (default): colour noise and fringes removed edge-aware and cored to grey, colour rolled off near white, the luminance grain cored band by band (clean_colour, core_luma), with the lens-shading gain counted in the noise map so the lifted corners are cored harder
       'ai'      'auto' plus a learned model (`model`, `strength`: denoise_ai) where the noise is visible
-      'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere."""
+      'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere.
+    `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
+    if backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available()): return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis)
+    if analysis is not None: analysis['luma'] = analysis_luma(path)
     P = develop_parts(path, half, ev, recover); img, lut, npf, field = P['linear'], P['lut'], P['noise'], P['gain']
     classical = denoise in ('auto', 'ai', 'chroma') and npf is not None
-    if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # the corner luminance pass (only where the shading gain is high)
+    if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
-    sig8 = noise_map8(img, npf) if npf is not None else None
+    sig8 = noise_map8(img, npf, gain=field) if npf is not None else None
     out = finish(img, lut)
     if classical:
         out = clean_colour(out, sig8)
@@ -340,3 +339,35 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
         model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
         if denoise_ai.available(model): out = denoise_ai.adaptive(out, sig8, model, strength)
     return out
+
+
+def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None):
+    """`develop` on the GPU: the same recipe step for step (see gpu.py for the functions and tests/unit/test_gpu.py for the proof they agree with the CPU ones); the picture stays on the card until the finished float32 array comes back."""
+    t = gpu.torch_(); tags = read_dng_tags(path); img = gpu.to_gpu_u16(_raw_u16(path, half)); field = None
+    if analysis is not None:                                                                                      # analysis_luma from this decode: nothing done that changes sharpness, exposed so the median is 0.18, gamma-encoded
+        y = gpu.luma(img); med = max(gpu._median(y[::8, ::8]), 1e-5); analysis['luma'] = gpu.to_numpy(gpu.srgb_oetf(y * (0.18 / med))); del y
+    if 'OpcodeList3' in tags:
+        for oid, p in parse_opcodes(tags['OpcodeList3']):
+            if oid == 9:
+                m, plane, planes, _box, _sp, _org = gain_map(p); img, field = gpu.apply_gain_map(img, m, plane, planes)
+            elif oid == 1:
+                coef, centre = warp_params(p); img = gpu.warp_rectilinear(img, coef, centre)
+    if all(k in tags for k in ('ColorMatrix1', 'ColorMatrix2', 'AsShotNeutral')):
+        n = _rationals(tags['AsShotNeutral']); cm1 = _rationals(tags['ColorMatrix1']).reshape(3, 3); cm2 = _rationals(tags['ColorMatrix2']).reshape(3, 3); M = t.from_numpy(camera_to_srgb(color_matrix(cm1, cm2, n), n).astype(np.float32)).to(img.device)
+        c, h, w = img.shape; img = (M @ img.reshape(3, -1)).reshape(3, h, w)
+    be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
+    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(tags.get('ProfileToneCurve')); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
+    sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else float(ev)); img = img * g
+    npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
+    classical = denoise in ('auto', 'chroma') and npf is not None
+    if npf is not None and denoise in ('auto', 'chroma'):                                                          # denoise_linear: colour noise blurred in proportion to the noise
+        sig = visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1); y = gpu.luma(img); cc = img - y[None]; sc = float(np.clip(sig * 0.6, 0.0, 1.5))
+        if sc > 0.3: cc = gpu.gaussian(cc, sc)
+        img = (y[None] + cc).clamp_(min=0)
+    sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
+    out = gpu.finish(img, lut_t, KNEE, WHITE); del img
+    if classical:
+        out = gpu.clean_colour(out, sig8)
+        if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)
+    if highlight_contrast > 0: out = gpu.highlight_detail(out, highlight_contrast)
+    res = gpu.to_numpy(out); del out, sig8; gpu.free(); return res

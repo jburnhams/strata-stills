@@ -60,13 +60,17 @@ def rotate_fill(bgr, deg):
     return cv2.warpAffine(bgr, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT)
 
 
-def level(bgr, ctx):
-    r = estimate_level(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bool(ctx.get('nadir')))
-    r['applied'] = False
+def level_info(gray, ctx):
+    """What levelling would do to the picture whose 8 bit grey version is `gray`: {angle, confidence, lines, max_deg, reason, applied}: applied is False, with the reason, when the evidence is weak or the turn not worth a resample."""
+    r = estimate_level(gray, bool(ctx.get('nadir'))); r['applied'] = False
     if r['reason'] is None and r['confidence'] < MIN_CONFIDENCE: r['reason'] = f"the lines do not agree (confidence {r['confidence']:.2f})"
     if r['reason'] is None and abs(r['angle']) < MIN_APPLY_DEG: r['reason'] = 'already level'
-    if r['reason'] is not None: return bgr, r
-    r['applied'] = True; return rotate_fill(bgr, r['angle']), r
+    r['applied'] = r['reason'] is None; return r
+
+
+def level(bgr, ctx):
+    r = level_info(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), ctx)
+    return (rotate_fill(bgr, r['angle']), r) if r['applied'] else (bgr, r)
 
 
 def original(bgr, ctx): return bgr, dict(applied=False)

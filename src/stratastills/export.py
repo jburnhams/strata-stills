@@ -14,23 +14,23 @@ FORMATS = ('jpeg', 'tiff')
 def _is_camera_raw(path): return os.path.splitext(path)[1].lower() in ('.dng', '.arw', '.cr2', '.cr3', '.nef', '.orf', '.raf', '.rw2')
 
 
-def _read_full(path, **kw):
+def _read_full(path, analysis=None, **kw):
     """(float32 RGB 0..1 at full size, how it was made). A raw that is not a plain camera DNG (a Lightroom linear DNG) is read at its largest embedded level."""
     if _is_camera_raw(path):
-        try: return develop.develop(path, half=False, **kw), 'developed from the raw'
+        try: return develop.develop(path, half=False, analysis=analysis, **kw), 'developed from the raw'
         except Exception as e:
             try: return images.load(path, 100000)[:, :, ::-1].astype(np.float32) / 255.0, f'embedded level of the DNG ({str(e)[:60]})'
             except Exception as e2: raise images.ImageError(str(e2))
     return images.load(path, 100000)[:, :, ::-1].astype(np.float32) / 255.0, 'read as it is (not a raw)'
 
 
-def measure_detail(pid, path):
-    """The detail measurement of a file, from the cache of the project when there (it takes some seconds on a 48 MP raw)."""
+def measure_detail(pid, path, luma=None):
+    """The detail measurement of a file, from the cache of the project when there (it takes some seconds on a 48 MP raw). `luma`: the analysis luminance when the caller already has it (develop(analysis=)), so the raw is not decoded again."""
     p = images.cache_path(P.folder(pid), images.cache_key(path, 'detail', develop.VERSION, detail.TILE), '.json')
     if os.path.exists(p):
         try: return json.load(open(p))
         except ValueError: pass
-    y = develop.analysis_luma(path) if _is_camera_raw(path) else cv2.cvtColor(images.load(path, 100000), cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    y = luma if luma is not None else develop.analysis_luma(path) if _is_camera_raw(path) else cv2.cvtColor(images.load(path, 100000), cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
     r = detail.effective_resolution(y); r['native'] = [int(y.shape[1]), int(y.shape[0])]; r['recommended'] = detail.recommended_size(r, max(y.shape))
     with open(p, 'w') as f: json.dump(r, f)
     return r

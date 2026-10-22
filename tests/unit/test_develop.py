@@ -78,10 +78,12 @@ def test_denoise_never_smooths_luminance_in_the_middle_but_cleans_colour():
     forced = D.denoise_linear(np.clip(tex + rng.normal(0, 0.03, tex.shape).astype(np.float32), 0, None), (0.02, 1e-4), 4.0); assert forced.std() < tex.std() * 2
 
 
-def test_denoise_treats_only_the_lifted_corners_when_given_the_gain_field():
-    rng = np.random.default_rng(4); img = np.full((120, 160, 3), 0.2, np.float32) + rng.normal(0, 0.02, (120, 160, 3)).astype(np.float32); gain = np.ones((120, 160), np.float32); gain[:, 120:] = 5.0
-    out = D.denoise_linear(np.clip(img, 0, None), (0.01, 1e-4), 'auto', gain); ly = lambda a: a @ np.array([0.2126, 0.7152, 0.0722], np.float32)
-    assert ly(out)[:, 130:].std() < ly(img)[:, 130:].std() * 0.8 and np.abs(ly(out)[:, :100] - ly(img)[:, :100]).max() < 1e-4
+def test_the_noise_map_counts_the_lens_shading_gain_and_denoise_leaves_luminance_to_the_coring():
+    rng = np.random.default_rng(4); img = np.full((120, 160, 3), 0.2, np.float32) + rng.normal(0, 0.02, (120, 160, 3)).astype(np.float32); gain = np.ones((120, 160), np.float32); gain[:, 120:] = 5.0; npf = (0.01, 1e-4)
+    plain = D.noise_map8(img, npf); aware = D.noise_map8(img, npf, gain=gain)
+    assert np.allclose(aware[:, :80], plain[:, :80], rtol=0.02) and aware[:, 140:].mean() > plain[:, 140:].mean() * 2.0                          # the lifted corner is noisier by the gain, the middle is as before
+    ly = lambda a: a @ np.array([0.2126, 0.7152, 0.0722], np.float32); out = D.denoise_linear(np.clip(img, 0, None), npf, 'auto', gain); assert np.abs(ly(out) - ly(np.clip(img, 0, None))).max() < 1e-4        # no luminance pass any more: only colour
+    assert D.denoise_linear(np.clip(img, 0, None), npf, 3.0).shape == img.shape
 
 
 def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
@@ -90,7 +92,7 @@ def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
     neutral = (4096, 9776, 4096, 4096, 4096, 6393); cm = tuple(v for x in ((12758, 10000), (-6160, 10000), (916, 10000), (-5992, 10000), (14682, 10000), (5340, 10000), (-251, 10000), (792, 10000), (9511, 10000)) for v in x)
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=neutral, BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(np.repeat(np.linspace(0, 1, 16) ** 0.5, 2)[:0]) or tuple(v for x in np.linspace(0, 1, 16) for v in (x, x ** 0.5)),
                 OpcodeList3=opcode_list((9, gain_param(np.full((4, 4, 3), 1.5, np.float32))), (1, warp_param([(1, 0, 0, 0, 0, 0)] * 3))))
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_linear', lambda p, half: raw.copy())
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
     out = D.develop('x.dng', half=True); assert out.shape == raw.shape and out.dtype == np.float32 and 0.3 < np.median(out) < 0.6 and np.isfinite(out).all()
     assert D.develop('x.dng', ev=-3.0, denoise='off', recover=0).mean() < out.mean()
     monkeypatch.setattr(D, 'read_dng_tags', lambda p: {}); assert D.develop('x.dng', ev=0).shape == raw.shape                  # a file with none of the tags is still developed
@@ -160,6 +162,6 @@ def test_band_coring_removes_mottling_at_two_to_four_pixels_but_keeps_edges_and_
 
 def test_the_contrast_boost_runs_after_the_grain_is_cored(monkeypatch):
     order = []; rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32)
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_linear', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p: dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16)); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     monkeypatch.setattr(D, 'core_luma', lambda r, s, k=None: order.append('core') or r); monkeypatch.setattr(D, 'highlight_detail', lambda r, a=1.0, lo=0.62, hi=0.92: order.append('contrast') or r)
-    D.develop('x.dng', half=True); assert order == ['core', 'contrast']
+    D.develop('x.dng', half=True, backend='cpu'); assert order == ['core', 'contrast']

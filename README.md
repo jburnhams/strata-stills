@@ -10,6 +10,10 @@ py -3.13 -m venv .venv && .venv\Scripts\pip install -r requirements.txt   # once
 ./stratastills scan "\\Server\Drone\20250402 - Hazelmere" --info            # the shots in a folder: raw/JPEG pairs, panoramas, videos, gimbal pitch
 ```
 
+## Speed
+
+A 48 MP raw is developed, levelled, resized, sharpened and written in about 15 s on an NVIDIA RTX 3060 (about 95 s on the CPU). The pixel work runs on the GPU when there is one: NVIDIA CUDA or Apple silicon (MPS); with neither it runs on the CPU, with the same result (the CPU code is the reference the GPU code is tested against). Install PyTorch for your machine (`pip install torch`; on Windows or Linux with an NVIDIA card use `--index-url https://download.pytorch.org/whl/cu128`). `./stratastills doctor` shows which is in use.
+
 ## Documentation
 
 | Document | What it is |
