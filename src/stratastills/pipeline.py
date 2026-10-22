@@ -13,7 +13,7 @@ Presets: built in (BUILTIN: 'best' is the default and needs nothing chosen) or t
 `apply_rules` generates what is missing, so adding a folder and pressing one button gives the preferred variants of every picture in it.
 
 Nothing is ever written into a source folder."""
-import datetime as dt, hashlib, json, math, os, re
+import contextlib, datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
@@ -344,5 +344,5 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
         else:
             with lock: done[0] += 1
         if progress: progress(done[0] + len(failed), total, f'{short} done')
-    with ThreadPoolExecutor(n) as ex: list(ex.map(lambda a: work(*a), todo))
+    with (gpu.batch(n) if gpu.available() else contextlib.nullcontext()), ThreadPoolExecutor(n) as ex: list(ex.map(lambda a: work(*a), todo))
     return dict(done=done[0], failed=failed, total=total, workers=n)

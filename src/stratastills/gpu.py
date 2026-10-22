@@ -75,35 +75,76 @@ _slots = None
 PEAK_PIXELS = 48.8e6           # the size of the picture PEAK_BYTES was measured on
 
 
-def max_pixels():
-    """The largest picture (pixels) one develop fits on the device, or None when it is not limited by a card's memory (MPS shares the machine's, CPU has no card): 90 % of a CUDA card's memory over the peak bytes per pixel. A bigger one does not fail, it thrashes through system memory (minutes instead of seconds)."""
-    if os.environ.get('STRATASTILLS_MAX_PIXELS'): return int(os.environ['STRATASTILLS_MAX_PIXELS'])                  # a knob (and the way to measure tiling on pictures that would fit)
+TILE_PEAK_BYTES = 2.7e9         # what one picture needs on the card when it goes through in tiles (measured 2.0 to 2.7 GB, whatever the picture's size)
+_tiled_batch = False
+
+
+def _cuda_total():
     try:
         d = dev()
-        if d.type == 'cuda': return int(torch_().cuda.mem_get_info()[1] * 0.9 / PEAK_BYTES * PEAK_PIXELS)
+        if d.type == 'cuda': return torch_().cuda.mem_get_info()[1]
     except Exception: pass
     return None
+
+
+def whole_slots():
+    """How many whole pictures (PEAK_BYTES each) the device holds at once: 90 % of a CUDA card's memory over that, one for MPS (it shares the machine's memory) and CPU; at least 1."""
+    total = _cuda_total(); return max(1, int(total * 0.9 // PEAK_BYTES)) if total else 1
+
+
+def tile_slots():
+    """How many pictures may be on the device at once while they go through in tiles: what fits in a CUDA card's memory (90 % of it over TILE_PEAK_BYTES), two for MPS (not measured), one for CPU."""
+    total = _cuda_total()
+    if total: return max(1, int(total * 0.9 // TILE_PEAK_BYTES))
+    try: return 2 if dev().type == 'mps' else 1
+    except Exception: return 1
+
+
+def tiling_pays(workers):
+    """Whether a batch of `workers` pictures at once is better made in tiles: when the card cannot hold that many whole pictures (measured on a 12 GB card, 4 at once in tiles was 11 % faster than the best whole-picture batch, 2 at once was not, and a lone picture is 25 % slower in tiles). Needs a device whose memory is the limit (CUDA, MPS)."""
+    try: return dev().type in ('cuda', 'mps') and workers > whole_slots() and tile_slots() > whole_slots()
+    except Exception: return False
+
+
+def plan_workers():
+    """How many pictures to make at once on this device: as many as the card holds in tiles plus one (the extra one is being decoded or encoded on the CPU while the others are on the card), at most 4, when that beats whole pictures; else 2 (whole pictures, a second one overlapping the first's CPU parts)."""
+    n = min(4, tile_slots() + 1)
+    return n if tiling_pays(n) else 2
+
+
+@contextlib.contextmanager
+def batch(workers):
+    """For a batch of `workers` pictures at once: whether the pictures go through in tiles (tiling_pays) is set for all of them, and the slots are those of the mode."""
+    global _tiled_batch
+    old = _tiled_batch; _tiled_batch = tiling_pays(workers)
+    try: yield _tiled_batch
+    finally: _tiled_batch = old
+
+
+def max_pixels():
+    """The largest picture (pixels) one develop does whole on the device (a bigger one is developed in tiles, gpu_tiled.py), or None when the device's memory is not the limit (CPU, MPS): 90 % of a CUDA card's memory over the peak bytes per pixel. In a batch that goes through in tiles (`batch`) every picture counts as too big. STRATASTILLS_MAX_PIXELS overrides (and is the way to measure tiling on pictures that would fit)."""
+    if os.environ.get('STRATASTILLS_MAX_PIXELS'): return int(os.environ['STRATASTILLS_MAX_PIXELS'])
+    if _tiled_batch: return 1
+    total = _cuda_total(); return int(total * 0.9 / PEAK_BYTES * PEAK_PIXELS) if total else None
 
 
 _slots_lock = threading.Lock()
 
 
-def _semaphore():
-    """The device's slot semaphore, made once (under a lock: several threads ask at the start of a batch, and two semaphores would make a release go to the wrong one)."""
+def _semaphore(tiled=None):
+    """The device's slot semaphore for the mode (whole pictures or tiles; the batch's by default), made once per mode (under a lock: several threads ask at the start of a batch, and two semaphores would make a release go to the wrong one)."""
     global _slots
+    tiled = _tiled_batch if tiled is None else tiled
     with _slots_lock:
-        if _slots is None:
-            n = os.environ.get('STRATASTILLS_GPU_SLOTS')
-            if n: k = max(1, int(n))
-            else:
-                try: d = dev(); k = max(1, int(torch_().cuda.mem_get_info()[1] * 0.9 // PEAK_BYTES)) if d.type == 'cuda' else 1
-                except Exception: k = 1
-            _slots = threading.BoundedSemaphore(k); _slots.n = k
-        return _slots
+        if _slots is None: _slots = {}
+        if tiled not in _slots:
+            n = os.environ.get('STRATASTILLS_GPU_SLOTS'); k = max(1, int(n)) if n else tile_slots() if tiled else whole_slots()
+            _slots[tiled] = threading.BoundedSemaphore(k); _slots[tiled].n = k
+        return _slots[tiled]
 
 
 def slots():
-    """How many pictures may be on the device at once: what fits in a CUDA card's memory (90 % of it, in steps of PEAK_BYTES; one on a 12 GB card), one for MPS (it shares the machine's memory), at least 1; STRATASTILLS_GPU_SLOTS overrides."""
+    """How many pictures may be on the device at once in the current mode (whole pictures or the batch's tiles); STRATASTILLS_GPU_SLOTS overrides."""
     return _semaphore().n
 
 

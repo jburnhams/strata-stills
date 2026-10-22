@@ -167,8 +167,9 @@ def test_the_device_slot_limits_how_many_pictures_are_on_the_card(monkeypatch):
 
 
 def test_worker_count_follows_the_machine(monkeypatch):
-    from stratastills import resources
-    assert resources.auto_workers(True) == 2
+    from stratastills import resources, gpu
+    monkeypatch.setattr(gpu, 'plan_workers', lambda: 4); monkeypatch.setattr(resources, 'total_ram', lambda: 32e9); assert resources.auto_workers(True) == 4
+    monkeypatch.setattr(resources, 'total_ram', lambda: 8e9); assert resources.auto_workers(True) == 2                                      # memory for fewer pictures at once than the card could take
     monkeypatch.setattr(resources, 'total_ram', lambda: 16e9); monkeypatch.setattr(resources.os, 'cpu_count', lambda: 16); assert resources.auto_workers(False) == 1                          # 16 GB holds one 7 GB picture at 80 %
     monkeypatch.setattr(resources, 'total_ram', lambda: 64e9); assert resources.auto_workers(False) == 4                                                                                          # 16 cores / 4
     monkeypatch.setattr(resources, 'total_ram', lambda: 0); assert resources.auto_workers(False) == 1 and resources.total_ram.__name__ == '<lambda>'
@@ -206,3 +207,17 @@ def test_auto_size_never_goes_below_half_the_native_size(proj):
 def test_merged_panoramas_have_a_higher_floor_for_the_auto_size():
     from stratastills import sizeplan as S
     assert S.min_share('linear-dng') == 0.75 and S.min_share('raw') == 0.5 and S.min_share(None) == 0.5
+
+
+def test_tiling_is_chosen_for_batches_the_card_cannot_hold_whole(monkeypatch):
+    pytest.importorskip('torch')
+    from stratastills import gpu
+    cuda = type('D', (), {'type': 'cuda'})(); monkeypatch.setattr(gpu, 'dev', lambda: cuda); monkeypatch.setattr(gpu, '_cuda_total', lambda: 12.3e9); monkeypatch.setattr(gpu, '_slots', None); monkeypatch.delenv('STRATASTILLS_GPU_SLOTS', raising=False); monkeypatch.delenv('STRATASTILLS_MAX_PIXELS', raising=False)
+    assert gpu.whole_slots() == 1 and gpu.tile_slots() == 4 and gpu.plan_workers() == 4 and gpu.tiling_pays(4) and not gpu.tiling_pays(1)
+    assert gpu.max_pixels() > 50e6 and gpu.slots() == 1                                                                                  # alone: whole pictures, one on the card
+    with gpu.batch(4) as tiled: assert tiled and gpu.max_pixels() == 1 and gpu.slots() == 4                                           # a batch of 4: every picture in tiles, four on the card
+    assert gpu.max_pixels() > 50e6 and gpu.slots() == 1
+    monkeypatch.setattr(gpu, '_cuda_total', lambda: 24.5e9); monkeypatch.setattr(gpu, '_slots', None); assert gpu.whole_slots() == 3 and gpu.tile_slots() == 8 and gpu.plan_workers() == 4
+    monkeypatch.setattr(gpu, '_cuda_total', lambda: 6e9); assert gpu.tile_slots() == 2 and gpu.whole_slots() == 1 and gpu.plan_workers() == 3                  # a small card: still tiles, fewer at once
+    monkeypatch.setattr(gpu, '_cuda_total', lambda: None); monkeypatch.setattr(gpu, 'dev', lambda: type('D', (), {'type': 'cpu'})()); assert gpu.plan_workers() == 2 and not gpu.tiling_pays(8) and gpu.max_pixels() is None
+    monkeypatch.setattr(gpu, '_slots', None)
