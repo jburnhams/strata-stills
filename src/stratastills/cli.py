@@ -13,8 +13,12 @@ def doctor(args):
         except ImportError: ok = False; print(f'  MISSING  {label}: pip install -r requirements.txt')
     have = bool(shutil.which('ffmpeg')); print(f'  {"ok      " if have else "missing "} ffmpeg' + ('' if have else ' (only needed for video; winget install Gyan.FFmpeg)'))
     try:
-        import torch; print(f'  ok       torch {torch.__version__}, cuda {torch.cuda.is_available()}')
-    except ImportError: print('  missing  torch (only needed for the detector stages: pip install -r requirements-vision.txt)')
+        from stratastills import gpu
+        import torch
+        if gpu.available():
+            d = gpu.dev(); name = torch.cuda.get_device_name(0) if d.type == 'cuda' else 'Apple silicon (MPS)'; print(f'  ok       torch {torch.__version__}: the pixel work runs on the GPU: {name}')
+        else: print(f'  ok       torch {torch.__version__}: no CUDA or MPS device (or STRATASTILLS_GPU=0): the pixel work runs on the CPU (slower, same result)')
+    except ImportError: print('  missing  torch (optional: needed for the GPU path and the detector models; pip install torch, see README)')
     return 0 if ok else 1
 
 
