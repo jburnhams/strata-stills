@@ -1,0 +1,12 @@
+# stratastills main environment (Python 3.13 or newer; Windows NVIDIA GPU is the primary target, as for strata-360).
+numpy>=2.2
+scipy>=1.14
+opencv-python>=4.12
+pillow>=12
+rawpy>=0.25
+scikit-image>=0.26
+pyyaml
+loguru
+appdirs
+fastapi
+uvicorn

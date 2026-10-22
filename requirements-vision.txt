@@ -1,0 +1,3 @@
+# Detector models for the subject / object stages (added when those stages land; same choices as strata-360).
+ultralytics                # YOLO11 (fetches its own weights on first use)
+insightface                # faces: detection (buffalo_l)
