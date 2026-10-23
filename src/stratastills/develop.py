@@ -33,11 +33,13 @@ def read_dng_tags(path, lens='auto'):
     want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding', 'Make', 'Model', 'ProfileName')
     out = {}
     with tifffile.TiffFile(path) as t:
+        o = t.pages[0].tags.get('Orientation'); flip = EXIF_FLIP.get(int(o.value), 0) if o else 0
         pages = [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or [])
         for pg in pages:
             for tag in pg.tags.values():
                 if tag.name in want and tag.name not in out: out[tag.name] = tag.value
     if lens == 'off': out.pop('OpcodeList3', None)
+    if path.lower().endswith('.dng') and flip: out['Flip'] = flip                                                                       # the opcodes are in the sensor's orientation: the picture is turned upright first (_raw_u16), so they are turned with it (gain_map, warp_params)
     return inputs.adjust_tags(inputs.synthesize_tags(path, out, lens))
 
 
@@ -52,16 +54,23 @@ def parse_opcodes(b):
     return out
 
 
-def gain_map(p):
-    """A GainMap opcode as (map float32 [rows, cols, planes], first plane, n planes, (top, left, bottom, right), spacing (v, h), origin (v, h)); maps are in 0..1 coordinates of the active area."""
+FLIP_TURNS = {3: 2, 5: 1, 6: -1}                                 # LibRaw flip (EXIF orientation 3, 8, 6) -> quarter turns counter-clockwise that make the picture upright
+EXIF_FLIP = {1: 0, 3: 3, 6: 6, 8: 5}                            # EXIF/TIFF Orientation -> LibRaw flip (the mirrored ones are not handled)
+
+
+def gain_map(p, flip=0):
+    """A GainMap opcode as (map float32 [rows, cols, planes], first plane, n planes, (top, left, bottom, right), spacing (v, h), origin (v, h)); maps are in 0..1 coordinates of the active area. `flip`: the LibRaw flip of the picture it is for: the map is turned with it (the opcodes are in the sensor's orientation, the picture is turned upright before they are applied)."""
     top, left, bottom, right, plane, planes, rp, cp, nv, nh = struct.unpack('>10I', p[:40]); sv, sh, ov, oh = struct.unpack('>4d', p[40:72]); mp, = struct.unpack('>I', p[72:76])
     m = np.frombuffer(p[76:76 + 4 * nv * nh * mp], dtype='>f4').astype(np.float32).reshape(nv, nh, mp)
+    if flip in FLIP_TURNS: m = np.ascontiguousarray(np.rot90(m, FLIP_TURNS[flip], axes=(0, 1)))
     return m, plane, planes, (top, left, bottom, right), (sv, sh), (ov, oh)
 
 
-def warp_params(p):
-    """A WarpRectilinear opcode as (coefficients [planes, 6] (kr0..kr3, kt0, kt1), (cx, cy) normalised 0..1 of the crop)."""
-    n, = struct.unpack('>I', p[:4]); d = struct.unpack('>' + 'd' * (6 * n + 2), p[4:4 + 8 * (6 * n + 2)]); return np.array(d[:6 * n]).reshape(n, 6), (d[6 * n], d[6 * n + 1])
+def warp_params(p, flip=0):
+    """A WarpRectilinear opcode as (coefficients [planes, 6] (kr0..kr3, kt0, kt1), (cx, cy) normalised 0..1 of the crop); the centre turned with `flip` (as for gain_map; the radial coefficients do not change, the tangential ones of a lens are zero for the cameras here)."""
+    n, = struct.unpack('>I', p[:4]); d = struct.unpack('>' + 'd' * (6 * n + 2), p[4:4 + 8 * (6 * n + 2)]); cx, cy = d[6 * n], d[6 * n + 1]
+    if flip in FLIP_TURNS: k = FLIP_TURNS[flip] % 4; cx, cy = ((cx, cy), (cy, 1 - cx), (1 - cx, 1 - cy), (1 - cy, cx))[k]
+    return np.array(d[:6 * n]).reshape(n, 6), (cx, cy)
 
 
 def apply_gain_map(img, m, plane, planes):
@@ -412,7 +421,8 @@ def _raw_u16(path, half):
             flip = r.sizes.flip                                                                                                                                                  # before postprocess: with user_flip=0 LibRaw overwrites it with 0
             out = r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
             z = r.sizes; k = 2 if half else 1
-            if os.path.splitext(path)[1].lower() == '.dng': return out                                                                                                         # a DNG: its opcodes (lens, shading) are in the sensor's geometry, and the drone ones are upright
+            dng = os.path.splitext(path)[1].lower() == '.dng'
+            if dng: return np.ascontiguousarray(np.rot90(out, FLIP_TURNS[flip])) if flip in FLIP_TURNS else out                                                                  # a DNG: no crop (its opcodes, lens and shading, are in the sensor's geometry: they are turned with the picture, gain_map and warp_params)
             if z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight):                                                                                       # a raw that is not a DNG has no DefaultCrop tag: the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here
                 out = out[z.crop_top_margin // k: (z.crop_top_margin + z.crop_height) // k, z.crop_left_margin // k: (z.crop_left_margin + z.crop_width) // k]
             return np.ascontiguousarray(np.rot90(out, {3: 2, 5: 1, 6: -1}.get(flip, 0))) if flip in (3, 5, 6) else out                                                     # and turned upright by the camera's orientation (LibRaw flip 3: 180, 5: 90 counter-clockwise, 6: 90 clockwise), as the rest of the program expects
@@ -447,9 +457,9 @@ def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None, tone=None
     if 'OpcodeList3' in tags:
         for oid, p in parse_opcodes(tags['OpcodeList3']):
             if oid == 9:
-                m, plane, planes, _box, _sp, _org = gain_map(p); img, field = apply_gain_map(img, m, plane, planes)
+                m, plane, planes, _box, _sp, _org = gain_map(p, tags.get('Flip', 0)); img, field = apply_gain_map(img, m, plane, planes)
             elif oid == 1:
-                coef, centre = warp_params(p); img = warp_rectilinear(img, coef, centre)
+                coef, centre = warp_params(p, tags.get('Flip', 0)); img = warp_rectilinear(img, coef, centre)
     img = cpu_colour(img, tags)
     be =float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve)
@@ -532,9 +542,9 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
     if 'OpcodeList3' in tags:
         for oid, p in parse_opcodes(tags['OpcodeList3']):
             if oid == 9:
-                m, plane, planes, _box, _sp, _org = gain_map(p); img, field = gpu.apply_gain_map(img, m, plane, planes)
+                m, plane, planes, _box, _sp, _org = gain_map(p, tags.get('Flip', 0)); img, field = gpu.apply_gain_map(img, m, plane, planes)
             elif oid == 1:
-                coef, centre = warp_params(p); img = gpu.warp_rectilinear(img, coef, centre)
+                coef, centre = warp_params(p, tags.get('Flip', 0)); img = gpu.warp_rectilinear(img, coef, centre)
     img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None; chroma_t = gpu.look_to(chroma, img.device)

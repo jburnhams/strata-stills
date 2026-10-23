@@ -28,10 +28,10 @@ def _opcodes(tags):
         for oid, p in D.parse_opcodes(tags['OpcodeList3']):
             if oid == 9:
                 if warp is not None: raise Unsupported('a lens shading map after the lens warp')
-                m, plane, planes, _b, _s, _o = D.gain_map(p); gains.append((m, plane, planes))
+                m, plane, planes, _b, _s, _o = D.gain_map(p, tags.get('Flip', 0)); gains.append((m, plane, planes))
             elif oid == 1:
                 if warp is not None: raise Unsupported('two lens warps')
-                warp = D.warp_params(p)
+                warp = D.warp_params(p, tags.get('Flip', 0))
     return gains, warp
 
 

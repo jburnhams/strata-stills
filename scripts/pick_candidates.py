@@ -8,7 +8,7 @@ KEYS = ('dL', 'Lj', 'chroma_ratio', 'dE', 'dhue', 'dL_pix', 'dE_p90', 'dE_sat', 
 def parse(path):
     rows = {}
     for line in open(path, encoding='utf-8', errors='ignore'):
-        m = re.match(r'(\S+)\.ARW\s+(.*)', line)
+        m = re.match(r'(\S+)\.(?:ARW|DNG)\s+(.*)', line)
         if not m or 'no match' in line: continue
         v = m.group(2).split()
         rows[m.group(1)] = {k: float(x) for k, x in zip(v[0::2], v[1::2]) if k in KEYS}

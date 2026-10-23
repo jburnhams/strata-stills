@@ -209,3 +209,18 @@ def test_a_non_dng_raw_is_cut_to_the_makers_active_area(monkeypatch):
 
 def test_camera_exposure_is_no_change_and_a_number_is_stops_from_it():
     assert D.ev_stops('camera') == 0.0 and D.ev_stops(1) == 1.0 and D.ev_stops('-0.5') == -0.5
+
+
+def test_a_dng_with_an_orientation_is_turned_upright_and_its_opcodes_are_turned_with_it(monkeypatch):
+    import contextlib, sys, types
+    from types import SimpleNamespace as NS
+    z = NS(iwidth=24, iheight=16, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=6)
+    class R:
+        sizes = z
+        def postprocess(self, half_size, **kw): z.flip = 0; return np.zeros((16, 24, 3), np.uint16)
+    mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+    assert D._raw_u16('x.dng', False).shape == (24, 16, 3)
+    m = np.arange(12, dtype='>f4').reshape(3, 4); body = struct.pack('>10I', 0, 0, 16, 24, 0, 3, 1, 1, 3, 4) + struct.pack('>4d', .5, .5, 0, 0) + struct.pack('>I', 1) + m.tobytes()
+    assert D.gain_map(body)[0][:, :, 0].shape == (3, 4) and D.gain_map(body, 6)[0][:, :, 0].shape == (4, 3) and np.array_equal(D.gain_map(body, 6)[0][:, :, 0], np.rot90(m.astype(np.float32), -1)) and np.array_equal(D.gain_map(body, 3)[0][:, :, 0], np.rot90(m.astype(np.float32), 2))
+    wp = struct.pack('>I', 1) + struct.pack('>6d', 1, 0, 0, 0, 0, 0) + struct.pack('>2d', 0.25, 0.4)
+    assert D.warp_params(wp)[1] == (0.25, 0.4) and np.allclose(D.warp_params(wp, 6)[1], (0.6, 0.25)) and np.allclose(D.warp_params(wp, 5)[1], (0.4, 0.75)) and np.allclose(D.warp_params(wp, 3)[1], (0.75, 0.6))
