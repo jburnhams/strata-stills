@@ -331,18 +331,41 @@ CHROMA_KNEE = 0.20              # limit_chroma: colour (distance from the grey o
 CHROMA_CEIL = 0.45              # ... and rolls off smoothly towards this at most
 
 
+LOOK_CHROMA = np.array([0.0, 0.05, 0.12, 0.25, 0.45], np.float32)          # the colour strengths (distance of the encoded RGB from its luminance) a device look table has a column for
+_W = np.array([0.2126, 0.7152, 0.0722], np.float32)
+_E1 = np.array([_W[1], -_W[0], 0.0], np.float32) / np.hypot(_W[1], _W[0]); _E2 = np.cross(_W, _E1).astype(np.float32); _E2 /= np.linalg.norm(_E2)      # two axes of the plane of colours that have no luminance (w . d = 0): hue is the angle in it
+
+
+def look_table(spec):
+    """A device's hue/saturation look from its profile ({'hue': number of hue rows, 'data': flat (rotation in degrees, colour scale) per hue and per LOOK_CHROMA column}) as an array (hue, chroma, 2), or None."""
+    return None if not spec else np.asarray(spec['data'], np.float32).reshape(spec['hue'], len(LOOK_CHROMA), 2)
+
+
 def tone_parts(tone, tags):
-    """(tone curve pairs or None, chroma scale LUT or None) to develop with. `tone` None: the file's or its device's curve, no chroma scale; a list: that curve; a dict (tonematch.py: {'curve', 'chroma'}): its curve (the file's when it has none) and its chroma scale (pairs of display luminance, scale of the colour), made into a table."""
+    """(tone curve pairs or None, look or None) to develop with. `tone` None: the file's or its device's curve, no look; a list: that curve; a dict (tonematch.py: {'curve', 'chroma'}): its curve (the file's when it has none) and its look: (table of the colour scale over display luminance, the device's hue/saturation look table `LookTable` of the profile (fitted to the camera's JPEGs after this very matching: scripts/fit_look_table.py)), either of which may be None."""
     if isinstance(tone, dict):
-        curve = tone.get('curve') or inputs.tone_curve(tags); c = tone.get('chroma')
-        return curve, (np.interp(np.linspace(0, 1, 64), np.asarray(c, float)[0::2], np.asarray(c, float)[1::2]).astype(np.float32) if c else None)
+        curve = tone.get('curve') or inputs.tone_curve(tags); c = tone.get('chroma'); tab = look_table(tags.get('LookTable'))
+        lut = np.interp(np.linspace(0, 1, 64), np.asarray(c, float)[0::2], np.asarray(c, float)[1::2]).astype(np.float32) if c else None
+        return curve, ((lut, tab) if lut is not None or tab is not None else None)
     return (tone if tone is not None else inputs.tone_curve(tags)), None
 
 
-def chroma_scale(rgb, lut):
-    """The colour of a finished (display-encoded) picture scaled by a table over its luminance (tone_parts): the luminance stays, the distance of each channel from it is multiplied. None: unchanged."""
-    if lut is None: return rgb
-    w = np.array([0.2126, 0.7152, 0.0722], np.float32); y = (rgb @ w)[..., None]; s = np.interp(y, np.linspace(0, 1, len(lut)), lut).astype(np.float32); return np.clip(y + (rgb - y) * s, 0, 1).astype(np.float32)
+def hue_look(rgb, table):
+    """A hue/saturation look on a finished (display-encoded) picture: the colour (the part of each pixel with no luminance) is turned by an angle and scaled by a factor read, bilinearly, from `table` (hue rows around the circle, LOOK_CHROMA columns); the luminance stays."""
+    h = table.shape[0]; y = rgb @ _W; d = rgb - y[..., None]; a = d @ _E1; b = d @ _E2; hue = np.arctan2(b, a); ch = np.hypot(a, b)
+    fh = (hue / (2 * np.pi)) % 1.0 * h; i0 = np.floor(fh).astype(int) % h; i1 = (i0 + 1) % h; fh = fh - np.floor(fh)
+    fc = np.interp(ch, LOOK_CHROMA, np.arange(len(LOOK_CHROMA))); j0 = np.minimum(np.floor(fc).astype(int), len(LOOK_CHROMA) - 2); fc = fc - j0
+    t = (table[i0, j0] * ((1 - fh) * (1 - fc))[..., None] + table[i1, j0] * (fh * (1 - fc))[..., None] + table[i0, j0 + 1] * ((1 - fh) * fc)[..., None] + table[i1, j0 + 1] * (fh * fc)[..., None])
+    ang = hue + np.radians(t[..., 0]); r = ch * t[..., 1]; d2 = (r * np.cos(ang))[..., None] * _E1 + (r * np.sin(ang))[..., None] * _E2
+    return np.clip(y[..., None] + d2, 0, 1).astype(np.float32)
+
+
+def chroma_scale(rgb, look):
+    """The finished (display-encoded) picture put through a look (tone_parts): its colour scaled by a table over its luminance (the luminance stays, the distance of each channel from it is multiplied), then the device's hue/saturation table. None: unchanged. Pointwise, so it can be run on a tile."""
+    if look is None: return rgb
+    lut, tab = look
+    if lut is not None: y = (rgb @ _W)[..., None]; rgb = np.clip(y + (rgb - y) * np.interp(y, np.linspace(0, 1, len(lut)), lut).astype(np.float32), 0, 1).astype(np.float32)
+    return rgb if tab is None else hue_look(rgb, tab)
 
 
 def limit_chroma(rgb, knee=None, ceil=None):
@@ -513,7 +536,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
                 coef, centre = warp_params(p); img = gpu.warp_rectilinear(img, coef, centre)
     img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None; chroma_t = t.from_numpy(chroma).to(img.device) if chroma is not None else None
+    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None; chroma_t = gpu.look_to(chroma, img.device)
     sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else ev_stops(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
     sc = 0.0

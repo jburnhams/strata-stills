@@ -198,3 +198,8 @@ def test_the_cpu_development_goes_through_tiles_when_memory_is_short(monkeypatch
     monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu'); assert calls == [512]
     calls.clear(); monkeypatch.setattr(resources, 'cpu_tile', lambda px: None); D.develop('x.dng', backend='cpu'); assert calls == []
     monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu', denoise=4.0); assert calls == []                                          # a numeric denoise is not tiled
+
+
+def test_hue_look_matches():
+    y = (RNG.random((50, 60, 3)) * 0.9 + 0.05).astype(np.float32); h = 24; tab = np.dstack([RNG.normal(0, 8, (h, len(D.LOOK_CHROMA))), 1 + RNG.normal(0, 0.1, (h, len(D.LOOK_CHROMA)))]).astype(np.float32); lut = (0.5 + RNG.random(64)).astype(np.float32)
+    for look in ((lut, tab), (None, tab), (lut, None)): assert np.abs(c(gpu.chroma_scale(g(y), gpu.look_to(look, gpu.dev()))) - D.chroma_scale(y, look)).max() < 2e-4

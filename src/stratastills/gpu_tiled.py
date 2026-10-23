@@ -65,7 +65,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         img = D.gpu_colour(img, tags).clamp(min=0) * 2.0 ** be; lin[:, y0:y1, x0:x1] = img.cpu().numpy(); del img
     gpu.free()
     # ---- global: the local-tone base, the exposure, the noise estimate
-    curve, chroma = D.tone_parts(tone, tags); lut = D.tone_lut(curve); lut_t = t.from_numpy(lut).to(dv) if lut is not None else None; chroma_t = t.from_numpy(chroma).to(dv) if chroma is not None else None; sy = np.arange(0, H, 8); sx = np.arange(0, W, 8); base_s = mid = None
+    curve, chroma = D.tone_parts(tone, tags); lut = D.tone_lut(curve); lut_t = t.from_numpy(lut).to(dv) if lut is not None else None; chroma_t = gpu.look_to(chroma, dv); sy = np.arange(0, H, 8); sx = np.arange(0, W, 8); base_s = mid = None
     wts = np.array([0.2126, 0.7152, 0.0722], np.float32)
     if recover > 0:
         ly = np.log2(np.maximum(lin[0] * wts[0] + lin[1] * wts[1] + lin[2] * wts[2], 1e-5)); k = min(1.0, 1200 / max(H, W)); sz = (max(8, round(W * k)), max(8, round(H * k)))
