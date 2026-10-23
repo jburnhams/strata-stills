@@ -34,7 +34,7 @@ def _analysis_luma(u16, rows=1024):
     return out
 
 
-def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=2048, halo=HALO):
+def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=2048, halo=HALO, tone=None):
     """develop.develop (backend 'cpu', denoise 'auto', 'chroma' or 'off') for a picture too big for the memory it may use: the same result (float32 RGB (H, W, 3), 0..1), made in tiles of `tile` pixels. `u16`: the decoded raw (H, W, 3) uint16."""
     tags = D.read_dng_tags(path); H, W = u16.shape[:2]; gains, warp = _opcodes(tags)
     if analysis is not None: analysis['luma'] = _analysis_luma(u16)
@@ -54,7 +54,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
             img = out; del XS, YS
         lin[y0:y1, x0:x1] = np.clip(D.cpu_colour(img, tags), 0, None) * 2.0 ** be; del img
     # ---- global: the local-tone base, the exposure, the noise estimate
-    lut = D.tone_lut(D.inputs.tone_curve(tags)); sy = np.arange(0, H, 8); sx = np.arange(0, W, 8); base_s = mid = None
+    curve, chroma = D.tone_parts(tone, tags); lut = D.tone_lut(curve); sy = np.arange(0, H, 8); sx = np.arange(0, W, 8); base_s = mid = None
     if recover > 0:
         ly = np.log2(np.maximum(lin @ LUMA, 1e-5)); k = min(1.0, 1200 / max(H, W)); small = cv2.resize(ly, (max(8, round(W * k)), max(8, round(H * k))), interpolation=cv2.INTER_AREA); del ly
         base_s = cv2.bilateralFilter(small, 9, 0.5, max(4.0, 0.012 * max(small.shape))); mid = float(np.sort(_sample(base_s, sy, sx, H, W, cv2.INTER_CUBIC).reshape(-1))[(len(sy) * len(sx) - 1) // 2])
@@ -74,7 +74,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         img = local_tone(np.ascontiguousarray(lin[ry0:ry1, rx0:rx1]), ys, xs) * g
         if sc > 0.3: y = img @ LUMA; c = cv2.GaussianBlur(img - y[..., None], (0, 0), sc); img = np.clip(y[..., None] + c, 0, None)
         field = _sample(field_src[0][:, :, min(field_src[1], field_src[0].shape[2] - 1)], ys, xs, H, W, cv2.INTER_LINEAR) if field_src is not None else None
-        sig8 = D.noise_map8(img, npf, gain=field) if npf is not None else None; res = D.limit_chroma(D.finish(img, lut)); del img
+        sig8 = D.noise_map8(img, npf, gain=field) if npf is not None else None; res = D.limit_chroma(D.chroma_scale(D.finish(img, lut), chroma)); del img
         if classical:
             res = D.clean_colour(res, sig8)
             if denoise == 'auto': res = D.core_luma(res, sig8)

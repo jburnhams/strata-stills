@@ -28,10 +28,10 @@ describe('generate', () => {
     await userEvent.selectOptions(screen.getByLabelText('Format'), 'tiff'); await waitFor(() => expect(willMake()).toHaveTextContent('TIFF 16 bit'))
     expect(screen.queryByLabelText('JPEG quality')).toBeNull(); expect(willMake()).toHaveTextContent('changed from “Best quality (automatic)”')
     await userEvent.selectOptions(screen.getByLabelText('Format'), 'jpeg'); await userEvent.selectOptions(screen.getByLabelText('JPEG quality'), '95'); await userEvent.click(screen.getByLabelText('Level'))
-    await userEvent.selectOptions(screen.getByLabelText('Sharpness'), '2'); await userEvent.selectOptions(screen.getByLabelText('Highlight contrast'), '1.5'); await userEvent.selectOptions(screen.getByLabelText('Exposure'), 'camera')
+    await userEvent.selectOptions(screen.getByLabelText('Sharpness'), '2'); await userEvent.selectOptions(screen.getByLabelText('Highlight contrast'), '1.5'); await userEvent.selectOptions(screen.getByLabelText('Exposure'), 'match')
     await waitFor(() => expect(willMake()).toHaveTextContent('JPEG q95 · size auto · sharpened 2'))
     await userEvent.click(screen.getByRole('button', { name: 'Generate' }))
-    expect(mock.generates.at(-1)).toMatchObject({ preset: 'best', options: { format: 'jpeg', quality: 95, level: false, sharpen_amount: 2, highlight_contrast: 1.5, exposure: 'camera' } })
+    expect(mock.generates.at(-1)).toMatchObject({ preset: 'best', options: { format: 'jpeg', quality: 95, level: false, sharpen_amount: 2, highlight_contrast: 1.5, exposure: 'match' } })
     await userEvent.click(screen.getByRole('button', { name: 'Back to the preset' })); await waitFor(() => expect(willMake()).toHaveTextContent('JPEG q90 · size auto · levelled'))
   })
 

@@ -14,7 +14,7 @@ export interface TransformInfo { applied: boolean; angle?: number; confidence?: 
 export interface Detail { ok: boolean; reason?: string; native?: [number, number]; recommended?: number | null; f50?: number; f30?: number; f20?: number; scale50?: number; scale30?: number; scale20?: number; alpha?: number }
 export interface Preset { name: string; label: string; builtin: boolean; stages: Stage[] }
 /** The Advanced panel's flat settings, laid over a preset (only those changed). */
-export interface Options { size?: string; format?: 'jpeg' | 'tiff'; quality?: number | 'auto'; level?: boolean; sharpen?: boolean; sharpen_amount?: number; highlight_contrast?: number; exposure?: 'auto' | 'camera' | number }
+export interface Options { size?: string; format?: 'jpeg' | 'tiff'; quality?: number | 'auto'; level?: boolean; sharpen?: boolean; sharpen_amount?: number; highlight_contrast?: number; exposure?: 'auto' | 'camera' | 'match' | number }
 export interface GenerateBody { variant?: string | null; preset?: string | null; options?: Options | null; stages?: Stage[] | null }
 export interface GenerateCheck { key: string; exists: boolean; variant: string | null; stages: Stage[]; summary: string }
 export interface GenerateRecord { key: string; file: string; output: [number, number]; bytes: number; format: string; quality: number | null; summary: string; steps: string[]; existing?: boolean }

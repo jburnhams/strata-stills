@@ -331,6 +331,20 @@ CHROMA_KNEE = 0.20              # limit_chroma: colour (distance from the grey o
 CHROMA_CEIL = 0.45              # ... and rolls off smoothly towards this at most
 
 
+def tone_parts(tone, tags):
+    """(tone curve pairs or None, chroma scale LUT or None) to develop with. `tone` None: the file's or its device's curve, no chroma scale; a list: that curve; a dict (tonematch.py: {'curve', 'chroma'}): its curve (the file's when it has none) and its chroma scale (pairs of display luminance, scale of the colour), made into a table."""
+    if isinstance(tone, dict):
+        curve = tone.get('curve') or inputs.tone_curve(tags); c = tone.get('chroma')
+        return curve, (np.interp(np.linspace(0, 1, 64), np.asarray(c, float)[0::2], np.asarray(c, float)[1::2]).astype(np.float32) if c else None)
+    return (tone if tone is not None else inputs.tone_curve(tags)), None
+
+
+def chroma_scale(rgb, lut):
+    """The colour of a finished (display-encoded) picture scaled by a table over its luminance (tone_parts): the luminance stays, the distance of each channel from it is multiplied. None: unchanged."""
+    if lut is None: return rgb
+    w = np.array([0.2126, 0.7152, 0.0722], np.float32); y = (rgb @ w)[..., None]; s = np.interp(y, np.linspace(0, 1, len(lut)), lut).astype(np.float32); return np.clip(y + (rgb - y) * s, 0, 1).astype(np.float32)
+
+
 def limit_chroma(rgb, knee=None, ceil=None):
     """Roll off the strongest colours of a finished (display-encoded) picture: up to `knee` the colour is as it was, beyond it the excess is compressed towards `ceil`. Sunlit orange and similar are the ones the tone curve over-saturates (it darkens the weaker channels most); the camera's own JPEG is gentler there. Luma is kept."""
     knee = CHROMA_KNEE if knee is None else knee; ceil = CHROMA_CEIL if ceil is None else ceil
@@ -371,11 +385,13 @@ def _raw_u16(path, half):
     import rawpy
     try:
         with rawpy.imread(path) as r:
+            flip = r.sizes.flip                                                                                                                                                  # before postprocess: with user_flip=0 LibRaw overwrites it with 0
             out = r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
             z = r.sizes; k = 2 if half else 1
-            if os.path.splitext(path)[1].lower() != '.dng' and z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight):                              # a raw that is not a DNG has no DefaultCrop tag: the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here
-                return out[z.crop_top_margin // k: (z.crop_top_margin + z.crop_height) // k, z.crop_left_margin // k: (z.crop_left_margin + z.crop_width) // k]
-            return out
+            if os.path.splitext(path)[1].lower() == '.dng': return out                                                                                                         # a DNG: its opcodes (lens, shading) are in the sensor's geometry, and the drone ones are upright
+            if z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight):                                                                                       # a raw that is not a DNG has no DefaultCrop tag: the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here
+                out = out[z.crop_top_margin // k: (z.crop_top_margin + z.crop_height) // k, z.crop_left_margin // k: (z.crop_left_margin + z.crop_width) // k]
+            return np.ascontiguousarray(np.rot90(out, {3: 2, 5: 1, 6: -1}.get(flip, 0))) if flip in (3, 5, 6) else out                                                     # and turned upright by the camera's orientation (LibRaw flip 3: 180, 5: 90 counter-clockwise, 6: 90 clockwise), as the rest of the program expects
     except Exception as e:
         if not lineardng.is_linear(path): raise
         try: return lineardng.read(path, half)
@@ -401,7 +417,7 @@ def cpu_colour(img, tags):
     return img
 
 
-def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None):
+def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None, tone=None):
     """The development up to, but not including, the final tone curve: {linear: exposed linear sRGB-primaries picture (float32), lut, noise: the NoiseProfile scaled for the exposure gain (or None), gain: the lens-shading field (or None), gain_ev}. `develop` finishes it; experiments and the export can look inside."""
     tags = read_dng_tags(path); img = _raw_linear(path, half) if u16 is None else u16.astype(np.float32) / 65535.0; field = None
     if 'OpcodeList3' in tags:
@@ -412,32 +428,32 @@ def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None):
                 coef, centre = warp_params(p); img = warp_rectilinear(img, coef, centre)
     img = cpu_colour(img, tags)
     be =float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(inputs.tone_curve(tags))
+    img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve)
     g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else ev_stops(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None          # the profile is for the raw values: after the gain, variance = S*g*v + O*g^2
-    return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
+    return dict(linear=img, lut=lut, chroma=chroma, noise=npf, gain=field, gain_ev=float(np.log2(g)))
 
 
-def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST, backend='auto', analysis=None):
+def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST, backend='auto', analysis=None, tone=None):
     """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`:
       'auto'    the classical clean-up (default): colour noise and fringes removed edge-aware and cored to grey, colour rolled off near white, the luminance grain cored band by band (clean_colour, core_luma), with the lens-shading gain counted in the noise map so the lifted corners are cored harder
       'ai'      'auto' plus a learned model (`model`, `strength`: denoise_ai) where the noise is visible
       'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere.
-    `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
-    if backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available()): return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis)
+    `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `tone`: a tone curve (pairs of linear input, display-encoded output, as ProfileToneCurve) to use instead of the file's or its device's (tonematch.py makes one that matches the camera's own JPEG). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
+    if backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available()): return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone)
     u16 = _raw_u16(path, half)
     if denoise in ('auto', 'chroma', 'off'):                                                                                  # a picture too big for the memory it may use is developed in tiles (cpu_tiled.py)
         tile = resources.cpu_tile(u16.shape[0] * u16.shape[1])
         if tile:
-            try: return cpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tile)
+            try: return cpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tile, tone=tone)
             except cpu_tiled.Unsupported: pass
     if analysis is not None: analysis['luma'] = analysis_luma(path, None if half else u16)
-    P = develop_parts(path, half, ev, recover, u16=u16); img, lut, npf, field = P['linear'], P['lut'], P['noise'], P['gain']
+    P = develop_parts(path, half, ev, recover, u16=u16, tone=tone); img, lut, npf, field, chroma = P['linear'], P['lut'], P['noise'], P['gain'], P['chroma']
     classical = denoise in ('auto', 'ai', 'chroma') and npf is not None
     if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
     sig8 = noise_map8(img, npf, gain=field) if npf is not None else None
-    out = limit_chroma(finish(img, lut))
+    out = limit_chroma(chroma_scale(finish(img, lut), chroma))
     if classical:
         out = clean_colour(out, sig8)
         if denoise in ('auto', 'ai'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
@@ -448,15 +464,15 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     return out
 
 
-def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None):
+def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None):
     """The raw is decoded first (LibRaw, on the CPU, holding no device slot, so another picture can be on the card meanwhile); then the picture takes a device slot for the rest. A picture too big for the card (gpu.max_pixels) is developed in tiles (gpu_tiled.py); if that cannot be done for its opcodes, a reduced copy that fits is developed instead."""
     u16 = _raw_u16(path, half); limit = gpu.max_pixels()
     with gpu.slot():
         if limit and u16.shape[0] * u16.shape[1] > limit:
-            try: return gpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis)
+            try: return gpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tone=tone)
             except gpu_tiled.Unsupported:
                 k = (limit / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
-        return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis)
+        return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone)
 
 
 def gpu_colour(img, tags):
@@ -470,13 +486,13 @@ def gpu_colour(img, tags):
     return img
 
 
-def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast):
+def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=None):
     """The last part of the GPU development, from the exposed linear picture `img` (3, H, W) to the finished one: colour noise blurred by `sc` (the visible-noise estimate of the whole picture), the noise map, the tone curve and colour limit, the colour and luminance clean-up, the highlight contrast. Everything in it is local (the widest reach is about 90 pixels), so it can be run on a tile with a margin (gpu_tiled.py) and give what the whole picture would."""
     classical = denoise in ('auto', 'chroma') and npf is not None
     if classical and sc > 0.3:                                                                                         # denoise_linear: colour noise blurred in proportion to the noise
         y = gpu.luma(img); cc = gpu.gaussian(img - y[None], sc); img = (y[None] + cc).clamp_(min=0)
     sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
-    out = gpu.limit_chroma(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), CHROMA_KNEE, CHROMA_CEIL)
+    out = gpu.limit_chroma(gpu.chroma_scale(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), chroma_t), CHROMA_KNEE, CHROMA_CEIL)
     if classical:
         out = gpu.clean_colour(out, sig8)
         if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)
@@ -484,7 +500,7 @@ def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast):
     return out
 
 
-def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None):
+def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None):
     """`develop` on the GPU: the same recipe step for step (see gpu.py for the functions and tests/unit/test_gpu.py for the proof they agree with the CPU ones); the picture stays on the card until the finished float32 array comes back."""
     t = gpu.torch_(); tags = read_dng_tags(path); img = gpu.to_gpu_u16(u16); field = None
     if analysis is not None:                                                                                      # analysis_luma from this decode: nothing done that changes sharpness, exposed so the median is 0.18, gamma-encoded
@@ -497,10 +513,10 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
                 coef, centre = warp_params(p); img = gpu.warp_rectilinear(img, coef, centre)
     img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(inputs.tone_curve(tags)); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
+    img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None; chroma_t = t.from_numpy(chroma).to(img.device) if chroma is not None else None
     sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else ev_stops(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
     sc = 0.0
     if npf is not None and denoise in ('auto', 'chroma'): sc = float(np.clip(visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1) * 0.6, 0.0, 1.5))
-    out = gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast); del img
+    out = gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t); del img
     res = gpu.to_numpy(out); del out; gpu.free(); return res

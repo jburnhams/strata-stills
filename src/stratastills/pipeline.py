@@ -1,6 +1,6 @@
 """Pipelines: making a finished picture out of a source variant is a sequence of STAGES, each with its own settings and its own version, so a pipeline is just data: a config (a list of stage settings) that can be saved as a named PRESET, run on one item from the app, or applied by RULES to every item of a source folder.
 
-  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera' or stops from the camera's)
+  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera', 'match' or stops from the camera's)
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
@@ -17,7 +17,7 @@ import contextlib, datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, match, preview, projects as P, settings, sizeplan, transforms
+from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, match, preview, projects as P, settings, sizeplan, tonematch, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
@@ -35,8 +35,8 @@ def _num(params, k, lo, hi, default):
 
 
 def _exposure(v):
-    """'auto' (the median of the picture is brought to a fixed lightness), 'camera' (the exposure the camera's own JPEG has: needs the device's tone curve, see inputs.py) or a number of stops added to the camera's exposure; 0 is 'camera'."""
-    if str(v).lower() in ('auto', 'camera'): return str(v).lower()
+    """'auto' (the median of the picture is brought to a fixed lightness), 'camera' (the exposure the camera's own JPEG has: needs the device's tone curve, see inputs.py), 'match' (the tone of the camera's own JPEG of this very picture, found from the preview inside the raw: tonematch.py; the curve is kept in the record of the picture) or a number of stops added to the camera's exposure; 0 is 'camera'."""
+    if str(v).lower() in ('auto', 'camera', 'match'): return str(v).lower()
     try: n = round(float(v), 2)
     except (TypeError, ValueError): raise P.ProjectError("develop exposure is 'auto', 'camera' or a number of stops")
     if not -5 <= n <= 5: raise P.ProjectError('exposure must be between -5 and 5 stops')
@@ -103,8 +103,12 @@ def _reference_picture(item):
 
 
 def run_develop(st, p):
-    st.say('developing the full-size picture'); an = {}
-    st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=p.get('exposure', 'auto')) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
+    st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
+    if ev == 'match' and X._is_camera_raw(st.path):                                                                       # the tone of the camera's own JPEG of this picture, kept with it so that it can be adjusted later
+        st.say('matching the tone of the camera JPEG'); curve = tonematch.curve_for(st.path); st.rec['tone'] = dict(source='the JPEG inside the raw', **curve) if curve else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): the camera exposure and the device tone curve are used')
+        if curve: kw['tone'] = curve
+        ev = 'camera'
+    st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
     st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
     if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
         refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
@@ -265,7 +269,7 @@ def summary(stages):
     if 'sharpen' in d: parts.append(f"sharpened {d['sharpen']['amount']:g}")
     if d['develop']['highlight_contrast'] != develop.HIGHLIGHT_CONTRAST: parts.append(f"highlight contrast {d['develop']['highlight_contrast']:g}")
     ex = d['develop'].get('exposure', 'auto')
-    if ex != 'auto': parts.append('camera exposure' if ex == 'camera' else f'camera exposure {ex:+g} EV')
+    if ex != 'auto': parts.append({'camera': 'camera exposure', 'match': 'matched to the camera JPEG'}.get(ex) or f'camera exposure {ex:+g} EV')
     return ' · '.join(parts)
 
 

@@ -47,7 +47,7 @@ def _analysis_luma(u16, rows=1024):
     return out
 
 
-def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=None, halo=HALO):
+def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=None, halo=HALO, tone=None):
     """develop._develop_gpu_on_device for a picture too big for the card: the same result (float32 RGB (H, W, 3), 0..1), made in tiles. `u16`: the decoded raw (H, W, 3) uint16."""
     tile = tile or gpu.tile_size(halo); t = gpu.torch_(); tags = D.read_dng_tags(path); H, W = u16.shape[:2]; dv = gpu.dev(); gains, warp = _opcodes(tags); field_map = None
     if analysis is not None: analysis['luma'] = _analysis_luma(u16)
@@ -65,7 +65,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         img = D.gpu_colour(img, tags).clamp(min=0) * 2.0 ** be; lin[:, y0:y1, x0:x1] = img.cpu().numpy(); del img
     gpu.free()
     # ---- global: the local-tone base, the exposure, the noise estimate
-    lut = D.tone_lut(D.inputs.tone_curve(tags)); lut_t = t.from_numpy(lut).to(dv) if lut is not None else None; sy = np.arange(0, H, 8); sx = np.arange(0, W, 8); base_s = mid = None
+    curve, chroma = D.tone_parts(tone, tags); lut = D.tone_lut(curve); lut_t = t.from_numpy(lut).to(dv) if lut is not None else None; chroma_t = t.from_numpy(chroma).to(dv) if chroma is not None else None; sy = np.arange(0, H, 8); sx = np.arange(0, W, 8); base_s = mid = None
     wts = np.array([0.2126, 0.7152, 0.0722], np.float32)
     if recover > 0:
         ly = np.log2(np.maximum(lin[0] * wts[0] + lin[1] * wts[1] + lin[2] * wts[2], 1e-5)); k = min(1.0, 1200 / max(H, W)); sz = (max(8, round(W * k)), max(8, round(H * k)))
@@ -87,6 +87,6 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         y0, y1, x0, x1 = box; ry0, ry1, rx0, rx1 = max(0, y0 - halo), min(H, y1 + halo), max(0, x0 - halo), min(W, x1 + halo); ys, xs = np.arange(ry0, ry1), np.arange(rx0, rx1)
         img = local_tone(t.from_numpy(np.ascontiguousarray(lin[:, ry0:ry1, rx0:rx1])).to(dv), ys, xs) * g
         field = _gain_plane(field_map[0], field_map[1], (H, W), ys, xs) if field_map is not None else None
-        res = D.gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast); del img
+        res = D.gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t); del img
         out[y0:y1, x0:x1] = gpu.to_numpy(res[:, y0 - ry0:y1 - ry0, x0 - rx0:x1 - rx0]); del res
     gpu.free(); return out

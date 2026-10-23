@@ -351,6 +351,13 @@ def finish(img, lut, knee, white, blend=1.0):
     return ratio if blend <= 0 else blend * apply_lut(img, lut) + (1 - blend) * ratio
 
 
+def chroma_scale(rgb, lut):
+    """develop.chroma_scale on a (3, H, W) tensor with the table as a tensor (None: unchanged)."""
+    if lut is None: return rgb
+    t = torch_(); y = luma(rgb)[None]; p = y.clamp(0, 1) * (len(lut) - 1); i = p.floor().long().clamp(max=len(lut) - 2); f = p - i; s = lut[i] * (1 - f) + lut[i + 1] * f
+    return (y + (rgb - y) * s).clamp_(0, 1)
+
+
 def limit_chroma(rgb, knee, ceil):
     """develop.limit_chroma on a (3, H, W) tensor."""
     t = torch_()

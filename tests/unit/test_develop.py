@@ -198,12 +198,13 @@ def test_limit_chroma_leaves_soft_colour_alone_and_rolls_off_strong_colour_keepi
 def test_a_non_dng_raw_is_cut_to_the_makers_active_area(monkeypatch):
     import contextlib, sys, types
     from types import SimpleNamespace as NS
-    z = NS(iwidth=24, iheight=16, crop_width=20, crop_height=12, crop_left_margin=2, crop_top_margin=4)
+    z = NS(iwidth=24, iheight=16, crop_width=20, crop_height=12, crop_left_margin=2, crop_top_margin=4, flip=0)
     class R:
         sizes = z
-        def postprocess(self, half_size, **kw): n = 2 if half_size else 1; return np.zeros((16 // n, 24 // n, 3), np.uint16)
+        def postprocess(self, half_size, **kw): z.flip = 0; n = 2 if half_size else 1; return np.zeros((16 // n, 24 // n, 3), np.uint16)
     mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
     assert D._raw_u16('x.arw', False).shape == (12, 20, 3) and D._raw_u16('x.arw', True).shape == (6, 10, 3) and D._raw_u16('x.dng', False).shape == (16, 24, 3)
+    for flip, shape in ((3, (12, 20, 3)), (6, (20, 12, 3)), (5, (20, 12, 3))): z.flip = flip; assert D._raw_u16('x.arw', False).shape == shape                                                                  # turned upright by the camera's orientation
 
 
 def test_camera_exposure_is_no_change_and_a_number_is_stops_from_it():
