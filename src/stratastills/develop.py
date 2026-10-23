@@ -8,14 +8,14 @@
 
 `develop(path, half=False, ev=0, denoise='auto')` returns a float32 RGB array in 0..1 (sRGB encoded), the right way up. `half=True` is a quarter-size version (LibRaw's half-size demosaic) for previews that follows the same recipe.
 Files that are not DNG-with-opcodes simply skip the steps they lack. Bump VERSION when the look changes: previews cached under the old one are not reused."""
-import struct
+import os, struct
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lineardng, resources
 
-VERSION = 9
+VERSION = 10
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -37,7 +37,7 @@ def read_dng_tags(path):
         for pg in pages:
             for tag in pg.tags.values():
                 if tag.name in want and tag.name not in out: out[tag.name] = tag.value
-    return inputs.adjust_tags(out)
+    return inputs.adjust_tags(inputs.synthesize_tags(path, out))
 
 
 def _rationals(v): return np.array([a / b if b else 0.0 for a, b in zip(v[0::2], v[1::2])], float)
@@ -346,6 +346,11 @@ HIGHLIGHT_CONTRAST = 0.8        # highlight_detail: how much more contrast the b
 MAX_DARKER = 1.0                # protecting highlights may take the exposure at most this many stops below the median target (the shadows are lifted by the local tone recovery instead)
 
 
+def ev_stops(ev):
+    """The exposure change in stops for an `ev` setting other than 'auto': 'camera' (the exposure the camera itself gave the picture: the device profile's tone curve is the camera's own, so no change; 0) or a number of stops added to that."""
+    return 0.0 if ev == 'camera' else float(ev)
+
+
 def auto_ev(img, lut, target=TARGET_MEDIAN, stride=8):
     """The exposure change (stops, -1..MAX_EV): the one that puts the median luminance of the finished picture at `target` (found by bisection on a sample, through the whole finish), but no brighter than lets the brightest 0.5 % of the picture stay below white: white walls and windows keep their tone
     (a median-only rule pushed them into a flat plateau, while the camera's JPEG kept them). Never more than MAX_DARKER stops below the median rule."""
@@ -366,7 +371,11 @@ def _raw_u16(path, half):
     import rawpy
     try:
         with rawpy.imread(path) as r:
-            return r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+            out = r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+            z = r.sizes; k = 2 if half else 1
+            if os.path.splitext(path)[1].lower() != '.dng' and z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight):                              # a raw that is not a DNG has no DefaultCrop tag: the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here
+                return out[z.crop_top_margin // k: (z.crop_top_margin + z.crop_height) // k, z.crop_left_margin // k: (z.crop_left_margin + z.crop_width) // k]
+            return out
     except Exception as e:
         if not lineardng.is_linear(path): raise
         try: return lineardng.read(path, half)
@@ -404,7 +413,7 @@ def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None):
     img = cpu_colour(img, tags)
     be =float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = local_tone(np.clip(img, 0, None) * 2.0 ** be, recover); lut = tone_lut(inputs.tone_curve(tags))
-    g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else float(ev)); img = img * g
+    g = 2.0 ** (auto_ev(img, lut) if ev == 'auto' else ev_stops(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None          # the profile is for the raw values: after the gain, variance = S*g*v + O*g^2
     return dict(linear=img, lut=lut, noise=npf, gain=field, gain_ev=float(np.log2(g)))
 
@@ -489,7 +498,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
     img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); lut = tone_lut(inputs.tone_curve(tags)); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None
-    sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else float(ev)); img = img * g
+    sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else ev_stops(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
     sc = 0.0
     if npf is not None and denoise in ('auto', 'chroma'): sc = float(np.clip(visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1) * 0.6, 0.0, 1.5))

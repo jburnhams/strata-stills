@@ -241,3 +241,12 @@ def test_cpu_picture_is_developed_whole_only_if_its_peak_fits_its_share_of_memor
     with resources.batch(4): t48 = resources.cpu_tile(48e6); assert t48 is not None and 256 <= t48 <= 2048                                 # four at once share 11 GB: 2.8 GB each, too little for a whole 48 MP picture
     monkeypatch.setattr(resources, 'total_ram', lambda: 3e9); assert 256 <= resources.cpu_tile(48e6) < 2048; monkeypatch.setattr(resources, 'total_ram', lambda: 2e9); assert resources.cpu_tile(48e6) == resources.MIN_TILE      # a small machine: small tiles
     monkeypatch.setattr(resources, 'total_ram', lambda: 0); assert resources.cpu_tile(48e6) is None
+
+
+def test_exposure_setting_is_auto_camera_or_stops_from_the_cameras():
+    b = PL.get_preset('best')['stages']; ex = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['exposure']
+    assert ex({}) == 'auto' and ex(dict(exposure='camera')) == 'camera' and ex(dict(exposure=0)) == 'camera' and ex(dict(exposure='-1')) == -1.0 and ex(dict(exposure=0.5)) == 0.5
+    for bad in ('bright', 9, -6): 
+        with pytest.raises(P.ProjectError): PL.apply_options(b, dict(exposure=bad))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(exposure='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(exposure='camera'))) != k           # auto is the default: not part of the key
+    assert PL.summary(PL.apply_options(b, dict(exposure='camera'))).endswith('camera exposure') and PL.summary(PL.apply_options(b, dict(exposure=-1))).endswith('camera exposure -1 EV')

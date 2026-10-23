@@ -1,0 +1,6 @@
+Third-party material used or ported (see docs/progress.md for where):
+
+src/stratastills/sony_ilce7c_profile.json
+  ColorMatrix1/2 and illuminants of RawTherapee's rtdata/dcpprofiles/SONY ILCE-7C.dcp (made with Adobe DNG Converter, marked "public domain" in the profile).
+  NoiseTable: darktable's data/noiseprofiles.json entry for ILCE-7C (fits contributed by Mikko Tervala), darktable is GPL-3.0.
+  ProfileToneCurve: fitted here to the camera's own JPEGs (scripts/fit_tone_curve.py), after the method of LightCraft (https://github.com/storytold/lightcraft, MIT OR Apache-2.0); nothing copied.

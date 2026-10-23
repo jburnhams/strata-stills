@@ -5,9 +5,11 @@
   bundle       the file name (in this package) of the camera's own colour profile (colour matrices, hue/saturation map, tone curve: the tags its raw DNGs carry). Lightroom's panorama merge replaces them with Adobe Standard's (a stronger map, a look table, and the tone curve left to Lightroom's renderer: measured, the map alone takes saturation up to 2x and brightness up to 1.9x), so for files whose ProfileName says Adobe Standard the camera's own are put back: the pictures then look like the camera's other pictures
 To support a new device: add an entry here (and, if its files are a new kind, a reader beside lineardng.py) and a test; the pipelines themselves stay the same."""
 import json, os
+import numpy as np
 
 PROFILES = {
     ('dji', 'fc8482'): dict(label='DJI Mini 4 Pro', bundle='dji_fc8482_profile.json'),                                          # taken from its raw DNGs
+    ('sony', 'ilce-7c'): dict(label='Sony A7C', bundle='sony_ilce7c_profile.json'),                                             # RawTherapee's public-domain DCP (Adobe DNG Converter) + darktable's noise fits: scripts/build_profile_bundle.py
 }
 _cache = {}
 
@@ -34,6 +36,41 @@ def adjust_tags(tags):
     if name:
         for k, v in _bundle(name).items(): tags[k] = tuple(v) if isinstance(v, list) else v
         tags['ProfileName'] = 'Embedded'
+    return tags
+
+
+def _rat(vals, d=1000000): return tuple(x for v in vals for x in (int(round(float(v) * d)), d))
+
+
+def _iso(path):
+    import tifffile
+    try:
+        with tifffile.TiffFile(path) as t: return float(t.pages[0].tags['ExifTag'].value['ISOSpeedRatings'])
+    except Exception: return None
+
+
+def noise_profile(table, iso):
+    """The DNG NoiseProfile (S, O) for `iso` from a bundle's NoiseTable [[iso, S, O]]: interpolated between the neighbouring ISOs (S and O scale with the gain, so in log-log), the end ones beyond."""
+    t = sorted(table); xs = [np.log(r[0]) for r in t]
+    return tuple(float(np.exp(np.interp(np.log(iso), xs, [np.log(max(r[k], 1e-12)) for r in t]))) for k in (1, 2))
+
+
+def synthesize_tags(path, tags):
+    """A raw that is not a DNG (Sony .ARW ...) has no colour tags, so they are made here: the as-shot white balance from LibRaw, and the colour from the device's profile bundle when there is one (matrices and hue/saturation maps of a DNG profile; the noise profile for the shot's ISO), else LibRaw's own XYZ -> camera matrix (one matrix serves as both illuminants, so the weight between them does not matter). Tags the file has are kept."""
+    if 'ColorMatrix1' in tags or os.path.splitext(path)[1].lower() == '.dng': return tags
+    try:
+        import rawpy
+        with rawpy.imread(path) as r: m = r.rgb_xyz_matrix[:3]; wb = r.camera_whitebalance
+    except Exception: return tags
+    if wb[1] <= 0 or wb[0] <= 0 or wb[2] <= 0: return tags
+    tags['AsShotNeutral'] = _rat([wb[1] / wb[0], 1.0, wb[1] / wb[2]]); name = profile(tags.get('Make'), tags.get('Model')).get('bundle')
+    if name:
+        b = _bundle(name)
+        for k, v in b.items():
+            if k not in ('NoiseTable', 'ForwardMatrix1', 'ForwardMatrix2'): tags.setdefault(k, tuple(v) if isinstance(v, list) else v)
+        iso = _iso(path)
+        if 'NoiseTable' in b and iso: tags['NoiseProfile'] = noise_profile(b['NoiseTable'], iso)
+    elif m.any(): tags['ColorMatrix1'] = tags['ColorMatrix2'] = _rat(m.reshape(-1)); tags['CalibrationIlluminant1'] = 17; tags['CalibrationIlluminant2'] = 21; tags['ProfileName'] = 'LibRaw'
     return tags
 
 

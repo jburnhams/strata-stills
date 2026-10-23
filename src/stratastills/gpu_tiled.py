@@ -77,7 +77,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         if recover <= 0: return region
         ly = t.log2(gpu.luma(region).clamp_(min=1e-5)); base = gpu.sample_grid(base_s, ys, xs, H, W, 'bicubic'); kk = t.where(base > mid, 1 - D.HIGHLIGHTS * min(1.0, recover / 0.35), t.full_like(base, 1 - recover)); new = mid + (base - mid) * kk + (ly - base)
         return region * t.exp2(new - ly)[None]
-    sample = local_tone(t.from_numpy(np.ascontiguousarray(lin[:, ::8, ::8])).to(dv), sy, sx); g = 2.0 ** (D.auto_ev(gpu.to_numpy(sample), lut, stride=1) if ev == 'auto' else float(ev))
+    sample = local_tone(t.from_numpy(np.ascontiguousarray(lin[:, ::8, ::8])).to(dv), sy, sx); g = 2.0 ** (D.auto_ev(gpu.to_numpy(sample), lut, stride=1) if ev == 'auto' else D.ev_stops(ev))
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None; sc = 0.0
     if npf is not None and denoise in ('auto', 'chroma'): sc = float(np.clip(D.visible_noise(gpu.to_numpy(sample * g), npf, stride=1) * 0.6, 0.0, 1.5))
     del sample

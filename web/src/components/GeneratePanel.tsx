@@ -113,6 +113,11 @@ export default function GeneratePanel({ project, item, variant, onGenerated, onS
               </select>
             </label>
           )}
+          <label className="flex items-center gap-2">Exposure
+            <select aria-label="Exposure" className={field} value={String(stageValue(st, 'develop', 'exposure') ?? 'auto')} onChange={e => set({ exposure: e.target.value === 'auto' || e.target.value === 'camera' ? e.target.value : Number(e.target.value) })}>
+              <option value="auto">Auto (an even lightness)</option><option value="camera">Camera's own (like its JPEG)</option><option value="-1">Camera −1 EV</option><option value="1">Camera +1 EV</option>
+            </select>
+          </label>
           <label className="flex items-center gap-2">Highlight contrast
             <select aria-label="Highlight contrast" className={field} value={String(stageValue(st, 'develop', 'highlight_contrast'))} onChange={e => set({ highlight_contrast: Number(e.target.value) })}>
               <option value="0">Off</option><option value="0.8">Standard</option><option value="1.5">Strong</option>

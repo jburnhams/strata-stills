@@ -194,3 +194,17 @@ def test_limit_chroma_leaves_soft_colour_alone_and_rolls_off_strong_colour_keepi
     soft = np.full((2, 2, 3), 0.5, np.float32); soft[..., 0] = 0.55; strong = np.zeros((2, 2, 3), np.float32); strong[...] = [0.95, 0.45, 0.05]
     assert np.allclose(D.limit_chroma(soft), soft, atol=1e-6); out = D.limit_chroma(strong); w = np.array([0.2126, 0.7152, 0.0722])
     assert abs(out[0, 0] @ w - strong[0, 0] @ w) < 1e-4 and (out[0, 0].max() - out[0, 0].min()) < (strong[0, 0].max() - strong[0, 0].min())
+
+def test_a_non_dng_raw_is_cut_to_the_makers_active_area(monkeypatch):
+    import contextlib, sys, types
+    from types import SimpleNamespace as NS
+    z = NS(iwidth=24, iheight=16, crop_width=20, crop_height=12, crop_left_margin=2, crop_top_margin=4)
+    class R:
+        sizes = z
+        def postprocess(self, half_size, **kw): n = 2 if half_size else 1; return np.zeros((16 // n, 24 // n, 3), np.uint16)
+    mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+    assert D._raw_u16('x.arw', False).shape == (12, 20, 3) and D._raw_u16('x.arw', True).shape == (6, 10, 3) and D._raw_u16('x.dng', False).shape == (16, 24, 3)
+
+
+def test_camera_exposure_is_no_change_and_a_number_is_stops_from_it():
+    assert D.ev_stops('camera') == 0.0 and D.ev_stops(1) == 1.0 and D.ev_stops('-0.5') == -0.5
