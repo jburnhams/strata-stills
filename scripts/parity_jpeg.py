@@ -34,7 +34,7 @@ def local(A, J, cj):
 
 def proxies(raw, jpg, ev, sheet=None):
     """(ours, the camera's) as uint8 RGB at 1/8 of the JPEG's size, or None when there is no match (ev 'match' without a usable preview)."""
-    if ev == 'match': c = tonematch.curve_for(raw); a = develop.develop(raw, half=True, ev='camera', tone=c) if c else None
+    if ev == 'match': c = tonematch.curve_for(raw, 0.0); a = develop.develop(raw, half=True, ev='camera', tone=c, recover=0.0) if c else None                                   # the pipeline's rule: no local tone step with a matched tone
     else: a = develop.develop(raw, half=True, ev=ev)
     if a is None: return None
     a = (np.clip(a, 0, 1) * 255 + 0.5).astype(np.uint8); j = cv2.imread(jpg, cv2.IMREAD_COLOR)[..., ::-1]

@@ -1,6 +1,6 @@
 """Pipelines: making a finished picture out of a source variant is a sequence of STAGES, each with its own settings and its own version, so a pipeline is just data: a config (a list of stage settings) that can be saved as a named PRESET, run on one item from the app, or applied by RULES to every item of a source folder.
 
-  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera', 'match' or stops from the camera's)
+  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera', 'match' or stops from the camera's), recover (local tone: 'auto' or 0..1)
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
@@ -43,10 +43,19 @@ def _exposure(v):
     return 'camera' if n == 0 else n
 
 
+def _recover(v):
+    """How hard the local tone step squeezes bright regions and lifts shadows: 'auto' (0.35, but 0 with `exposure: match`: the matched tone is the camera's own global curve, and a local tone step on top of it moved the highlights and shadows away from the camera's JPEG: DSC00449-00451 colour difference 4.1 -> 2.3), or a number from 0 to 1."""
+    if str(v).lower() == 'auto': return 'auto'
+    try: n = round(float(v), 3)
+    except (TypeError, ValueError): raise P.ProjectError("develop recover is 'auto' or a number from 0 to 1")
+    if not 0 <= n <= 1: raise P.ProjectError('recover must be between 0 and 1')
+    return n
+
+
 def _develop_params(p):
     m = str(p.get('match', 'auto')).lower()
     if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
-    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
+    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
@@ -104,8 +113,9 @@ def _reference_picture(item):
 
 def run_develop(st, p):
     st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
+    rec = p.get('recover', 'auto'); rec = (0.0 if ev == 'match' else 0.35) if rec == 'auto' else rec; kw['recover'] = rec
     if ev == 'match' and X._is_camera_raw(st.path):                                                                       # the tone of the camera's own JPEG of this picture, kept with it so that it can be adjusted later
-        st.say('matching the tone of the camera JPEG'); curve = tonematch.curve_for(st.path); st.rec['tone'] = dict(source='the JPEG inside the raw', **curve) if curve else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): the camera exposure and the device tone curve are used')
+        st.say('matching the tone of the camera JPEG'); curve = tonematch.curve_for(st.path, rec); st.rec['tone'] = dict(source='the JPEG inside the raw', **curve) if curve else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): the camera exposure and the device tone curve are used')
         if curve: kw['tone'] = curve
         ev = 'camera'
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
@@ -188,7 +198,7 @@ def normalize(stages):
 def apply_options(stages, options):
     """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
     st = [dict(s) for s in stages]; o = dict(options or {})
-    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure'}
+    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover'}
     if unknown: raise P.ProjectError(f'unknown option {sorted(unknown)[0]!r}')
 
     def get(name): return next((s for s in st if s['stage'] == name), None)
@@ -201,6 +211,7 @@ def apply_options(stages, options):
     if o.get('highlight_contrast') is not None: ensure('develop', highlight_contrast=o['highlight_contrast'])
     if o.get('match') is not None: ensure('develop', match=o['match'])
     if o.get('exposure') is not None: ensure('develop', exposure=o['exposure'])
+    if o.get('recover') is not None: ensure('develop', recover=o['recover'])
     if o.get('size') is not None: ensure('resize', size=o['size'])
     if o.get('level') is False: st = [s for s in st if s['stage'] != 'level']
     elif o.get('level') is True: ensure('level')
@@ -258,7 +269,7 @@ def resolve(preset=None, options=None, stages=None):
 
 def stage_key(iid, variant_id, stages):
     """A short identity of what is made: the item, the source variant, and every stage's settings and version."""
-    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k in ('match', 'exposure') and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
+    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k in ('match', 'exposure', 'recover') and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
 
 
 def summary(stages):

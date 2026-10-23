@@ -476,7 +476,7 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
     sig8 = noise_map8(img, npf, gain=field) if npf is not None else None
-    out = limit_chroma(chroma_scale(finish(img, lut), chroma))
+    out = limit_chroma(chroma_scale(finish(img, lut), chroma), None if chroma is None else 0.0)                                  # a matched look has its own colour scale: the roll-off of strong colours that tames a curve applied per channel would only undo it
     if classical:
         out = clean_colour(out, sig8)
         if denoise in ('auto', 'ai'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
@@ -515,7 +515,7 @@ def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=N
     if classical and sc > 0.3:                                                                                         # denoise_linear: colour noise blurred in proportion to the noise
         y = gpu.luma(img); cc = gpu.gaussian(img - y[None], sc); img = (y[None] + cc).clamp_(min=0)
     sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
-    out = gpu.limit_chroma(gpu.chroma_scale(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), chroma_t), CHROMA_KNEE, CHROMA_CEIL)
+    out = gpu.limit_chroma(gpu.chroma_scale(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), chroma_t), CHROMA_KNEE if chroma_t is None else 0.0, CHROMA_CEIL)
     if classical:
         out = gpu.clean_colour(out, sig8)
         if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)

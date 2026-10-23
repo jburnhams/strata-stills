@@ -250,3 +250,11 @@ def test_exposure_setting_is_auto_camera_or_stops_from_the_cameras():
         with pytest.raises(P.ProjectError): PL.apply_options(b, dict(exposure=bad))
     k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(exposure='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(exposure='camera'))) != k           # auto is the default: not part of the key
     assert PL.summary(PL.apply_options(b, dict(exposure='camera'))).endswith('camera exposure') and PL.summary(PL.apply_options(b, dict(exposure=-1))).endswith('camera exposure -1 EV')
+
+
+def test_recover_setting_is_auto_or_a_number_and_auto_is_left_out_of_the_key():
+    b = PL.get_preset('best')['stages']; rc = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['recover']
+    assert rc({}) == 'auto' and rc(dict(recover=0)) == 0.0 and rc(dict(recover='0.2')) == 0.2
+    for bad in ('lots', -0.1, 1.5):
+        with pytest.raises(P.ProjectError): PL.apply_options(b, dict(recover=bad))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(recover='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(recover=0))) != k

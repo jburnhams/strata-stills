@@ -12,6 +12,7 @@ N0 = 300                                    # a cell with this many pixels is be
 
 
 def build(folder, cache, ext='.ARW'):
+    D.look_table = lambda spec: None                      # the pairs are what the pipeline makes BEFORE the look table (the one being fitted)
     stems, A, J = [], [], []
     for r in sorted(glob.glob(os.path.join(folder, '*' + ext))):
         jpg = os.path.splitext(r)[0] + '.JPG'

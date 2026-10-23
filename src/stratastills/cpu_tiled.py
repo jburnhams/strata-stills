@@ -74,7 +74,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         img = local_tone(np.ascontiguousarray(lin[ry0:ry1, rx0:rx1]), ys, xs) * g
         if sc > 0.3: y = img @ LUMA; c = cv2.GaussianBlur(img - y[..., None], (0, 0), sc); img = np.clip(y[..., None] + c, 0, None)
         field = _sample(field_src[0][:, :, min(field_src[1], field_src[0].shape[2] - 1)], ys, xs, H, W, cv2.INTER_LINEAR) if field_src is not None else None
-        sig8 = D.noise_map8(img, npf, gain=field) if npf is not None else None; res = D.limit_chroma(D.chroma_scale(D.finish(img, lut), chroma)); del img
+        sig8 = D.noise_map8(img, npf, gain=field) if npf is not None else None; res = D.limit_chroma(D.chroma_scale(D.finish(img, lut), chroma), None if chroma is None else 0.0); del img
         if classical:
             res = D.clean_colour(res, sig8)
             if denoise == 'auto': res = D.core_luma(res, sig8)
