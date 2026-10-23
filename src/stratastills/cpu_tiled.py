@@ -34,9 +34,9 @@ def _analysis_luma(u16, rows=1024):
     return out
 
 
-def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=2048, halo=HALO, tone=None):
+def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=2048, halo=HALO, tone=None, lens='auto'):
     """develop.develop (backend 'cpu', denoise 'auto', 'chroma' or 'off') for a picture too big for the memory it may use: the same result (float32 RGB (H, W, 3), 0..1), made in tiles of `tile` pixels. `u16`: the decoded raw (H, W, 3) uint16."""
-    tags = D.read_dng_tags(path); H, W = u16.shape[:2]; gains, warp = _opcodes(tags)
+    tags = D.read_dng_tags(path, lens); H, W = u16.shape[:2]; gains, warp = _opcodes(tags)
     if analysis is not None: analysis['luma'] = _analysis_luma(u16)
     be = float(D._rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0; field_src = (gains[-1][0], min(1, gains[-1][2] - 1)) if gains else None
     # ---- pass A

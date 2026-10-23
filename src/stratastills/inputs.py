@@ -55,14 +55,19 @@ def noise_profile(table, iso):
     return tuple(float(np.exp(np.interp(np.log(iso), xs, [np.log(max(r[k], 1e-12)) for r in t]))) for k in (1, 2))
 
 
-def synthesize_tags(path, tags):
+def synthesize_tags(path, tags, lens='auto'):
     """A raw that is not a DNG (Sony .ARW ...) has no colour tags, so they are made here: the as-shot white balance from LibRaw, and the colour from the device's profile bundle when there is one (matrices and hue/saturation maps of a DNG profile; the noise profile for the shot's ISO), else LibRaw's own XYZ -> camera matrix (one matrix serves as both illuminants, so the weight between them does not matter). Tags the file has are kept."""
     if 'ColorMatrix1' in tags or os.path.splitext(path)[1].lower() == '.dng': return tags
     try:
         import rawpy
-        with rawpy.imread(path) as r: m = r.rgb_xyz_matrix[:3]; wb = r.camera_whitebalance
+        with rawpy.imread(path) as r:
+            m = r.rgb_xyz_matrix[:3]; wb = r.camera_whitebalance; z = r.sizes; w, h = (z.crop_width, z.crop_height) if z.crop_width else (z.iwidth, z.iheight); w, h = (h, w) if z.flip in (5, 6) else (w, h)
     except Exception: return tags
     if wb[1] <= 0 or wb[0] <= 0 or wb[2] <= 0: return tags
+    if lens != 'off' and 'OpcodeList3' not in tags:                                                                           # the camera's own shading, distortion and colour-fringe tables, as the opcodes a DNG would carry (lenscorr.py)
+        from stratastills import lenscorr
+        ops = lenscorr.from_file(path, w, h)
+        if ops: tags['OpcodeList3'] = ops
     tags['AsShotNeutral'] = _rat([wb[1] / wb[0], 1.0, wb[1] / wb[2]]); name = profile(tags.get('Make'), tags.get('Model')).get('bundle')
     if name:
         b = _bundle(name)

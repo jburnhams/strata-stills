@@ -80,9 +80,9 @@ def match_curve(linear, jpeg):
     return dict(curve=curve, chroma=[round(float(v), 4) for p in zip(xs, ss) for v in p])
 
 
-def curve_for(path, recover=0.35):
+def curve_for(path, recover=0.35, lens='auto'):
     """`match_curve` for a raw file: developed at half size with the colour and local tone of the normal recipe and no tone curve, against the preview in the file. None when there is no usable preview."""
     from stratastills import develop
     j = embedded_jpeg(path)
     if j is None: return None
-    return match_curve(develop.develop_parts(path, half=True, ev=0.0, recover=recover)['linear'], j)
+    return match_curve(develop.develop_parts(path, half=True, ev=0.0, recover=recover, lens=lens)['linear'], j)

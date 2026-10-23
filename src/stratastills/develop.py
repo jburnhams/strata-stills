@@ -27,8 +27,8 @@ class DevelopError(RuntimeError): pass
 
 # ---- what the DNG says ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-def read_dng_tags(path):
-    """The DNG tags this module uses, from the raw IFD (and the main IFD): {name: value}. Missing ones are left out."""
+def read_dng_tags(path, lens='auto'):
+    """The DNG tags this module uses, from the raw IFD (and the main IFD): {name: value}. Missing ones are left out. `lens` 'auto': the correction the file carries is applied (a DNG's opcodes; for a raw that is not a DNG, the camera's own tables made into the same opcodes: lenscorr.py); 'off': none."""
     import tifffile
     want = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2', 'AsShotNeutral', 'BaselineExposure', 'NoiseProfile', 'ProfileToneCurve', 'OpcodeList3', 'BlackLevel', 'WhiteLevel', 'ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding', 'Make', 'Model', 'ProfileName')
     out = {}
@@ -37,7 +37,8 @@ def read_dng_tags(path):
         for pg in pages:
             for tag in pg.tags.values():
                 if tag.name in want and tag.name not in out: out[tag.name] = tag.value
-    return inputs.adjust_tags(inputs.synthesize_tags(path, out))
+    if lens == 'off': out.pop('OpcodeList3', None)
+    return inputs.adjust_tags(inputs.synthesize_tags(path, out, lens))
 
 
 def _rationals(v): return np.array([a / b if b else 0.0 for a, b in zip(v[0::2], v[1::2])], float)
@@ -440,9 +441,9 @@ def cpu_colour(img, tags):
     return img
 
 
-def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None, tone=None):
+def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None, tone=None, lens='auto'):
     """The development up to, but not including, the final tone curve: {linear: exposed linear sRGB-primaries picture (float32), lut, noise: the NoiseProfile scaled for the exposure gain (or None), gain: the lens-shading field (or None), gain_ev}. `develop` finishes it; experiments and the export can look inside."""
-    tags = read_dng_tags(path); img = _raw_linear(path, half) if u16 is None else u16.astype(np.float32) / 65535.0; field = None
+    tags = read_dng_tags(path, lens); img = _raw_linear(path, half) if u16 is None else u16.astype(np.float32) / 65535.0; field = None
     if 'OpcodeList3' in tags:
         for oid, p in parse_opcodes(tags['OpcodeList3']):
             if oid == 9:
@@ -457,21 +458,21 @@ def develop_parts(path, half=False, ev='auto', recover=0.35, u16=None, tone=None
     return dict(linear=img, lut=lut, chroma=chroma, noise=npf, gain=field, gain_ev=float(np.log2(g)))
 
 
-def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST, backend='auto', analysis=None, tone=None):
+def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=None, strength=None, highlight_contrast=HIGHLIGHT_CONTRAST, backend='auto', analysis=None, tone=None, lens='auto'):
     """The finished picture (float32 RGB, 0..1, sRGB encoded). `denoise`:
       'auto'    the classical clean-up (default): colour noise and fringes removed edge-aware and cored to grey, colour rolled off near white, the luminance grain cored band by band (clean_colour, core_luma), with the lens-shading gain counted in the noise map so the lifted corners are cored harder
       'ai'      'auto' plus a learned model (`model`, `strength`: denoise_ai) where the noise is visible
       'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere.
-    `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `tone`: a tone curve (pairs of linear input, display-encoded output, as ProfileToneCurve) to use instead of the file's or its device's (tonematch.py makes one that matches the camera's own JPEG). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
-    if backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available()): return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone)
+    `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `lens`: 'auto' applies the correction data of the file (lenscorr.py), 'off' none. `tone`: a tone curve (pairs of linear input, display-encoded output, as ProfileToneCurve) to use instead of the file's or its device's (tonematch.py makes one that matches the camera's own JPEG). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
+    if backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available()): return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
     u16 = _raw_u16(path, half)
     if denoise in ('auto', 'chroma', 'off'):                                                                                  # a picture too big for the memory it may use is developed in tiles (cpu_tiled.py)
         tile = resources.cpu_tile(u16.shape[0] * u16.shape[1])
         if tile:
-            try: return cpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tile, tone=tone)
+            try: return cpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tile, tone=tone, lens=lens)
             except cpu_tiled.Unsupported: pass
     if analysis is not None: analysis['luma'] = analysis_luma(path, None if half else u16)
-    P = develop_parts(path, half, ev, recover, u16=u16, tone=tone); img, lut, npf, field, chroma = P['linear'], P['lut'], P['noise'], P['gain'], P['chroma']
+    P = develop_parts(path, half, ev, recover, u16=u16, tone=tone, lens=lens); img, lut, npf, field, chroma = P['linear'], P['lut'], P['noise'], P['gain'], P['chroma']
     classical = denoise in ('auto', 'ai', 'chroma') and npf is not None
     if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
@@ -487,15 +488,15 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     return out
 
 
-def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None):
+def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None, lens='auto'):
     """The raw is decoded first (LibRaw, on the CPU, holding no device slot, so another picture can be on the card meanwhile); then the picture takes a device slot for the rest. A picture too big for the card (gpu.max_pixels) is developed in tiles (gpu_tiled.py); if that cannot be done for its opcodes, a reduced copy that fits is developed instead."""
     u16 = _raw_u16(path, half); limit = gpu.max_pixels()
     with gpu.slot():
         if limit and u16.shape[0] * u16.shape[1] > limit:
-            try: return gpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tone=tone)
+            try: return gpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens)
             except gpu_tiled.Unsupported:
                 k = (limit / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
-        return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone)
+        return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
 
 
 def gpu_colour(img, tags):
@@ -523,9 +524,9 @@ def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=N
     return out
 
 
-def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None):
+def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None, lens='auto'):
     """`develop` on the GPU: the same recipe step for step (see gpu.py for the functions and tests/unit/test_gpu.py for the proof they agree with the CPU ones); the picture stays on the card until the finished float32 array comes back."""
-    t = gpu.torch_(); tags = read_dng_tags(path); img = gpu.to_gpu_u16(u16); field = None
+    t = gpu.torch_(); tags = read_dng_tags(path, lens); img = gpu.to_gpu_u16(u16); field = None
     if analysis is not None:                                                                                      # analysis_luma from this decode: nothing done that changes sharpness, exposed so the median is 0.18, gamma-encoded
         y = gpu.luma(img); med = max(gpu._median(y[::8, ::8]), 1e-5); analysis['luma'] = gpu.to_numpy(gpu.srgb_oetf(y * (0.18 / med))); del y
     if 'OpcodeList3' in tags:

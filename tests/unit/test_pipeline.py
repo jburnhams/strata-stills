@@ -258,3 +258,10 @@ def test_recover_setting_is_auto_or_a_number_and_auto_is_left_out_of_the_key():
     for bad in ('lots', -0.1, 1.5):
         with pytest.raises(P.ProjectError): PL.apply_options(b, dict(recover=bad))
     k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(recover='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(recover=0))) != k
+
+
+def test_lens_setting_is_auto_or_off_and_auto_is_left_out_of_the_key():
+    b = PL.get_preset('best')['stages']; ln = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['lens']
+    assert ln({}) == 'auto' and ln(dict(lens='off')) == 'off'
+    with pytest.raises(P.ProjectError): PL.apply_options(b, dict(lens='maybe'))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(lens='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(lens='off'))) != k and PL.summary(PL.apply_options(b, dict(lens='off'))).endswith('no lens correction')

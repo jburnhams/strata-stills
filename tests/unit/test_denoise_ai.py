@@ -32,7 +32,7 @@ def test_adaptive_blends_by_the_noise_map_and_only_asks_for_noisy_tiles(monkeypa
 
 def test_develop_uses_the_model_where_the_profile_says_noise_is_visible(monkeypatch):
     rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32); calls = []
-    tags = dict(NoiseProfile=(0.0004, 1e-7)); monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
+    tags = dict(NoiseProfile=(0.0004, 1e-7)); monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
     monkeypatch.setattr(A, 'available', lambda m=None: True); monkeypatch.setattr(A, 'adaptive', lambda rgb, s, m=None, st=None: calls.append(s.shape) or rgb)
     out = D.develop('x.dng', half=True, denoise='ai'); assert calls == [(60, 80)] and out.shape == raw.shape
     calls.clear(); D.develop('x.dng', half=True); assert calls == []                                                                              # the default is the classical clean-up: no model

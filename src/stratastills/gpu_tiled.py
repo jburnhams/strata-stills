@@ -47,9 +47,9 @@ def _analysis_luma(u16, rows=1024):
     return out
 
 
-def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=None, halo=HALO, tone=None):
+def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=None, tile=None, halo=HALO, tone=None, lens='auto'):
     """develop._develop_gpu_on_device for a picture too big for the card: the same result (float32 RGB (H, W, 3), 0..1), made in tiles. `u16`: the decoded raw (H, W, 3) uint16."""
-    tile = tile or gpu.tile_size(halo); t = gpu.torch_(); tags = D.read_dng_tags(path); H, W = u16.shape[:2]; dv = gpu.dev(); gains, warp = _opcodes(tags); field_map = None
+    tile = tile or gpu.tile_size(halo); t = gpu.torch_(); tags = D.read_dng_tags(path, lens); H, W = u16.shape[:2]; dv = gpu.dev(); gains, warp = _opcodes(tags); field_map = None
     if analysis is not None: analysis['luma'] = _analysis_luma(u16)
     if warp is not None and not gpu.cubic_ok(): raise Unsupported('this device has no bicubic sampling')
     be = float(D._rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0

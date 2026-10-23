@@ -57,7 +57,7 @@ def test_describe_tells_the_kind_of_file(tmp_path):
 
 def fake_raw(monkeypatch, wb=(2000.0, 1024.0, 1900.0, 1024.0)):
     import contextlib, sys, types
-    r = NS(rgb_xyz_matrix=np.array([[0.7, -0.2, -0.05], [-0.5, 1.3, 0.25], [-0.1, 0.18, 0.65], [0, 0, 0]]), camera_whitebalance=list(wb))
+    r = NS(rgb_xyz_matrix=np.array([[0.7, -0.2, -0.05], [-0.5, 1.3, 0.25], [-0.1, 0.18, 0.65], [0, 0, 0]]), camera_whitebalance=list(wb), sizes=NS(crop_width=60, crop_height=40, iwidth=62, iheight=42, flip=0))
     mod = types.ModuleType('rawpy'); mod.imread = lambda path: contextlib.nullcontext(r); monkeypatch.setitem(sys.modules, 'rawpy', mod)
 
 

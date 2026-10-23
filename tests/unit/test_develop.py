@@ -92,10 +92,10 @@ def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
     neutral = (4096, 9776, 4096, 4096, 4096, 6393); cm = tuple(v for x in ((12758, 10000), (-6160, 10000), (916, 10000), (-5992, 10000), (14682, 10000), (5340, 10000), (-251, 10000), (792, 10000), (9511, 10000)) for v in x)
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=neutral, BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(np.repeat(np.linspace(0, 1, 16) ** 0.5, 2)[:0]) or tuple(v for x in np.linspace(0, 1, 16) for v in (x, x ** 0.5)),
                 OpcodeList3=opcode_list((9, gain_param(np.full((4, 4, 3), 1.5, np.float32))), (1, warp_param([(1, 0, 0, 0, 0, 0)] * 3))))
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
     out = D.develop('x.dng', half=True); assert out.shape == raw.shape and out.dtype == np.float32 and 0.3 < np.median(out) < 0.6 and np.isfinite(out).all()
     assert D.develop('x.dng', ev=-3.0, denoise='off', recover=0).mean() < out.mean()
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: {}); assert D.develop('x.dng', ev=0).shape == raw.shape                  # a file with none of the tags is still developed
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': {}); assert D.develop('x.dng', ev=0).shape == raw.shape                  # a file with none of the tags is still developed
 
 
 def test_analysis_luma_is_gamma_encoded_and_full_size(monkeypatch):
@@ -162,7 +162,7 @@ def test_band_coring_removes_mottling_at_two_to_four_pixels_but_keeps_edges_and_
 
 def test_the_contrast_boost_runs_after_the_grain_is_cored(monkeypatch):
     order = []; rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32)
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16)); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16)); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     monkeypatch.setattr(D, 'core_luma', lambda r, s, k=None: order.append('core') or r); monkeypatch.setattr(D, 'highlight_detail', lambda r, a=1.0, lo=0.62, hi=0.92: order.append('contrast') or r)
     D.develop('x.dng', half=True, backend='cpu'); assert order == ['core', 'contrast']
 

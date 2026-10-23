@@ -118,7 +118,7 @@ def synthetic_dng(monkeypatch, h=240, w=320, seed=3):
     wp = struct.pack('>I', 3) + b''.join(struct.pack('>6d', *cf) for cf in ((0.953, -4e-5, 6e-4, -4e-4, 0, 0), (0.953, 0, 0, 0, 0, 0), (0.9532, -6.6e-4, 2.8e-4, 1.2e-4, 0, 0))) + struct.pack('>2d', 0.5, 0.5)
     ops = struct.pack('>I', 2) + struct.pack('>IIII', 9, 0x01030000, 0, len(gp)) + gp + struct.pack('>IIII', 1, 0x01030000, 0, len(wp)) + wp
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=(4096, 9776, 4096, 4096, 4096, 6393), BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(v for x in np.linspace(0, 1, 64) for v in (x, x ** 0.6)), OpcodeList3=ops)
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     return raw
 
 
