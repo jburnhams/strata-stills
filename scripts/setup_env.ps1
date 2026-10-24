@@ -13,6 +13,11 @@ Say "torch ($Cuda)"
 & $Py -m pip install torch --index-url "https://download.pytorch.org/whl/$Cuda"
 Say 'requirements'
 & $Py -m pip install -r (Join-Path $Root 'requirements.txt')
+Say 'learned denoise (Real-ESRGAN weights, 9 MB, into models/): spandrel without its dependencies, so that it cannot replace the torch just installed'
+& $Py -m pip install torchvision --index-url "https://download.pytorch.org/whl/$Cuda"
+& $Py -m pip install einops safetensors
+& $Py -m pip install --no-deps spandrel==0.4.2
+$env:PYTHONPATH = Join-Path $Root 'src'; & $Py -c "from stratastills import denoise_ai; denoise_ai.fetch()"
 if ($WithVision) {
   Say 'detector and denoising models'
   & $Py -m pip install -r (Join-Path $Root 'requirements-vision.txt')
