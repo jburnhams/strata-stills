@@ -30,12 +30,13 @@ def _bundle(name):
 
 
 def adjust_tags(tags):
-    """The DNG tags to develop with: a file Lightroom wrote with the Adobe Standard profile gets its device's own colour profile (see `bundle`); anything else is returned as it is (the dict is changed in place)."""
-    if _text(tags.get('ProfileName')) != 'adobe standard': return tags
+    """The DNG tags to develop with: a file Lightroom wrote with the Adobe Standard profile gets its device's own colour profile (see `bundle`); and every file whose device profile has a `LookTable` (the hue/saturation look fitted to the camera's JPEGs: scripts/fit_look_table.py) gets it, whatever kind of file it is (the dict is changed in place)."""
     name = profile(tags.get('Make'), tags.get('Model')).get('bundle')
-    if name:
+    if not name: return tags
+    if _text(tags.get('ProfileName')) == 'adobe standard':
         for k, v in _bundle(name).items(): tags[k] = tuple(v) if isinstance(v, list) else v
         tags['ProfileName'] = 'Embedded'
+    if 'LookTable' in _bundle(name): tags.setdefault('LookTable', _bundle(name)['LookTable'])
     return tags
 
 

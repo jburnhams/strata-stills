@@ -82,3 +82,10 @@ def test_a_non_dng_raw_of_an_unknown_camera_gets_libraws_matrix(monkeypatch):
 def test_files_that_have_colour_tags_or_are_dng_are_left_alone(monkeypatch):
     fake_raw(monkeypatch); own = dict(Make='SONY', Model='ILCE-7C', ColorMatrix1=(1, 2)); assert inputs.synthesize_tags('x.arw', dict(own)) == own
     plain = dict(Make='SONY', Model='ILCE-7C'); assert inputs.synthesize_tags('x.dng', dict(plain)) == plain
+
+
+def test_a_device_looktable_reaches_every_kind_of_file_of_that_device(monkeypatch):
+    spec = dict(hue=24, data=[0.0, 1.0] * (24 * 5)); monkeypatch.setitem(inputs.PROFILES, ('acme', 'x1'), dict(label='Acme', bundle='acme_profile.json')); monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict(LookTable=spec, ColorMatrix1=[1, 1]))
+    t = inputs.adjust_tags(dict(Make='ACME', Model='X1', ColorMatrix1=(5, 1))); assert t['LookTable'] == spec and t['ColorMatrix1'] == (5, 1)                                  # a file of the device that has its own colour tags keeps them
+    t = inputs.adjust_tags(dict(Make='ACME', Model='X1', ProfileName='Adobe Standard', ColorMatrix1=(5, 1))); assert t['LookTable'] == spec and t['ColorMatrix1'] == (1, 1) and t['ProfileName'] == 'Embedded'
+    assert 'LookTable' not in inputs.adjust_tags(dict(Make='Nobody', Model='Y'))

@@ -203,3 +203,22 @@ def test_the_cpu_development_goes_through_tiles_when_memory_is_short(monkeypatch
 def test_hue_look_matches():
     y = (RNG.random((50, 60, 3)) * 0.9 + 0.05).astype(np.float32); h = 24; tab = np.dstack([RNG.normal(0, 8, (h, len(D.LOOK_CHROMA))), 1 + RNG.normal(0, 0.1, (h, len(D.LOOK_CHROMA)))]).astype(np.float32); lut = (0.5 + RNG.random(64)).astype(np.float32)
     for look in ((lut, tab), (None, tab), (lut, None)): assert np.abs(c(gpu.chroma_scale(g(y), gpu.look_to(look, gpu.dev()))) - D.chroma_scale(y, look)).max() < 2e-4
+
+
+def test_the_matched_tone_made_on_the_card_agrees_with_the_cpu_route(monkeypatch):
+    from stratastills import tonematch
+    synthetic_dng(monkeypatch); lin = D.develop_parts('x.dng', half=False, ev=0.0, recover=0.0)['linear']; y = lin @ D._W; yenc = np.clip((y * 4.0) ** 0.5, 0, 1)
+    jpg = (np.clip(yenc[..., None] + (D.srgb_oetf(np.clip(lin, 0, 1)) - D.srgb_oetf(np.clip(y, 0, 1))[..., None]) * 0.7, 0, 1) * 255 + 0.5).astype(np.uint8)
+    monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: jpg); a_cpu, a_gpu = {}, {}
+    cpu = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='cpu', analysis=a_cpu); gp = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a_gpu)
+    assert a_cpu['tone'] and a_gpu['tone'] and set(a_gpu['tone']) == {'curve', 'chroma'}
+    ck = np.asarray(a_cpu['tone']['curve']).reshape(-1, 2); gk = np.asarray(a_gpu['tone']['curve']).reshape(-1, 2)
+    for v in (0.02, 0.1, 0.3): assert abs(np.interp(v, ck[:, 0], ck[:, 1]) - np.interp(v, gk[:, 0], gk[:, 1])) < 0.03                                                     # the same curve, from a half-size CPU development and from the full one shrunk on the card
+    d = np.abs(gp - cpu); assert gp.shape == cpu.shape and d.mean() < 0.01, d.mean()
+
+
+def test_no_usable_preview_falls_back_to_the_fixed_lightness_rule(monkeypatch):
+    from stratastills import tonematch
+    synthetic_dng(monkeypatch); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None); a = {}
+    auto = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a); assert a['tone'] is None and np.allclose(auto, D.develop('x.dng', ev='auto', recover=0.35, backend='gpu'), atol=1e-6)
+    assert np.isfinite(D.develop('x.dng', ev='match', recover='auto', tone='match', backend='gpu', analysis={})).all()

@@ -119,15 +119,11 @@ def _reference_picture(item):
 
 def run_develop(st, p):
     st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
-    lens = p.get('lens', 'auto'); kw['lens'] = lens; rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path)
-    if ev in ('auto', 'match') and raw:                                                                                   # the tone of the camera's own JPEG of this picture (the preview in the raw), kept with it so that it can be adjusted later; `auto` falls back to the fixed lightness rule when the file has no usable preview, `match` to the camera's exposure
-        st.say('matching the tone of the camera JPEG'); curve = tonematch.curve_for(st.path, 0.0 if rec == 'auto' else rec, lens)
-        st.rec['tone'] = dict(source='the JPEG inside the raw', **curve) if curve else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): ' + ('the exposure is set by the picture itself' if ev == 'auto' else 'the camera exposure and the device tone curve are used'))
-        if curve: kw['tone'] = curve; ev = 'camera'
-        elif ev == 'match': ev = 'camera'
-        kw['recover'] = (0.0 if curve else 0.35) if rec == 'auto' else rec
+    lens = p.get('lens', 'auto'); kw['lens'] = lens; rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path); matching = ev in ('auto', 'match') and raw
+    if matching: st.say('matching the tone of the camera JPEG'); kw['tone'] = 'match'; kw['recover'] = rec           # the tone of the camera's own JPEG of this picture (the preview in the raw), found by the develop itself (on the card when there is one) and kept with the picture so that it can be adjusted later; `auto` falls back to the fixed lightness rule when the file has no usable preview, `match` to the camera's exposure
     else: kw['recover'] = 0.35 if rec == 'auto' else rec
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
+    if matching: tone = an.get('tone'); st.rec['tone'] = dict(source='the JPEG inside the raw', **tone) if tone else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): ' + ('the exposure is set by the picture itself' if ev == 'auto' else 'the camera exposure and the device tone curve are used'))
     st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
     if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
         refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
