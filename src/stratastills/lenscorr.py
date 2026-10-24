@@ -1,4 +1,4 @@
-"""Lens correction made into the DNG opcodes the development already applies (see from_file for where each part comes from: the camera's own shading table, the lensfun profile of the lens; and see USE_EMBEDDED_GEOMETRY for why the camera's distortion table is not used).
+"""Lens correction made into the DNG opcodes the development already applies (see from_file for where each part comes from: the camera's own shading table, the lensfun profile of the lens; and see the note above from_file for when the camera's distortion table is the geometry).
 The camera's own tables, as the development reads them: the data of a Sony ARW (develop.py: GainMap for the shading, WarpRectilinear for distortion and lateral colour), so every path (CPU, GPU, tiled) corrects a raw that is not a DNG the way it corrects a DJI DNG, with no new code in the paths.
 Sony ARWs record, per shot, three correction tables in the raw image's IFD, each as a count and 16 values on knots at (i + 0.5) / (n - 1) of the radius from the centre (1 = the corner): shading (0x7032, with its setting 0x7031), lateral chromatic aberration (0x7035: the red then the blue scale, setting 0x7034) and distortion (0x7037, setting 0x7036). The conventions are those RawTherapee and darktable use for them (rtengine/lensmetadata.cc, adapted there from darktable's iop/lens.cc and common/exif.cc; GPL-3.0): distortion factor 1 + d * 2^-14, colour scale 1 + c * 2^-21 for red and blue, shading gain 1 / 2^(0.5 - 2^(v * 2^-13 - 1)); between knots linear, beyond them the end value. The shading is applied as a gain map (65 x 65 grid, bilinear), the distortion and colour as a per plane polynomial of the radius fitted to the table (WarpRectilinear: source = output * (k0 + k1 r^2 + k2 r^4 + k3 r^6)).
 `from_file(path, width, height)` gives the opcode list (bytes) or None; the sizes are those of the picture it will be applied to (the active area, the right way up)."""
@@ -44,9 +44,10 @@ def gain_grid(t, width, height, n=GRID):
     return _interp(r, k, vig).astype(np.float32)
 
 
-def warp_coefficients(t):
-    """[3 planes (red, green, blue), 6] (kr0..kr3, kt0, kt1): the polynomial in r^2 that best follows distortion times colour scale of each plane over the radius the picture has (0 to the corner and a little beyond)."""
+def warp_coefficients(t, norm=None):
+    """[3 planes (red, green, blue), 6] (kr0..kr3, kt0, kt1): the polynomial in r^2 that best follows distortion times colour scale of each plane over the radius the picture has (0 to the corner and a little beyond). `norm`: the radius (1 = the half diagonal) at which the picture keeps its scale: the table has distortion 0 at the centre, but the camera's JPEG (and lensfun's profiles) keep the scale where the middle of the short side is, norm = height / diagonal (0.555 for 3:2); the corrected picture is then scaled by 1 / distortion(norm)."""
     k, dist, car, cab, _v = curves(t); r = np.linspace(0, 1.05, 200); d = _interp(r, k, dist); out = np.zeros((3, 6))
+    if norm: d = d / float(_interp(norm, k, dist))
     for p, f in enumerate((d * _interp(r, k, car), d, d * _interp(r, k, cab))):
         out[p, :4] = np.linalg.lstsq(np.vander(r * r, 4, increasing=True), f, rcond=None)[0]
     return out
@@ -87,11 +88,11 @@ def opcodes(t, width, height, lens='auto'):
     return opcodes_from((lambda r: _interp(r, k, vig)) if sh else None, warp_coefficients(t) if ge else None, width, height)
 
 
-USE_EMBEDDED_GEOMETRY = False        # the camera's own distortion and colour-fringe tables are NOT used: read with the conventions RawTherapee and darktable use for them they do not follow the A7C's JPEGs (FE 28-60 at 28 mm, 12 pictures, correlation of the edges with the camera JPEG: not corrected 0.79, with the table 0.58, with lensfun's profile 0.97; the JPEG is corrected, the table's amplitude or radius is not what those programs assume: LightCraft found the same for the A7CR and needed its own measured convention). The shading tables are used: they flatten the field (spread of the falloff over many scenes 0.78 -> 0.10 stops, Samyang 35).
+# The camera's distortion table is the same curve as lensfun's profile of the lens (FE 28-60 against the camera's JPEGs, scripts/fit_distortion.py: left over at the corner after the correction, in % of the half diagonal, 28 mm / 33 mm / 60 mm: not corrected 0.58 / 1.68 / 0.05, lensfun 0.31 / 0.06 / -0.03, table 0.23 / 0.09 / 0.05), once it is read with the right scale: the table is 0 at the centre, the JPEG and lensfun keep the scale where the middle of the short side is (warp_coefficients `norm`). The JPEG shows it only when the camera's distortion setting is on (a Samyang lens leaves it at 0: the JPEG is not corrected, so 'camera' then does nothing); the table is the geometry for 'camera' and the fallback for any lens without a lensfun profile, corrected by the camera or not. Caution: for the Samyang AF 35 the table and lensfun's calibrated profile disagree in sign at the corner (+10 and -13 per mille, scale at the short side), so a third-party lens's table is not proven; the Samyang AF 50 (no profile) has a table of 4 per mille at the corner, too small to matter either way.
 
 
 def from_file(path, width, height, lens='auto'):
-    """The opcode list of a raw's lens correction, each part from the best source there is: the shading from the camera's own table when the file has one (validated: flat fields), else from the lensfun profile of the lens; the geometry (distortion, colour fringes) from the lensfun profile (validated against the camera JPEG), never from the camera's table (USE_EMBEDDED_GEOMETRY). Nothing for a part nothing describes. `lens`: see parts."""
+    """The opcode list of a raw's lens correction, each part from the best source there is: the shading from the camera's own table when the file has one (validated: flat fields), else from the lensfun profile of the lens; the geometry (distortion, colour fringes) from the lensfun profile (validated against the camera JPEG), or from the camera's table when the lens has no profile and the camera corrects it (and for 'camera'). Nothing for a part nothing describes. `lens`: see parts."""
     from stratastills import lensfundb
     t = read_tables(path); sh, ge = parts(lens, t.get('settings') if t else None)
     if not (sh or ge): return None
@@ -100,6 +101,7 @@ def from_file(path, width, height, lens='auto'):
     if (sh and gain is None) or ge:
         g2, w2 = lensfundb.corrections_from_exif(path, width, height)
         if sh and gain is None: gain = g2
-        if ge: warp = w2
-        if ge and warp is None and t and USE_EMBEDDED_GEOMETRY: warp = warp_coefficients(t)
+        if ge:
+            table = warp_coefficients(t, height / np.hypot(width, height)) if t else None
+            warp = table if table is not None and (lens == 'camera' or w2 is None) else w2                                 # no lensfun geometry: the camera's table is all there is
     return opcodes_from(gain, warp, width, height)

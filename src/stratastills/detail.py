@@ -96,7 +96,11 @@ def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
     `rgb` float32 HxWx3 0..1; `scale` is the output size over the native size (see sharpen_gain). Runs on the GPU (gpu.sharpen) when there is one and `backend` is 'auto' or 'gpu' (about 20 times faster); this CPU code is the reference."""
     import cv2
     from stratastills import gpu
-    if backend == 'gpu' or (backend == 'auto' and gpu.available()): return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount)
+    if backend == 'gpu' or (backend == 'auto' and gpu.available()):
+        try: return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount)
+        except Exception as e:
+            if backend == 'gpu' or not gpu.is_oom(e): raise
+        gpu.free()                                                                                                    # the card ran out of memory: the CPU does it
     h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), overshoot=OVERSHOOT, mask=SHARPEN_MASK); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
     if float(k.max()) <= 0: return base

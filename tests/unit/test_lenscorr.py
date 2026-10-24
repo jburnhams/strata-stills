@@ -28,6 +28,11 @@ def test_the_warp_polynomial_follows_distortion_and_colour_of_each_plane():
     assert (c[:, 4:] == 0).all()
 
 
+def test_the_warp_keeps_the_scale_where_asked():
+    k, d, *_ = L.curves(TABLES); n = 0.55; c = L.warp_coefficients(TABLES, n)
+    assert sum(c[1, i] * n ** (2 * i) for i in range(4)) == pytest.approx(1.0, abs=2e-3) and L.warp_coefficients(TABLES, None)[1, 0] != pytest.approx(c[1, 0])
+
+
 def test_the_opcodes_are_read_back_by_the_development_and_correct_a_vignetted_picture():
     w, h = 300, 200; ops = D.parse_opcodes(L.opcodes(TABLES, w, h)); assert [i for i, _ in ops] == [9, 1]
     m, plane, planes, box, sp, org = D.gain_map(ops[0][1]); assert m.shape == (65, 65, 1) and (plane, planes, box) == (0, 3, (0, 0, h, w)) and abs(m[32, 32, 0] - 1) < 1e-3
@@ -61,7 +66,11 @@ def test_each_part_comes_from_the_best_source(monkeypatch):
     monkeypatch.setattr(L, 'read_tables', lambda p: cam)
     ops = D.parse_opcodes(L.from_file('x.arw', 60, 40, 'auto')); assert [i for i, _ in ops] == [9, 1]
     m = D.gain_map(ops[0][1])[0]; assert m[32, 32, 0] == pytest.approx(1.0, abs=1e-3) and m[0, 0, 0] < 1.8                                                   # the shading is the camera's table (about 1.7 in the corner), not lensfun's 2.0 everywhere
-    assert D.warp_params(ops[1][1])[0][0, 0] == pytest.approx(0.5)                                                                                         # the geometry is lensfun's, never the camera's table
+    assert D.warp_params(ops[1][1])[0][0, 0] == pytest.approx(0.5)                                                                                         # the geometry is lensfun's when it has it
+    cw = D.warp_params(D.parse_opcodes(L.from_file('x.arw', 60, 40, 'camera'))[0][1])[0]; assert cw[1, 0] == pytest.approx(1 / np.interp(40 / np.hypot(60, 40), *L.curves(cam)[:2]), abs=3e-3) and cw[1, 0] != pytest.approx(0.5)      # 'camera': the table, scaled to keep the middle of the short side
+    monkeypatch.setattr(lensfundb, 'corrections_from_exif', lambda p, w, h: (lf_gain, None)); assert ids(L.from_file('x.arw', 60, 40, 'auto')) == [9, 1]            # no lensfun geometry, the camera corrects: its table
+    monkeypatch.setattr(L, 'read_tables', lambda p: dict(cam, settings=dict(distortion=0))); assert ids(L.from_file('x.arw', 60, 40, 'auto')) == [9, 1] and ids(L.from_file('x.arw', 60, 40, 'camera')) == []           # the camera does not correct: still the only data for a lens without a profile, but 'camera' (what the JPEG shows) has none
+    monkeypatch.setattr(L, 'read_tables', lambda p: cam); monkeypatch.setattr(lensfundb, 'corrections_from_exif', lambda p, w, h: (lf_gain, lf_warp))
     assert ids(L.from_file('x.arw', 60, 40, 'camera')) == [1] and ids(L.from_file('x.arw', 60, 40, 'shading')) == [9] and ids(L.from_file('x.arw', 60, 40, 'off')) == []
     monkeypatch.setattr(L, 'read_tables', lambda p: dict(cam, settings=dict(distortion=0))); assert ids(L.from_file('x.arw', 60, 40, 'camera')) == []                # the camera's distortion setting is off: its JPEG is not corrected
     monkeypatch.setattr(L, 'read_tables', lambda p: None); ops = D.parse_opcodes(L.from_file('x.arw', 60, 40, 'auto')); assert [i for i, _ in ops] == [9, 1] and D.gain_map(ops[0][1])[0][0, 0, 0] == pytest.approx(2.0)   # no table in the file: the shading from lensfun too

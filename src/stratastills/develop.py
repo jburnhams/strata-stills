@@ -497,7 +497,15 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     on_gpu = backend != 'cpu' and denoise in ('auto', 'ai', 'classical', 'chroma', 'off') and (backend == 'gpu' or gpu.available())
     if tone == 'match' and not on_gpu: tone = _match_on_cpu(path, ev, recover, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover
     elif recover == 'auto' and tone != 'match': recover = 0.35
-    if on_gpu: return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
+    if on_gpu:
+        try: return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
+        except Exception as e:
+            if backend == 'gpu' or not gpu.is_oom(e): raise
+        gpu.free()                                                                                                    # the card ran out of memory (it is shared, or small): the picture in tiles half the planned size, and if that does not fit either, on the CPU
+        try: return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens, smaller=True)
+        except Exception as e:
+            if not gpu.is_oom(e): raise
+        gpu.free(); return develop(path, half, ev, denoise, recover, model, strength, highlight_contrast, 'cpu', analysis, tone, lens)
     u16 = _raw_u16(path, half)
     if denoise in ('auto', 'classical', 'chroma', 'off'):                                                                     # a picture too big for the memory it may use is developed in tiles (cpu_tiled.py: the classical clean-up only)
         tile = resources.cpu_tile(u16.shape[0] * u16.shape[1])
@@ -532,15 +540,15 @@ def _match_on_cpu(path, ev, recover, lens, analysis):
     return tone
 
 
-def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None, lens='auto'):
+def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None, lens='auto', smaller=False):
     """The raw is decoded first (LibRaw, on the CPU, holding no device slot, so another picture can be on the card meanwhile); then the picture takes a device slot for the rest. A picture too big for the card (gpu.max_pixels) is developed in tiles (gpu_tiled.py); if that cannot be done for its opcodes, a reduced copy that fits is developed instead."""
-    u16 = _raw_u16(path, half); limit = gpu.max_pixels()
+    u16 = _raw_u16(path, half); limit = 1 if smaller else gpu.max_pixels()                                                    # smaller: after an out-of-memory, always in tiles, of half the planned side
     with gpu.slot():
         if limit and u16.shape[0] * u16.shape[1] > limit:
             if tone == 'match': tone = _match_on_cpu(path, ev, recover, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover        # a picture too big for the card is developed in tiles: its curve the slow way
-            try: return gpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise in ('ai', 'classical') else denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens)
+            try: return gpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise in ('ai', 'classical') else denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens, tile=max(256, gpu.tile_size() // 2) if smaller else None)
             except gpu_tiled.Unsupported:
-                k = (limit / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
+                k = ((gpu.max_pixels() or u16.shape[0] * u16.shape[1] // 2) / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
         return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
 
 

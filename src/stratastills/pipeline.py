@@ -66,14 +66,14 @@ def _recover(v):
 
 def _frame(v):
     v = str(v).lower()
-    if v not in ('auto', 'full'): raise P.ProjectError("develop frame is 'auto' (crop to the part of the picture the lens covers) or 'full'")
+    if v not in ('auto', 'full'): raise P.ProjectError("develop frame is 'full' (the whole picture, the default: framing is decided later) or 'auto' (crop to the part of the picture the lens covers)")
     return v
 
 
 def _develop_params(p):
     m = str(p.get('match', 'auto')).lower()
     if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
-    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')), frame=_frame(p.get('frame', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
+    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')), frame=_frame(p.get('frame', 'full')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
@@ -149,7 +149,7 @@ def run_develop(st, p):
     else: kw['recover'] = 0.35 if rec == 'auto' else rec
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
     if matching: tone = an.get('tone'); st.rec['tone'] = dict(source='the JPEG inside the raw', **tone) if tone else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): ' + ('the exposure is set by the picture itself' if ev == 'auto' else 'the camera exposure and the device tone curve are used'))
-    if raw: crop_to_image_circle(st, p.get('frame', 'auto'))
+    if raw: crop_to_image_circle(st, p.get('frame', 'full'))
     st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
     if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
         refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
