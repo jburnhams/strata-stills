@@ -4,7 +4,7 @@ import os, socket, sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'utils'))
-TUNING = ('STRATASTILLS_GPU', 'STRATASTILLS_DEVICE', 'STRATASTILLS_GPU_SLOTS', 'STRATASTILLS_MAX_PIXELS', 'STRATASTILLS_TILE')             # what a developer sets on their own machine to try things: never leaks into a test
+TUNING = ('STRATASTILLS_SOURCES', 'STRATASTILLS_GPU', 'STRATASTILLS_DEVICE', 'STRATASTILLS_GPU_SLOTS', 'STRATASTILLS_MAX_PIXELS', 'STRATASTILLS_TILE')             # what a developer sets on their own machine to try things: never leaks into a test
 
 
 def pytest_collection_modifyitems(items):
