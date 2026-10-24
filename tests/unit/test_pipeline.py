@@ -265,3 +265,10 @@ def test_lens_setting_is_auto_or_off_and_auto_is_left_out_of_the_key():
     assert ln({}) == 'auto' and ln(dict(lens='off')) == 'off'
     with pytest.raises(P.ProjectError): PL.apply_options(b, dict(lens='maybe'))
     k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(lens='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(lens='off'))) != k and PL.summary(PL.apply_options(b, dict(lens='off'))).endswith('no lens correction')
+
+
+def test_denoise_setting_is_one_of_four_and_auto_is_left_out_of_the_key():
+    b = PL.get_preset('best')['stages']; dn = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['denoise']
+    assert dn({}) == 'auto' and dn(dict(denoise='ai')) == 'ai' and dn(dict(denoise='off')) == 'off'
+    with pytest.raises(P.ProjectError): PL.apply_options(b, dict(denoise='strong'))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(denoise='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(denoise='ai'))) != k

@@ -1,6 +1,6 @@
 """Pipelines: making a finished picture out of a source variant is a sequence of STAGES, each with its own settings and its own version, so a pipeline is just data: a config (a list of stage settings) that can be saved as a named PRESET, run on one item from the app, or applied by RULES to every item of a source folder.
 
-  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera', 'match' or stops from the camera's), recover (local tone: 'auto' or 0..1), lens ('auto' or 'off')
+  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera', 'match' or stops from the camera's), recover (local tone: 'auto' or 0..1), lens ('auto' or 'off'), denoise ('auto', 'ai', 'chroma', 'off')
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
@@ -43,6 +43,12 @@ def _exposure(v):
     return 'camera' if n == 0 else n
 
 
+def _denoise(v):
+    """The noise clean-up of the develop: 'auto' (colour noise and fringes taken out edge-aware, the luminance grain cored band by band, both driven by the noise the profile of the device says each pixel has), 'ai' (that plus a learned model where the noise is visible: slow, on the CPU route), 'chroma' (colour only), 'off'."""
+    if str(v).lower() not in ('auto', 'ai', 'chroma', 'off'): raise P.ProjectError("develop denoise is 'auto', 'ai', 'chroma' or 'off'")
+    return str(v).lower()
+
+
 def _lens(v):
     """'auto': the lens correction the file carries is applied (a DNG's own opcodes, or the camera's shading, distortion and colour-fringe tables of a raw that is not a DNG: lenscorr.py); 'off': none (what the camera's own JPEG shows when its correction is off, so the parity with it is measured with this)."""
     if str(v).lower() not in ('auto', 'off'): raise P.ProjectError("develop lens is 'auto' or 'off'")
@@ -61,7 +67,7 @@ def _recover(v):
 def _develop_params(p):
     m = str(p.get('match', 'auto')).lower()
     if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
-    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
+    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
@@ -94,7 +100,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=3, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=4, encode=2)[stage]
 
 
 class State:
@@ -119,7 +125,7 @@ def _reference_picture(item):
 
 def run_develop(st, p):
     st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
-    lens = p.get('lens', 'auto'); kw['lens'] = lens; rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path); matching = ev in ('auto', 'match') and raw
+    lens = p.get('lens', 'auto'); kw['lens'] = lens; kw['denoise'] = p.get('denoise', 'auto'); rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path); matching = ev in ('auto', 'match') and raw
     if matching: st.say('matching the tone of the camera JPEG'); kw['tone'] = 'match'; kw['recover'] = rec           # the tone of the camera's own JPEG of this picture (the preview in the raw), found by the develop itself (on the card when there is one) and kept with the picture so that it can be adjusted later; `auto` falls back to the fixed lightness rule when the file has no usable preview, `match` to the camera's exposure
     else: kw['recover'] = 0.35 if rec == 'auto' else rec
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
@@ -203,7 +209,7 @@ def normalize(stages):
 def apply_options(stages, options):
     """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
     st = [dict(s) for s in stages]; o = dict(options or {})
-    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover', 'lens'}
+    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover', 'lens', 'denoise'}
     if unknown: raise P.ProjectError(f'unknown option {sorted(unknown)[0]!r}')
 
     def get(name): return next((s for s in st if s['stage'] == name), None)
@@ -218,6 +224,7 @@ def apply_options(stages, options):
     if o.get('exposure') is not None: ensure('develop', exposure=o['exposure'])
     if o.get('recover') is not None: ensure('develop', recover=o['recover'])
     if o.get('lens') is not None: ensure('develop', lens=o['lens'])
+    if o.get('denoise') is not None: ensure('develop', denoise=o['denoise'])
     if o.get('size') is not None: ensure('resize', size=o['size'])
     if o.get('level') is False: st = [s for s in st if s['stage'] != 'level']
     elif o.get('level') is True: ensure('level')
@@ -275,7 +282,7 @@ def resolve(preset=None, options=None, stages=None):
 
 def stage_key(iid, variant_id, stages):
     """A short identity of what is made: the item, the source variant, and every stage's settings and version."""
-    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k in ('match', 'exposure', 'recover', 'lens') and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
+    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k in ('match', 'exposure', 'recover', 'lens', 'denoise') and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
 
 
 def summary(stages):

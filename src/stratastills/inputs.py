@@ -30,13 +30,15 @@ def _bundle(name):
 
 
 def adjust_tags(tags):
-    """The DNG tags to develop with: a file Lightroom wrote with the Adobe Standard profile gets its device's own colour profile (see `bundle`); and every file whose device profile has a `LookTable` (the hue/saturation look fitted to the camera's JPEGs: scripts/fit_look_table.py) gets it, whatever kind of file it is (the dict is changed in place)."""
+    """The DNG tags to develop with: a file Lightroom wrote with the Adobe Standard profile gets its device's own colour profile (see `bundle`); and every file whose device profile has a `LookTable` (the hue/saturation look fitted to the camera's JPEGs: scripts/fit_look_table.py) gets it and has its noise profile multiplied by the profile's `NoiseScale` (how much stronger the clean-up has to be than the profile says to leave what the camera's own JPEG leaves: scripts/fit_noise_scale.py), whatever kind of file it is (the dict is changed in place)."""
     name = profile(tags.get('Make'), tags.get('Model')).get('bundle')
     if not name: return tags
     if _text(tags.get('ProfileName')) == 'adobe standard':
         for k, v in _bundle(name).items(): tags[k] = tuple(v) if isinstance(v, list) else v
         tags['ProfileName'] = 'Embedded'
     if 'LookTable' in _bundle(name): tags.setdefault('LookTable', _bundle(name)['LookTable'])
+    k = _bundle(name).get('NoiseScale')
+    if k and tags.get('NoiseProfile') is not None: tags['NoiseProfile'] = (tags['NoiseProfile'][0] * k, tags['NoiseProfile'][1] * k)                      # the device's calibration of its noise profile (scripts/fit_noise_scale.py), whether the profile is the file's own or made from a table
     return tags
 
 

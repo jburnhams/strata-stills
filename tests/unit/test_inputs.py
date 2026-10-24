@@ -89,3 +89,9 @@ def test_a_device_looktable_reaches_every_kind_of_file_of_that_device(monkeypatc
     t = inputs.adjust_tags(dict(Make='ACME', Model='X1', ColorMatrix1=(5, 1))); assert t['LookTable'] == spec and t['ColorMatrix1'] == (5, 1)                                  # a file of the device that has its own colour tags keeps them
     t = inputs.adjust_tags(dict(Make='ACME', Model='X1', ProfileName='Adobe Standard', ColorMatrix1=(5, 1))); assert t['LookTable'] == spec and t['ColorMatrix1'] == (1, 1) and t['ProfileName'] == 'Embedded'
     assert 'LookTable' not in inputs.adjust_tags(dict(Make='Nobody', Model='Y'))
+
+
+def test_a_devices_noise_scale_multiplies_the_noise_profile_of_any_file_of_it(monkeypatch):
+    monkeypatch.setitem(inputs.PROFILES, ('acme', 'x1'), dict(label='Acme', bundle='acme_profile.json')); monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict(NoiseScale=8.0))
+    assert inputs.adjust_tags(dict(Make='ACME', Model='X1', NoiseProfile=(0.001, 1e-6)))['NoiseProfile'] == pytest.approx((0.008, 8e-6)) and 'NoiseProfile' not in inputs.adjust_tags(dict(Make='ACME', Model='X1'))
+    monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict()); assert inputs.adjust_tags(dict(Make='ACME', Model='X1', NoiseProfile=(0.001, 1e-6)))['NoiseProfile'] == (0.001, 1e-6)

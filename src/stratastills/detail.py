@@ -93,10 +93,10 @@ def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
     import cv2
     from stratastills import gpu
     if backend == 'gpu' or (backend == 'auto' and gpu.available()): return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount)
-    h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), mask=SHARPEN_MASK); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), overshoot=OVERSHOOT, mask=SHARPEN_MASK); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
     if float(k.max()) <= 0: return base
-    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT), mask=SHARPEN_MASK)
+    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT), overshoot=OVERSHOOT, mask=SHARPEN_MASK)
     return base * (1 - k) + alt * k
 
 
@@ -105,11 +105,12 @@ def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
     from stratastills import gpu
     with gpu.slot():                                                                                       # one device slot while the picture is on the card (several pictures may be in flight)
         x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
-        base = gpu.sharpen(x, g(ROLLOFF), mask=SHARPEN_MASK); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
-        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT), mask=SHARPEN_MASK) * k
+        base = gpu.sharpen(x, g(ROLLOFF), OVERSHOOT, mask=SHARPEN_MASK); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
+        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=SHARPEN_MASK) * k
         out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
 
 
+OVERSHOOT = 0.05               # how far (0..1 of the range) the sharpening may take a pixel beyond the local minimum and maximum of the original: the halos beside edges
 SHARPEN_MASK = (2.0, 6.0)      # the sharpening goes only where there is structure: its weight rises from 0 to 1 as the gradient of the (1 px blurred) luminance goes from the first to the second number, in 8-bit levels per pixel; in the flat areas the boost would only lift the noise (measured: flat-area noise 1.17 -> 1.53 levels with the filter on everywhere)
 
 
