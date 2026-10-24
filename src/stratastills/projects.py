@@ -72,13 +72,39 @@ def list_projects(root=None):
     return sorted(out, key=lambda p: p['created'] or '', reverse=True)
 
 
+def _rel_of(path):
+    """`path` relative to the first source root that contains it (forward slashes), else None. A Windows UNC path (\\\\server\\share\\a\\b) that is not under a root counts as relative to its share ('a/b'), so projects made on Windows open on Linux."""
+    ap = os.path.normcase(os.path.normpath(path))
+    for r in settings.source_roots():
+        nr = os.path.normcase(os.path.normpath(r))
+        if ap == nr: return ''
+        if ap.startswith(nr.rstrip('\\/') + os.sep) or ap.startswith(nr.rstrip('\\/') + '/'): return os.path.normpath(path)[len(os.path.normpath(r)):].strip('\\/').replace('\\', '/')
+    if path.startswith('\\\\'):
+        parts = [x for x in path.split('\\') if x]
+        if len(parts) > 2: return '/'.join(parts[2:])
+    return None
+
+
+def resolve(source):
+    """Where a source folder is on THIS machine: its path relative to a source root (`rel`, tried in each root in turn), else the stored path. A project made elsewhere (Windows UNC path, another mount point) therefore opens wherever one of the roots has the folder."""
+    rel = source.get('rel')
+    if rel is None: rel = _rel_of(source['path'])
+    if rel:
+        for r in settings.source_roots():
+            c = os.path.join(r, *rel.split('/'))
+            if os.path.isdir(c): return c
+    return source['path']
+
+
 def add_source(pid, path, root=None):
     """Add a source folder (it must exist and not already be one of the project's). Paths are stored absolute; UNC paths (\\\\Server\\share) are kept as they are."""
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isdir(path): raise ProjectError(f'not a folder: {path}')
     doc = load(pid, root)
     if any(os.path.normcase(s['path']) == os.path.normcase(path) for s in doc['sources']): raise ProjectError('that folder is already a source of this project')
-    doc['sources'].append(dict(path=path, added=dt.datetime.now().astimezone().isoformat(timespec='seconds'))); return _save(doc, root)
+    rel = _rel_of(path); src = dict(path=path, added=dt.datetime.now().astimezone().isoformat(timespec='seconds'))
+    if rel: src['rel'] = rel
+    doc['sources'].append(src); return _save(doc, root)
 
 
 def remove_source(pid, path, root=None):
@@ -92,7 +118,7 @@ def shots(pid, root=None, recursive=False):
     """The shots of all the project's sources: [(source_path, Shot)] in source order, then by name. A source that is not reachable (a share that is off) is reported as a (path, None) entry rather than failing the rest."""
     out = []
     for s in load(pid, root)['sources']:
-        try: out += [(s['path'], sh) for sh in ingest.scan(s['path'], recursive=recursive)]
+        try: out += [(s['path'], sh) for sh in ingest.scan(resolve(s), recursive=recursive)]
         except OSError: out.append((s['path'], None))
     return out
 
@@ -160,9 +186,9 @@ def source_summaries(pid, root=None):
     """Each source folder with what is in it: [{id, path, reachable, stills, panos, videos}]. An unreachable folder (a share that is off) is reported, not an error."""
     out = []
     for s in load(pid, root)['sources']:
-        d = dict(id=source_id(s['path']), path=s['path'], added=s.get('added'), reachable=True, stills=0, panos=0, videos=0)
+        d = dict(id=source_id(s['path']), path=resolve(s), added=s.get('added'), reachable=True, stills=0, panos=0, videos=0)
         try:
-            for sh in ingest.scan(s['path']):
+            for sh in ingest.scan(resolve(s)):
                 k = sh.kind; d['stills' if k == 'still' else 'panos' if k == 'pano' else 'videos'] += 1
         except OSError: d['reachable'] = False
         out.append(d)
@@ -172,7 +198,7 @@ def source_summaries(pid, root=None):
 def source_items(pid, sid, root=None):
     """The items of one source: [{id, stem, kind, parent, primary, variants: [...]}] (videos included, marked by kind)."""
     s = _source(pid, sid, root); st = load_state(pid, root); out = []
-    for sh in ingest.scan(s['path']):
+    for sh in ingest.scan(resolve(s)):
         iid = item_id(sid, sh.stem); vs = sh.variants() + generated_variants(pid, iid, root); prim = st.get(iid, {}).get('primary')
         if prim not in {v['id'] for v in vs}: prim = default_primary(sh)
         out.append(dict(id=iid, stem=sh.stem, kind=sh.kind, parent=sh.parent, primary=prim, chosen=iid in st, variants=vs, n_sidecars=len(sh.sidecars), video=sh.video))

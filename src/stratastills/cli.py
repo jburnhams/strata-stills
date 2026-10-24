@@ -81,7 +81,7 @@ def main(argv=None):
     sub.add_parser('projects', help='list the projects').set_defaults(fn=cmd_projects)
     n = sub.add_parser('new', help='create a project'); n.add_argument('name'); n.add_argument('--source', action='append', help='a source folder (repeatable)'); n.add_argument('--group', help='a sub-folder of the projects folder to put it in'); n.set_defaults(fn=cmd_new)
     n = sub.add_parser('source', help='add (or --remove) a source folder of a project'); n.add_argument('project'); n.add_argument('folder'); n.add_argument('--remove', action='store_true'); n.set_defaults(fn=cmd_source)
-    n = sub.add_parser('set', help='show or change a setting (projects_dir); value "default" resets it'); n.add_argument('key'); n.add_argument('value', nargs='?'); n.set_defaults(fn=cmd_set)
+    n = sub.add_parser('set', help='show or change a setting (projects_dir, source_roots: folders separated by the path separator, ":" on Linux and ";" on Windows); value "default" resets it'); n.add_argument('key'); n.add_argument('value', nargs='?'); n.set_defaults(fn=cmd_set)
     n = sub.add_parser('serve', help='the web app: opens on the list of projects'); n.add_argument('--host', default='127.0.0.1'); n.add_argument('--port', type=int, default=8361); n.set_defaults(fn=cmd_serve)
     sub.add_parser('doctor', help='check the environment').set_defaults(fn=doctor)
     s = sub.add_parser('scan', help='list the shots in a folder'); s.add_argument('folder'); s.add_argument('--recursive', action='store_true'); s.add_argument('--info', action='store_true', help='read EXIF/XMP of each JPEG (slow on a network share)'); s.add_argument('--json', action='store_true'); s.set_defaults(fn=scan)

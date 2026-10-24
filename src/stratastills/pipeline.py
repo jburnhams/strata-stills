@@ -17,7 +17,7 @@ import contextlib, datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, match, preview, projects as P, settings, sizeplan, tonematch, transforms
+from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, lensfundb, match, preview, projects as P, settings, sizeplan, tonematch, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 3.0            # chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
@@ -64,10 +64,16 @@ def _recover(v):
     return n
 
 
+def _frame(v):
+    v = str(v).lower()
+    if v not in ('auto', 'full'): raise P.ProjectError("develop frame is 'auto' (crop to the part of the picture the lens covers) or 'full'")
+    return v
+
+
 def _develop_params(p):
     m = str(p.get('match', 'auto')).lower()
     if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
-    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
+    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')), frame=_frame(p.get('frame', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
@@ -123,6 +129,19 @@ def _reference_picture(item):
     return images.load(v['path'], 100000)[:, :, ::-1].astype(np.float32) / 255.0
 
 
+def _centre(a, f):
+    h, w = a.shape[:2]; nh, nw = round(h * f), round(w * f); y, x = (h - nh) // 2, (w - nw) // 2; return a[y:y + nh, x:x + nw]
+
+
+def crop_to_image_circle(st, frame):
+    """`frame: auto`: a lens made for a smaller sensor (an APS-C lens on a full frame body) only lights a circle; the rest of the picture is black falloff that no correction can bring back, so the picture is cropped (centred, same shape) to the largest rectangle inside the circle. `full` keeps everything (debugging)."""
+    f = lensfundb.image_circle(st.path) if frame == 'auto' else 1.0
+    if f >= 1.0: return
+    st.rgb = np.ascontiguousarray(_centre(st.rgb, f))
+    if st.analysis is not None: st.analysis = np.ascontiguousarray(_centre(st.analysis, f))
+    st.rec['frame'] = dict(applied=True, fraction=f, reason='the lens was made for a smaller sensor: cropped to the part it covers')
+
+
 def run_develop(st, p):
     st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
     lens = p.get('lens', 'auto'); kw['lens'] = lens; kw['denoise'] = p.get('denoise', 'auto'); rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path); matching = ev in ('auto', 'match') and raw
@@ -130,6 +149,7 @@ def run_develop(st, p):
     else: kw['recover'] = 0.35 if rec == 'auto' else rec
     st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
     if matching: tone = an.get('tone'); st.rec['tone'] = dict(source='the JPEG inside the raw', **tone) if tone else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): ' + ('the exposure is set by the picture itself' if ev == 'auto' else 'the camera exposure and the device tone curve are used'))
+    if raw: crop_to_image_circle(st, p.get('frame', 'auto'))
     st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
     if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
         refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
@@ -209,7 +229,7 @@ def normalize(stages):
 def apply_options(stages, options):
     """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
     st = [dict(s) for s in stages]; o = dict(options or {})
-    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover', 'lens', 'denoise'}
+    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover', 'lens', 'denoise', 'frame'}
     if unknown: raise P.ProjectError(f'unknown option {sorted(unknown)[0]!r}')
 
     def get(name): return next((s for s in st if s['stage'] == name), None)
@@ -225,6 +245,7 @@ def apply_options(stages, options):
     if o.get('recover') is not None: ensure('develop', recover=o['recover'])
     if o.get('lens') is not None: ensure('develop', lens=o['lens'])
     if o.get('denoise') is not None: ensure('develop', denoise=o['denoise'])
+    if o.get('frame') is not None: ensure('develop', frame=o['frame'])
     if o.get('size') is not None: ensure('resize', size=o['size'])
     if o.get('level') is False: st = [s for s in st if s['stage'] != 'level']
     elif o.get('level') is True: ensure('level')

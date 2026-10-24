@@ -42,3 +42,17 @@ def test_the_correction_is_handed_to_the_development_as_opcodes(lenses):
 
 def test_no_database_no_correction(tmp_path, monkeypatch):
     monkeypatch.setenv(F.ENV, str(tmp_path / 'nothing')); F._db.clear(); assert F.load() == [] and F.find('E 50mm F1.8 OSS') is None
+
+
+def test_an_aps_c_lens_on_a_full_frame_body_is_cropped_to_its_image_circle(lenses, monkeypatch):
+    shots = {'e50': ('E 50mm F1.8 OSS', 50.0, 1.8, None, 1.0), 'fe': ('FE 28-60mm F4-5.6', 28.0, 4.0, None, 1.0), 'e50_on_aps_c': ('E 50mm F1.8 OSS', 50.0, 1.8, None, 1.534), 'unknown': ('SAMYANG AF 50mm F1.4 II', 50.0, 1.4, None, 1.0), 'no_sensor': ('E 50mm F1.8 OSS', 50.0, 1.8, None, None)}
+    monkeypatch.setattr(F, 'shot_of', lambda path: shots[path]); find = F.find; monkeypatch.setattr(F, 'find', lambda name: find(name, lenses))                                                                  # the fixture's database instead of models/lensfun
+    assert F.image_circle('e50') == pytest.approx(1 / 1.534, abs=1e-4)
+    assert [F.image_circle(k) for k in ('fe', 'e50_on_aps_c', 'unknown', 'no_sensor')] == [1.0] * 4              # made for this sensor, the sensor the lens was made for, no profile, no crop factor of the sensor: the whole picture
+
+
+def test_the_crop_is_centred_and_keeps_the_shape(monkeypatch):
+    from stratastills import pipeline as PL
+    st = type('S', (), {})(); st.path = 'x'; st.rgb = np.zeros((400, 600, 3), np.float32); st.analysis = np.zeros((200, 300), np.float32); st.rec = {}
+    monkeypatch.setattr(F, 'image_circle', lambda path: 0.65); PL.crop_to_image_circle(st, 'full'); assert st.rgb.shape == (400, 600, 3) and not st.rec
+    PL.crop_to_image_circle(st, 'auto'); assert st.rgb.shape == (260, 390, 3) and st.analysis.shape == (130, 195) and st.rec['frame']['fraction'] == 0.65
