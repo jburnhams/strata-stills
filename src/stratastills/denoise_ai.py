@@ -35,7 +35,7 @@ def fetch(model=DEFAULT):
 
 
 def _device():
-    import torch
+    from stratastills import gpu; torch = gpu.torch_()                                                      # the first use of torch settles whether cuDNN works on this card
     return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 

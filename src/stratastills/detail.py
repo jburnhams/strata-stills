@@ -70,12 +70,16 @@ def recommended_size(res, long_side, round_to=64):
 
 
 NOISE_TERM = 0.04               # the Wiener noise term: at 0.01 the gain climbed to its cap at the highest frequencies, where there is mostly noise (measured: finest-scale grain 2 to 3 times the unsharpened picture's and the camera JPEG's)
-ROLLOFF = (0.12, 0.30)          # the boost fades to nothing between these OUTPUT frequencies (cycles per pixel; 0.5 is Nyquist): tile courses, brick lines and edges live below 0.3, the grain above it
+ROLLOFF = (0.2, 0.5)            # the boost fades to nothing between these OUTPUT frequencies (cycles per pixel; 0.5 is Nyquist). Was (0.12, 0.30); widened with the overshoot clamp at 0 (sharpen_sweep.py: DJI sharpness 47.3 -> 52.0 and A7C 17.2 -> 18.9 against RawTherapee's 51.6 and 15.9, flat-area noise unchanged because the activity mask keeps the boost out of flat areas)
 
 
-def sharpen_gain(mtf_freq, mtf, shape, scale, noise=NOISE_TERM, max_gain=4.0, amount=1.0, rolloff=ROLLOFF):
+_UNSET = object()               # defaults looked up when called, so that scripts/sharpen_sweep.py --patch detail.NOISE_TERM=... reaches them
+
+
+def sharpen_gain(mtf_freq, mtf, shape, scale, noise=_UNSET, max_gain=4.0, amount=1.0, rolloff=_UNSET):
     """The Wiener filter (2D, for an image of `shape` = (h, w)) that undoes the measured blur: gain (1 + noise) m/(m^2 + noise) at each frequency (scaled so that it is exactly 1 where nothing is blurred, m = 1: a larger noise term must not take contrast off the broad tones), where m is the measured MTF at that frequency of the NATIVE picture (an output pixel is 1/`scale` native pixels, so output frequency f is native frequency f * scale), limited to `max_gain`. `amount` 1 restores the measured blur and no more; above 1 goes past it (the gain is raised to that power), which adds the local contrast the eye reads as crispness, as a camera's own JPEG sharpening does (at the cost of more of the noise).
     Above the measured detail limit the gain falls back towards 1 instead of boosting what is only noise, and the boost is faded out over the top frequencies (`rolloff`): the sharpening was found to lift the finest-scale grain 2 to 3 times, tile detail needing none of that. Isotropic: the lens blur seen from a drone is close to it."""
+    noise = NOISE_TERM if noise is _UNSET else noise; rolloff = ROLLOFF if rolloff is _UNSET else rolloff
     h, w = shape; r = np.hypot(*np.meshgrid(np.fft.fftfreq(w), np.fft.fftfreq(h)))
     m = np.interp(np.minimum(r, 0.5) * scale, mtf_freq, mtf, left=1.0, right=mtf[-1]); m = np.clip(m, 0.02, 1.0)
     g = np.minimum(((1 + noise) * m / (m * m + noise)) ** amount, max_gain); g = np.where(r * scale < mtf_freq[0], 1.0, g)
@@ -83,7 +87,7 @@ def sharpen_gain(mtf_freq, mtf, shape, scale, noise=NOISE_TERM, max_gain=4.0, am
     return g.astype(np.float32)
 
 
-ROLLOFF_BRIGHT = (0.06, 0.16)   # a tighter roll-off for bright areas (walls, render), where the same boost leaves the grain about a third above the camera JPEG's; measured: bright-wall grain 4.06 -> 3.58 with window and moulding edges and roof-tile detail unchanged
+ROLLOFF_BRIGHT = (0.1, 0.3)     # a tighter roll-off for bright areas (walls, render), where the same boost leaves the grain about a third above the camera JPEG's (was (0.06, 0.16), retuned with ROLLOFF)
 BRIGHT_FROM, BRIGHT_SPAN = 0.60, 0.28
 
 
@@ -110,7 +114,7 @@ def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
         out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
 
 
-OVERSHOOT = 0.05               # how far (0..1 of the range) the sharpening may take a pixel beyond the local minimum and maximum of the original: the halos beside edges
+OVERSHOOT = 0.0                # how far (0..1 of the range) the sharpening may take a pixel beyond the local minimum and maximum of the original (5x5): the halos beside edges. Was 0.05; measured on the A7C set the overshoot metric falls 19.5 -> 17.0 (RawTherapee 18.5; the unsharpened pictures are at 17.7) for 1 level of sharpness
 SHARPEN_MASK = (2.0, 6.0)      # the sharpening goes only where there is structure: its weight rises from 0 to 1 as the gradient of the (1 px blurred) luminance goes from the first to the second number, in 8-bit levels per pixel; in the flat areas the boost would only lift the noise (measured: flat-area noise 1.17 -> 1.53 levels with the filter on everywhere)
 
 

@@ -54,7 +54,7 @@ def test_key_depends_on_what_is_made_and_summary_reads_well():
     b = PL.normalize(PL.BEST); k = PL.stage_key('a~x', 'raw', b)
     assert k == PL.stage_key('a~x', 'raw', b) and k != PL.stage_key('a~y', 'raw', b) and k != PL.stage_key('a~x', 'jpeg', b) and k != PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(size='native')))
     assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(format='tiff', quality=70))) == PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(format='tiff', quality=80)))
-    assert PL.summary(b) == 'JPEG q90 · size auto · levelled · sharpened 1.5' and PL.summary(PL.apply_options(b, dict(quality='auto'))).startswith('JPEG auto quality') and 'TIFF 16 bit' in PL.summary(PL.get_preset('archive')['stages']) and '2048 px' in PL.summary(PL.get_preset('web')['stages'])
+    assert PL.summary(b) == 'JPEG q90 · size auto · levelled · sharpened 3' and PL.summary(PL.apply_options(b, dict(quality='auto'))).startswith('JPEG auto quality') and 'TIFF 16 bit' in PL.summary(PL.get_preset('archive')['stages']) and '2048 px' in PL.summary(PL.get_preset('web')['stages'])
     assert 'highlight contrast 1.5' in PL.summary(PL.apply_options(b, dict(highlight_contrast=1.5)))
 
 

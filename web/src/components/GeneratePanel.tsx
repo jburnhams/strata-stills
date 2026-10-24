@@ -109,7 +109,7 @@ export default function GeneratePanel({ project, item, variant, onGenerated, onS
           {hasStage(st, 'sharpen') && (
             <label className="flex items-center gap-2">Sharpness
               <select aria-label="Sharpness" className={field} value={String(stageValue(st, 'sharpen', 'amount'))} onChange={e => set({ sharpen_amount: Number(e.target.value) })}>
-                <option value="1">Restore (undo the measured blur, no more)</option><option value="1.5">Crisp (like the camera's JPEG)</option><option value="2">Extra</option>
+                <option value="1">Restore (undo the measured blur, no more)</option><option value="2">Crisp</option><option value="3">Best (automatic: as crisp as the camera's JPEG)</option><option value="3.5">Extra</option>
               </select>
             </label>
           )}

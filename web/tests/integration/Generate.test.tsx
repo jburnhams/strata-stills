@@ -12,7 +12,7 @@ describe('generate', () => {
   it('needs nothing chosen: the default preset, its summary, one button; everything else is behind Advanced', async () => {
     open('#/p/demo/i/abcd1234~A_1')
     expect(await screen.findByText(/Contrast is half gone at about 2822 px across/)).toBeInTheDocument()
-    await waitFor(() => expect(willMake()).toHaveTextContent('Will make: JPEG q90 · size auto · levelled · sharpened 1.5'))
+    await waitFor(() => expect(willMake()).toHaveTextContent('Will make: JPEG q90 · size auto · levelled · sharpened 3'))
     expect(screen.getByRole('combobox', { name: 'Pipeline' })).toHaveValue('best'); expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled()
     expect(screen.getByText('Advanced').closest('details')).not.toHaveAttribute('open')                                  // collapsed by default
     await userEvent.click(screen.getByRole('button', { name: 'Generate' }))
@@ -24,7 +24,7 @@ describe('generate', () => {
     open('#/p/demo/i/abcd1234~A_1'); await waitFor(() => expect(willMake()).toHaveTextContent('Will make'))
     await userEvent.click(screen.getByText('Advanced'))
     expect(screen.getByLabelText('Size')).toHaveValue('auto'); expect(screen.getByRole('option', { name: /Recommended: 6016 px \(27\.1 MP\)/ })).toBeInTheDocument()
-    expect(screen.getByLabelText('JPEG quality')).toHaveValue('90'); expect(screen.getByLabelText('Sharpness')).toHaveValue('1.5'); expect(screen.getByLabelText('Highlight contrast')).toHaveValue('0.8')
+    expect(screen.getByLabelText('JPEG quality')).toHaveValue('90'); expect(screen.getByLabelText('Sharpness')).toHaveValue('3'); expect(screen.getByLabelText('Highlight contrast')).toHaveValue('0.8')
     await userEvent.selectOptions(screen.getByLabelText('Format'), 'tiff'); await waitFor(() => expect(willMake()).toHaveTextContent('TIFF 16 bit'))
     expect(screen.queryByLabelText('JPEG quality')).toBeNull(); expect(willMake()).toHaveTextContent('changed from “Best quality (automatic)”')
     await userEvent.selectOptions(screen.getByLabelText('Format'), 'jpeg'); await userEvent.selectOptions(screen.getByLabelText('JPEG quality'), '95'); await userEvent.click(screen.getByLabelText('Level'))
@@ -52,11 +52,11 @@ describe('generate', () => {
   })
 
   it('lists a generated variant with its settings, size and a download link, and compares it in the loupe', async () => {
-    const gen = { id: 'gen-abc123', label: 'Generated 6016×4512', path: 'C:\\p\\generated\\abc123.jpg', kind: 'generated' as const, ext: '.jpg', key: 'abc123', summary: 'JPEG q90 · size auto · levelled · sharpened 1.5', quality: 90, bytes: 15728640, output: [6016, 4512] as [number, number] }
+    const gen = { id: 'gen-abc123', label: 'Generated 6016×4512', path: 'C:\\p\\generated\\abc123.jpg', kind: 'generated' as const, ext: '.jpg', key: 'abc123', summary: 'JPEG q90 · size auto · levelled · sharpened 3', quality: 90, bytes: 15728640, output: [6016, 4512] as [number, number] }
     server.use(http.get('/api/project/item', () => HttpResponse.json({ ...items[0], variants: [...items[0].variants, gen] })))
     open('#/p/demo/i/abcd1234~A_1')
     const card = (await screen.findByRole('radio', { name: 'Generated 6016×4512' })).parentElement!
-    expect(within(card).getByText(/JPEG q90 · size auto · levelled · sharpened 1.5 \(q90\) · 15\.0 MB/)).toBeInTheDocument()
+    expect(within(card).getByText(/JPEG q90 · size auto · levelled · sharpened 3 \(q90\) · 15\.0 MB/)).toBeInTheDocument()
     expect(within(card).getByRole('link', { name: 'Download' })).toHaveAttribute('href', '/api/project/generated/file?id=demo&item=abcd1234~A_1&variant=gen-abc123')
     expect(within(card).getByRole('button', { name: 'Make primary' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('radio', { name: 'Generated 6016×4512' }))                                       // choosing it as the one shown: generating then starts from a source variant, not from it
