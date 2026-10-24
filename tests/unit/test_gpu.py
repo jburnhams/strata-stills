@@ -118,7 +118,7 @@ def synthetic_dng(monkeypatch, h=240, w=320, seed=3):
     wp = struct.pack('>I', 3) + b''.join(struct.pack('>6d', *cf) for cf in ((0.953, -4e-5, 6e-4, -4e-4, 0, 0), (0.953, 0, 0, 0, 0, 0), (0.9532, -6.6e-4, 2.8e-4, 1.2e-4, 0, 0))) + struct.pack('>2d', 0.5, 0.5)
     ops = struct.pack('>I', 2) + struct.pack('>IIII', 9, 0x01030000, 0, len(gp)) + gp + struct.pack('>IIII', 1, 0x01030000, 0, len(wp)) + wp
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=(4096, 9776, 4096, 4096, 4096, 6393), BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(v for x in np.linspace(0, 1, 64) for v in (x, x ** 0.6)), OpcodeList3=ops)
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     return raw
 
 
@@ -134,8 +134,8 @@ def test_develop_picks_the_gpu_only_when_there_is_one_and_the_option_is_one_it_d
 
     def cpu_path(*a, **k): calls.append('cpu'); raise CpuPath()
     synthetic_dng(monkeypatch); calls = []; monkeypatch.setattr(D, '_develop_gpu', lambda *a: calls.append('gpu') or np.zeros((2, 2, 3), np.float32)); monkeypatch.setattr(D, 'develop_parts', cpu_path)
-    monkeypatch.setattr(gpu, 'available', lambda: True); D.develop('x.dng'); D.develop('x.dng', denoise='chroma'); assert calls == ['gpu', 'gpu']
-    for kw in (dict(denoise=3.0), dict(denoise='ai'), dict(backend='cpu')):
+    monkeypatch.setattr(gpu, 'available', lambda: True); D.develop('x.dng'); D.develop('x.dng', denoise='chroma'); D.develop('x.dng', denoise='ai'); D.develop('x.dng', denoise='classical'); assert calls == ['gpu'] * 4        # 'ai' (the model on the card's result) and 'classical' too
+    for kw in (dict(denoise=3.0), dict(backend='cpu')):
         with pytest.raises(CpuPath): D.develop('x.dng', **kw)
     monkeypatch.setattr(gpu, 'available', lambda: False)
     with pytest.raises(CpuPath): D.develop('x.dng')
@@ -198,3 +198,54 @@ def test_the_cpu_development_goes_through_tiles_when_memory_is_short(monkeypatch
     monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu'); assert calls == [512]
     calls.clear(); monkeypatch.setattr(resources, 'cpu_tile', lambda px: None); D.develop('x.dng', backend='cpu'); assert calls == []
     monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu', denoise=4.0); assert calls == []                                          # a numeric denoise is not tiled
+
+
+def test_hue_look_matches():
+    y = (RNG.random((50, 60, 3)) * 0.9 + 0.05).astype(np.float32); h = 24; tab = np.dstack([RNG.normal(0, 8, (h, len(D.LOOK_CHROMA))), 1 + RNG.normal(0, 0.1, (h, len(D.LOOK_CHROMA)))]).astype(np.float32); lut = (0.5 + RNG.random(64)).astype(np.float32)
+    for look in ((lut, tab), (None, tab), (lut, None)): assert np.abs(c(gpu.chroma_scale(g(y), gpu.look_to(look, gpu.dev()))) - D.chroma_scale(y, look)).max() < 2e-4
+
+
+def test_the_matched_tone_made_on_the_card_agrees_with_the_cpu_route(monkeypatch):
+    from stratastills import tonematch
+    synthetic_dng(monkeypatch); lin = D.develop_parts('x.dng', half=False, ev=0.0, recover=0.0)['linear']; y = lin @ D._W; yenc = np.clip((y * 4.0) ** 0.5, 0, 1)
+    jpg = (np.clip(yenc[..., None] + (D.srgb_oetf(np.clip(lin, 0, 1)) - D.srgb_oetf(np.clip(y, 0, 1))[..., None]) * 0.7, 0, 1) * 255 + 0.5).astype(np.uint8)
+    monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: jpg); a_cpu, a_gpu = {}, {}
+    cpu = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='cpu', analysis=a_cpu); gp = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a_gpu)
+    assert a_cpu['tone'] and a_gpu['tone'] and set(a_gpu['tone']) == {'curve', 'chroma'}
+    ck = np.asarray(a_cpu['tone']['curve']).reshape(-1, 2); gk = np.asarray(a_gpu['tone']['curve']).reshape(-1, 2)
+    for v in (0.02, 0.1, 0.3): assert abs(np.interp(v, ck[:, 0], ck[:, 1]) - np.interp(v, gk[:, 0], gk[:, 1])) < 0.03                                                     # the same curve, from a half-size CPU development and from the full one shrunk on the card
+    d = np.abs(gp - cpu); assert gp.shape == cpu.shape and d.mean() < 0.01, d.mean()
+
+
+def test_no_usable_preview_falls_back_to_the_fixed_lightness_rule(monkeypatch):
+    from stratastills import tonematch
+    synthetic_dng(monkeypatch); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None); a = {}
+    auto = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a); assert a['tone'] is None and np.allclose(auto, D.develop('x.dng', ev='auto', recover=0.35, backend='gpu'), atol=1e-6)
+    assert np.isfinite(D.develop('x.dng', ev='match', recover='auto', tone='match', backend='gpu', analysis={})).all()
+
+
+def test_the_sharpening_activity_mask_matches_and_spares_the_flat_areas():
+    from stratastills import detail
+    y = picture(3)[..., 1]; ref = detail.activity(y, detail.SHARPEN_MASK); out = c(gpu.activity(g(y), detail.SHARPEN_MASK)); assert np.abs(out - ref).max() < 2e-2 and ref.min() >= 0 and ref.max() <= 1 and detail.activity(y, None).min() == 1
+    rng = np.random.default_rng(5); flat = np.full((H, W), 0.4, np.float32) + rng.normal(0, 0.004, (H, W)).astype(np.float32); edge = flat.copy(); edge[:, W // 2:] += 0.3
+    assert detail.activity(flat, detail.SHARPEN_MASK).mean() < 0.15 and detail.activity(edge, detail.SHARPEN_MASK)[:, W // 2 - 2:W // 2 + 2].min() > 0.5                                 # noise of 1 level is left alone, a step of 77 levels gets the full boost
+    img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)
+    a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK); b = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF), mask=detail.SHARPEN_MASK)); assert np.abs(a - b).max() < 3e-3
+
+
+def test_blind_noise_finds_the_noise_of_a_picture_on_the_cpu_and_the_card():
+    rng = np.random.default_rng(2); base = np.dstack([cv2.GaussianBlur(rng.random((H, W)).astype(np.float32), (0, 0), 12)] * 3) * 0.5 + 0.25
+    for sigma in (0.5, 2.0, 5.0):
+        img = np.clip(base + rng.normal(0, sigma / 255, base.shape).astype(np.float32), 0, 1); a = D.blind_noise(img); b = gpu.blind_noise(g(img))
+        assert abs(a - sigma * 0.8) < 0.45 * sigma + 0.15 and abs(a - b) < 0.1 * a + 0.05, (sigma, a, b)                                                       # the luminance of three equal noisy channels carries the noise of one; the flattest quarter is a little under it
+
+
+def test_auto_denoise_brings_the_model_in_on_a_noisy_picture_only(monkeypatch):
+    from stratastills import denoise_ai
+    synthetic_dng(monkeypatch); a = {}; monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); called = []; monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: called.append(1) or rgb)          # (after synthetic_dng, which says the weights are not there)
+    for backend in ('cpu', 'gpu'):
+        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
+        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 1e9); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert not called and a['ai'] is False and a['blind_noise'] > 0
+        called.clear(); D.develop('x.dng', denoise='classical', backend=backend, analysis=a); assert not called and a['ai'] is False
+        called.clear(); D.develop('x.dng', denoise='ai', backend=backend, analysis=a); assert called and a['ai'] is True
+    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off

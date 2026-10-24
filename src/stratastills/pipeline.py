@@ -1,6 +1,6 @@
 """Pipelines: making a finished picture out of a source variant is a sequence of STAGES, each with its own settings and its own version, so a pipeline is just data: a config (a list of stage settings) that can be saved as a named PRESET, run on one item from the app, or applied by RULES to every item of a source folder.
 
-  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast
+  develop   read the source at full size: a raw is developed (develop.py), any other still is read as it is                          settings: highlight_contrast, exposure ('auto', 'camera', 'match' or stops from the camera's), recover (local tone: 'auto' or 0..1), lens ('auto' or 'off'), denoise ('auto', 'ai', 'chroma', 'off')
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
@@ -17,7 +17,7 @@ import contextlib, datetime as dt, hashlib, json, math, os, re
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, match, preview, projects as P, settings, sizeplan, transforms
+from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, match, preview, projects as P, settings, sizeplan, tonematch, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 1.5            # past plain restoration (1.0) to the crispness of a camera's own JPEG, chosen by eye on brick fronts and roofs against the Mini 4 Pro JPEGs
@@ -34,10 +34,40 @@ def _num(params, k, lo, hi, default):
     return v
 
 
+def _exposure(v):
+    """'auto' (the tone of the camera's own JPEG of the picture when the raw has a usable one, as 'match' below; else the median of the picture is brought to a fixed lightness), 'camera' (the exposure the camera's own JPEG has: needs the device's tone curve, see inputs.py), 'match' (the tone of the camera's own JPEG of this very picture, found from the preview inside the raw: tonematch.py; the curve is kept in the record of the picture) or a number of stops added to the camera's exposure; 0 is 'camera'."""
+    if str(v).lower() in ('auto', 'camera', 'match'): return str(v).lower()
+    try: n = round(float(v), 2)
+    except (TypeError, ValueError): raise P.ProjectError("develop exposure is 'auto', 'camera' or a number of stops")
+    if not -5 <= n <= 5: raise P.ProjectError('exposure must be between -5 and 5 stops')
+    return 'camera' if n == 0 else n
+
+
+def _denoise(v):
+    """The noise clean-up of the develop: 'auto' (the classical clean-up, colour noise and fringes taken out edge-aware and the luminance grain cored band by band, both driven by the noise the device's profile says each pixel has; and the learned model on top where the picture's own noise is high: blind_noise >= AUTO_AI_NOISE, about ISO 2500 and up), 'classical' (never the model), 'ai' (always the model), 'chroma' (colour only), 'off'. Only 'auto' is meant for use: the others are for tests and tuning."""
+    if str(v).lower() not in ('auto', 'ai', 'classical', 'chroma', 'off'): raise P.ProjectError("develop denoise is 'auto', 'ai', 'classical', 'chroma' or 'off'")
+    return str(v).lower()
+
+
+def _lens(v):
+    """'auto': all the lens correction there is for the file is applied (a DNG's own opcodes; for another raw the camera's own shading, distortion and colour-fringe tables, else the lensfun profile of its lens: lenscorr.py, lensfundb.py); 'off': none; 'shading' or 'geometry' (distortion and colour fringes): only that; 'camera': what the camera's own JPEG shows (geometry when its distortion setting is on, never the shading: the setting the parity with the JPEGs is measured with)."""
+    if str(v).lower() not in ('auto', 'off', 'camera', 'geometry', 'shading'): raise P.ProjectError("develop lens is 'auto', 'off', 'camera', 'geometry' or 'shading'")
+    return str(v).lower()
+
+
+def _recover(v):
+    """How hard the local tone step squeezes bright regions and lifts shadows: 'auto' (0.35, but 0 with `exposure: match`: the matched tone is the camera's own global curve, and a local tone step on top of it moved the highlights and shadows away from the camera's JPEG: DSC00449-00451 colour difference 4.1 -> 2.3), or a number from 0 to 1."""
+    if str(v).lower() == 'auto': return 'auto'
+    try: n = round(float(v), 3)
+    except (TypeError, ValueError): raise P.ProjectError("develop recover is 'auto' or a number from 0 to 1")
+    if not 0 <= n <= 1: raise P.ProjectError('recover must be between 0 and 1')
+    return n
+
+
 def _develop_params(p):
     m = str(p.get('match', 'auto')).lower()
     if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
-    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m)                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
+    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
@@ -70,7 +100,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=3, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=4, encode=2)[stage]
 
 
 class State:
@@ -94,8 +124,12 @@ def _reference_picture(item):
 
 
 def run_develop(st, p):
-    st.say('developing the full-size picture'); an = {}
-    st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast']) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
+    st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
+    lens = p.get('lens', 'auto'); kw['lens'] = lens; kw['denoise'] = p.get('denoise', 'auto'); rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path); matching = ev in ('auto', 'match') and raw
+    if matching: st.say('matching the tone of the camera JPEG'); kw['tone'] = 'match'; kw['recover'] = rec           # the tone of the camera's own JPEG of this picture (the preview in the raw), found by the develop itself (on the card when there is one) and kept with the picture so that it can be adjusted later; `auto` falls back to the fixed lightness rule when the file has no usable preview, `match` to the camera's exposure
+    else: kw['recover'] = 0.35 if rec == 'auto' else rec
+    st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
+    if matching: tone = an.get('tone'); st.rec['tone'] = dict(source='the JPEG inside the raw', **tone) if tone else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): ' + ('the exposure is set by the picture itself' if ev == 'auto' else 'the camera exposure and the device tone curve are used'))
     st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
     if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
         refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
@@ -175,7 +209,7 @@ def normalize(stages):
 def apply_options(stages, options):
     """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
     st = [dict(s) for s in stages]; o = dict(options or {})
-    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match'}
+    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover', 'lens', 'denoise'}
     if unknown: raise P.ProjectError(f'unknown option {sorted(unknown)[0]!r}')
 
     def get(name): return next((s for s in st if s['stage'] == name), None)
@@ -187,6 +221,10 @@ def apply_options(stages, options):
         s.update(kw); return s
     if o.get('highlight_contrast') is not None: ensure('develop', highlight_contrast=o['highlight_contrast'])
     if o.get('match') is not None: ensure('develop', match=o['match'])
+    if o.get('exposure') is not None: ensure('develop', exposure=o['exposure'])
+    if o.get('recover') is not None: ensure('develop', recover=o['recover'])
+    if o.get('lens') is not None: ensure('develop', lens=o['lens'])
+    if o.get('denoise') is not None: ensure('develop', denoise=o['denoise'])
     if o.get('size') is not None: ensure('resize', size=o['size'])
     if o.get('level') is False: st = [s for s in st if s['stage'] != 'level']
     elif o.get('level') is True: ensure('level')
@@ -244,7 +282,7 @@ def resolve(preset=None, options=None, stages=None):
 
 def stage_key(iid, variant_id, stages):
     """A short identity of what is made: the item, the source variant, and every stage's settings and version."""
-    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k == 'match' and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
+    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k in ('match', 'exposure', 'recover', 'lens', 'denoise') and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
 
 
 def summary(stages):
@@ -254,6 +292,9 @@ def summary(stages):
     if 'level' in d: parts.append('levelled')
     if 'sharpen' in d: parts.append(f"sharpened {d['sharpen']['amount']:g}")
     if d['develop']['highlight_contrast'] != develop.HIGHLIGHT_CONTRAST: parts.append(f"highlight contrast {d['develop']['highlight_contrast']:g}")
+    if d['develop'].get('lens', 'auto') == 'off': parts.append('no lens correction')
+    ex = d['develop'].get('exposure', 'auto')
+    if ex != 'auto': parts.append({'camera': 'camera exposure', 'match': 'matched to the camera JPEG'}.get(ex) or f'camera exposure {ex:+g} EV')
     return ' · '.join(parts)
 
 

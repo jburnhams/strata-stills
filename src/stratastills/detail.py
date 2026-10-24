@@ -93,10 +93,10 @@ def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
     import cv2
     from stratastills import gpu
     if backend == 'gpu' or (backend == 'auto' and gpu.available()): return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount)
-    h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount)); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), overshoot=OVERSHOOT, mask=SHARPEN_MASK); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
     if float(k.max()) <= 0: return base
-    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT))
+    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT), overshoot=OVERSHOOT, mask=SHARPEN_MASK)
     return base * (1 - k) + alt * k
 
 
@@ -105,14 +105,26 @@ def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
     from stratastills import gpu
     with gpu.slot():                                                                                       # one device slot while the picture is on the card (several pictures may be in flight)
         x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
-        base = gpu.sharpen(x, g(ROLLOFF)); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
-        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT)) * k
+        base = gpu.sharpen(x, g(ROLLOFF), OVERSHOOT, mask=SHARPEN_MASK); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
+        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=SHARPEN_MASK) * k
         out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
 
 
-def sharpen(rgb, gain, overshoot=0.05):
-    """Apply a sharpen_gain filter to the luminance of `rgb` (float32 HxWx3, 0..1): the change is added equally to the three channels (colour is left alone), and the result may not go beyond the local range of the original by more than `overshoot` (no halos)."""
+OVERSHOOT = 0.05               # how far (0..1 of the range) the sharpening may take a pixel beyond the local minimum and maximum of the original: the halos beside edges
+SHARPEN_MASK = (2.0, 6.0)      # the sharpening goes only where there is structure: its weight rises from 0 to 1 as the gradient of the (1 px blurred) luminance goes from the first to the second number, in 8-bit levels per pixel; in the flat areas the boost would only lift the noise (measured: flat-area noise 1.17 -> 1.53 levels with the filter on everywhere)
+
+
+def activity(y, mask=SHARPEN_MASK):
+    """The weight (0..1, float32, same shape as the luminance `y` in 0..1) of the sharpening at each pixel: the gradient of `y` blurred by 1 px, in 8-bit levels per pixel, through a ramp (`mask`), then blurred by 1.5 px so that the edge of the mask does not show. None: everywhere."""
     import cv2
-    y = rgb @ np.array([0.299, 0.587, 0.114], np.float32); ys = np.fft.ifft2(np.fft.fft2(y) * gain).real.astype(np.float32); d = ys - y
+    if mask is None: return np.ones_like(y)
+    s = cv2.GaussianBlur(y * 255, (0, 0), 1.0); g = np.hypot(cv2.Sobel(s, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(s, cv2.CV_32F, 0, 1, ksize=3)) / 8
+    return cv2.GaussianBlur(np.clip((g - mask[0]) / (mask[1] - mask[0]), 0, 1).astype(np.float32), (0, 0), 1.5)
+
+
+def sharpen(rgb, gain, overshoot=0.05, mask=None):
+    """Apply a sharpen_gain filter to the luminance of `rgb` (float32 HxWx3, 0..1): the change is added equally to the three channels (colour is left alone), weighted by the activity of the picture there (`mask`, see `activity`; None: everywhere), and the result may not go beyond the local range of the original by more than `overshoot` (no halos)."""
+    import cv2
+    y = rgb @ np.array([0.299, 0.587, 0.114], np.float32); ys = np.fft.ifft2(np.fft.fft2(y) * gain).real.astype(np.float32); d = (ys - y) * activity(y, mask)
     k = np.ones((5, 5), np.uint8); lo, hi = cv2.erode(y, k) - overshoot, cv2.dilate(y, k) + overshoot; d = np.clip(y + d, lo, hi) - y
     return np.clip(rgb + d[..., None], 0, 1)

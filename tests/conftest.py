@@ -19,6 +19,7 @@ def isolated_env(tmp_path_factory, monkeypatch):
     monkeypatch.setenv('HOME', str(base / 'home')); monkeypatch.setenv('USERPROFILE', str(base / 'home'))
     monkeypatch.setenv('STRATASTILLS_HOME', str(base / 'stratastills-home')); monkeypatch.setenv('STRATASTILLS_PROJECTS', str(base / 'projects'))
     for k in TUNING: monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv('STRATASTILLS_AI', '0')                                  # `denoise: auto` brings the learned model in on a noisy picture: not in the tests (the weights may not be there); the tests of that turn it on
     return base
 
 

@@ -46,10 +46,58 @@ def test_a_device_profile_supplies_the_tone_curve_only_when_the_file_has_none():
 def test_lightroom_adobe_standard_files_get_the_cameras_own_colour_profile_back():
     adobe = dict(ProfileName='Adobe Standard', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2), ProfileHueSatMapDims=(90, 30, 1), AsShotNeutral=(4, 10, 1, 1, 6, 10)); out = inputs.adjust_tags(dict(adobe))
     assert out['ProfileHueSatMapDims'] == (36, 10, 1) and len(out['ProfileToneCurve']) == 256 and len(out['ColorMatrix1']) == 18 and out['AsShotNeutral'] == adobe['AsShotNeutral']       # the white balance stays the file's own
-    own = dict(ProfileName='Embedded', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2)); assert inputs.adjust_tags(dict(own)) == own
+    own = dict(ProfileName='Embedded', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2)); got = inputs.adjust_tags(dict(own)); assert {k: v for k, v in got.items() if k != 'LookTable'} == own and 'LookTable' in got           # the device's look table is added, nothing else changes
     other = dict(adobe, Make='Nobody'); assert inputs.adjust_tags(dict(other)) == other                                                          # no device profile: left alone
 
 
 def test_describe_tells_the_kind_of_file(tmp_path):
     p = tmp_path / 'a.jpg'; p.write_bytes(b'x'); assert inputs.describe(str(p)) == dict(kind='rendered', make=None, model=None, profile=None)
     assert inputs.profile('DJI', 'FC8482')['label'] == 'DJI Mini 4 Pro' and inputs.profile('x', 'y') == {}
+
+
+def fake_raw(monkeypatch, wb=(2000.0, 1024.0, 1900.0, 1024.0)):
+    import contextlib, sys, types
+    r = NS(rgb_xyz_matrix=np.array([[0.7, -0.2, -0.05], [-0.5, 1.3, 0.25], [-0.1, 0.18, 0.65], [0, 0, 0]]), camera_whitebalance=list(wb), sizes=NS(crop_width=60, crop_height=40, iwidth=62, iheight=42, flip=0))
+    mod = types.ModuleType('rawpy'); mod.imread = lambda path: contextlib.nullcontext(r); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+
+
+def test_noise_profile_is_interpolated_in_log_iso_and_held_beyond_the_ends():
+    t = [[100, 1e-6, 1e-10], [400, 4e-6, 4e-10]]
+    assert inputs.noise_profile(t, 200) == pytest.approx((2e-6, 2e-10)) and inputs.noise_profile(t, 50) == pytest.approx((1e-6, 1e-10)) and inputs.noise_profile(t, 6400) == pytest.approx((4e-6, 4e-10))
+
+
+def test_a_non_dng_raw_gets_its_colour_from_the_device_profile_and_its_noise_for_the_iso(monkeypatch):
+    fake_raw(monkeypatch); monkeypatch.setattr(inputs, '_iso', lambda path: 320.0)
+    t = inputs.synthesize_tags('x.arw', dict(Make=b'SONY\x00', Model='ILCE-7C'))
+    assert len(t['ColorMatrix1']) == 18 and len(t['ColorMatrix2']) == 18 and t['CalibrationIlluminant1'] == 17 and len(t['ProfileToneCurve']) % 2 == 0
+    assert 'ProfileHueSatMapDims' not in t and t['NoiseProfile'][0] > 0 and t['NoiseProfile'][1] > 0                                           # Adobe's hue/saturation map is a look, left out
+    assert [a / b for a, b in zip(t['AsShotNeutral'][0::2], t['AsShotNeutral'][1::2])] == pytest.approx([1024 / 2000, 1.0, 1024 / 1900])
+
+
+def test_a_non_dng_raw_of_an_unknown_camera_gets_libraws_matrix(monkeypatch):
+    fake_raw(monkeypatch); t = inputs.synthesize_tags('x.arw', dict(Make='Nobody', Model='X1'))
+    assert t['ColorMatrix1'] == t['ColorMatrix2'] and t['ProfileName'] == 'LibRaw' and 'NoiseProfile' not in t and 'ProfileToneCurve' not in t
+
+
+def test_files_that_have_colour_tags_or_are_dng_are_left_alone(monkeypatch):
+    fake_raw(monkeypatch); own = dict(Make='SONY', Model='ILCE-7C', ColorMatrix1=(1, 2)); assert inputs.synthesize_tags('x.arw', dict(own)) == own
+    plain = dict(Make='SONY', Model='ILCE-7C'); assert inputs.synthesize_tags('x.dng', dict(plain)) == plain
+
+
+def test_a_device_looktable_reaches_every_kind_of_file_of_that_device(monkeypatch):
+    spec = dict(hue=24, data=[0.0, 1.0] * (24 * 5)); monkeypatch.setitem(inputs.PROFILES, ('acme', 'x1'), dict(label='Acme', bundle='acme_profile.json')); monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict(LookTable=spec, ColorMatrix1=[1, 1]))
+    t = inputs.adjust_tags(dict(Make='ACME', Model='X1', ColorMatrix1=(5, 1))); assert t['LookTable'] == spec and t['ColorMatrix1'] == (5, 1)                                  # a file of the device that has its own colour tags keeps them
+    t = inputs.adjust_tags(dict(Make='ACME', Model='X1', ProfileName='Adobe Standard', ColorMatrix1=(5, 1))); assert t['LookTable'] == spec and t['ColorMatrix1'] == (1, 1) and t['ProfileName'] == 'Embedded'
+    assert 'LookTable' not in inputs.adjust_tags(dict(Make='Nobody', Model='Y'))
+
+
+def test_a_devices_noise_scale_multiplies_the_noise_profile_of_any_file_of_it(monkeypatch):
+    monkeypatch.setitem(inputs.PROFILES, ('acme', 'x1'), dict(label='Acme', bundle='acme_profile.json')); monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict(NoiseScale=8.0))
+    assert inputs.adjust_tags(dict(Make='ACME', Model='X1', NoiseProfile=(0.001, 1e-6)))['NoiseProfile'] == pytest.approx((0.008, 8e-6)) and 'NoiseProfile' not in inputs.adjust_tags(dict(Make='ACME', Model='X1'))
+    monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict()); assert inputs.adjust_tags(dict(Make='ACME', Model='X1', NoiseProfile=(0.001, 1e-6)))['NoiseProfile'] == (0.001, 1e-6)
+
+
+def test_noise_scale_can_be_a_table_over_the_iso():
+    assert inputs.noise_scale(8.0, 400) == 8.0 and inputs.noise_scale(None, 400) is None
+    t = [[100, 4.0], [400, 16.0], [1600, 64.0]]
+    assert inputs.noise_scale(t, 100) == pytest.approx(4.0) and inputs.noise_scale(t, 200) == pytest.approx(8.0) and inputs.noise_scale(t, 6400) == pytest.approx(64.0) and inputs.noise_scale(t, 50) == pytest.approx(4.0) and inputs.noise_scale(t, None) == pytest.approx(16.0)

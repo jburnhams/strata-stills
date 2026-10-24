@@ -44,7 +44,7 @@ export const resetMock = () => { mock.fullres = { state: 'ready', text: '' }; mo
 export function stagesOf(b: GenerateBody): Stage[] {
   let st = (presets.find(p => p.name === (b.preset ?? 'best')) ?? presets[0]).stages.map(s => ({ ...s })); const o = b.options ?? {}, set = (n: string, k: string, v: string | number | boolean) => { const s = st.find(x => x.stage === n); if (s) s[k] = v }
   if (o.size) set('resize', 'size', o.size); if (o.format) set('encode', 'format', o.format); if (o.quality !== undefined) set('encode', 'quality', o.quality); if (o.sharpen_amount) set('sharpen', 'amount', o.sharpen_amount)
-  if (o.highlight_contrast !== undefined) set('develop', 'highlight_contrast', o.highlight_contrast); if (o.level === false) st = st.filter(s => s.stage !== 'level'); if (o.sharpen === false) st = st.filter(s => s.stage !== 'sharpen')
+  if (o.highlight_contrast !== undefined) set('develop', 'highlight_contrast', o.highlight_contrast); if (o.exposure !== undefined) set('develop', 'exposure', o.exposure); if (o.level === false) st = st.filter(s => s.stage !== 'level'); if (o.sharpen === false) st = st.filter(s => s.stage !== 'sharpen')
   return st
 }
 const summaryOf = (st: Stage[]) => { const e = st.find(s => s.stage === 'encode')!, r = st.find(s => s.stage === 'resize')!; return [e.format === 'tiff' ? 'TIFF 16 bit' : `JPEG ${e.quality === 'auto' ? 'auto quality' : 'q' + e.quality}`, `size ${r.size}`, st.some(s => s.stage === 'level') ? 'levelled' : null, st.find(s => s.stage === 'sharpen') ? `sharpened ${st.find(s => s.stage === 'sharpen')!.amount}` : null].filter(Boolean).join(' · ') }

@@ -1,0 +1,9 @@
+Third-party material used or ported (see docs/progress.md for where):
+
+src/stratastills/sony_ilce7c_profile.json
+  ColorMatrix1/2 and illuminants of RawTherapee's rtdata/dcpprofiles/SONY ILCE-7C.dcp (made with Adobe DNG Converter, marked "public domain" in the profile).
+  NoiseTable: darktable's data/noiseprofiles.json entry for ILCE-7C (fits contributed by Mikko Tervala), darktable is GPL-3.0.
+  ProfileToneCurve: fitted here to the camera's own JPEGs (scripts/fit_tone_curve.py), after the method of LightCraft (https://github.com/storytold/lightcraft, MIT OR Apache-2.0); nothing copied.
+
+src/stratastills/tonematch.py
+  The idea (match the raw's tone to the camera JPEG embedded in the raw by histogram/quantile matching) is that of RawTherapee's "auto-matched tone curve", rtengine/histmatching.cc (GPL-3.0, Alberto Griggio). Written from the method; no code copied. The chroma scale over luminance follows LightCraft's camera-look fit (https://github.com/storytold/lightcraft, MIT OR Apache-2.0), again the method only.

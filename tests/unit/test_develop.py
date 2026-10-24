@@ -92,10 +92,10 @@ def test_develop_runs_the_whole_recipe_on_a_synthetic_raw(monkeypatch):
     neutral = (4096, 9776, 4096, 4096, 4096, 6393); cm = tuple(v for x in ((12758, 10000), (-6160, 10000), (916, 10000), (-5992, 10000), (14682, 10000), (5340, 10000), (-251, 10000), (792, 10000), (9511, 10000)) for v in x)
     tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=neutral, BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(np.repeat(np.linspace(0, 1, 16) ** 0.5, 2)[:0]) or tuple(v for x in np.linspace(0, 1, 16) for v in (x, x ** 0.5)),
                 OpcodeList3=opcode_list((9, gain_param(np.full((4, 4, 3), 1.5, np.float32))), (1, warp_param([(1, 0, 0, 0, 0, 0)] * 3))))
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16))
     out = D.develop('x.dng', half=True); assert out.shape == raw.shape and out.dtype == np.float32 and 0.3 < np.median(out) < 0.6 and np.isfinite(out).all()
     assert D.develop('x.dng', ev=-3.0, denoise='off', recover=0).mean() < out.mean()
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: {}); assert D.develop('x.dng', ev=0).shape == raw.shape                  # a file with none of the tags is still developed
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': {}); assert D.develop('x.dng', ev=0).shape == raw.shape                  # a file with none of the tags is still developed
 
 
 def test_analysis_luma_is_gamma_encoded_and_full_size(monkeypatch):
@@ -162,7 +162,7 @@ def test_band_coring_removes_mottling_at_two_to_four_pixels_but_keeps_edges_and_
 
 def test_the_contrast_boost_runs_after_the_grain_is_cored(monkeypatch):
     order = []; rng = np.random.default_rng(5); raw = (rng.random((60, 80, 3)) * 0.03 + 0.01).astype(np.float32)
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p: dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16)); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': dict(NoiseProfile=(0.0004, 1e-7))); monkeypatch.setattr(D, '_raw_u16', lambda p, half: (raw * 65535).astype(np.uint16)); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
     monkeypatch.setattr(D, 'core_luma', lambda r, s, k=None: order.append('core') or r); monkeypatch.setattr(D, 'highlight_detail', lambda r, a=1.0, lo=0.62, hi=0.92: order.append('contrast') or r)
     D.develop('x.dng', half=True, backend='cpu'); assert order == ['core', 'contrast']
 
@@ -194,3 +194,34 @@ def test_limit_chroma_leaves_soft_colour_alone_and_rolls_off_strong_colour_keepi
     soft = np.full((2, 2, 3), 0.5, np.float32); soft[..., 0] = 0.55; strong = np.zeros((2, 2, 3), np.float32); strong[...] = [0.95, 0.45, 0.05]
     assert np.allclose(D.limit_chroma(soft), soft, atol=1e-6); out = D.limit_chroma(strong); w = np.array([0.2126, 0.7152, 0.0722])
     assert abs(out[0, 0] @ w - strong[0, 0] @ w) < 1e-4 and (out[0, 0].max() - out[0, 0].min()) < (strong[0, 0].max() - strong[0, 0].min())
+
+def test_a_non_dng_raw_is_cut_to_the_makers_active_area(monkeypatch):
+    import contextlib, sys, types
+    from types import SimpleNamespace as NS
+    z = NS(iwidth=24, iheight=16, crop_width=20, crop_height=12, crop_left_margin=2, crop_top_margin=4, flip=0)
+    class R:
+        sizes = z
+        def postprocess(self, half_size, **kw): z.flip = 0; n = 2 if half_size else 1; return np.zeros((16 // n, 24 // n, 3), np.uint16)
+    mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+    assert D._raw_u16('x.arw', False).shape == (12, 20, 3) and D._raw_u16('x.arw', True).shape == (6, 10, 3) and D._raw_u16('x.dng', False).shape == (12, 20, 3)           # a DNG without opcodes is cut like any raw
+    monkeypatch.setattr(D, '_has_opcodes', lambda path: True); assert D._raw_u16('x.dng', False).shape == (16, 24, 3) and D._raw_u16('x.arw', False).shape == (12, 20, 3)           # one with opcodes (sensor geometry) keeps its full area
+    for flip, shape in ((3, (12, 20, 3)), (6, (20, 12, 3)), (5, (20, 12, 3))): z.flip = flip; assert D._raw_u16('x.arw', False).shape == shape                                                                  # turned upright by the camera's orientation
+
+
+def test_camera_exposure_is_no_change_and_a_number_is_stops_from_it():
+    assert D.ev_stops('camera') == 0.0 and D.ev_stops(1) == 1.0 and D.ev_stops('-0.5') == -0.5
+
+
+def test_a_dng_with_an_orientation_is_turned_upright_and_its_opcodes_are_turned_with_it(monkeypatch):
+    import contextlib, sys, types
+    from types import SimpleNamespace as NS
+    z = NS(iwidth=24, iheight=16, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=6)
+    class R:
+        sizes = z
+        def postprocess(self, half_size, **kw): z.flip = 0; return np.zeros((16, 24, 3), np.uint16)
+    mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+    assert D._raw_u16('x.dng', False).shape == (24, 16, 3)
+    m = np.arange(12, dtype='>f4').reshape(3, 4); body = struct.pack('>10I', 0, 0, 16, 24, 0, 3, 1, 1, 3, 4) + struct.pack('>4d', .5, .5, 0, 0) + struct.pack('>I', 1) + m.tobytes()
+    assert D.gain_map(body)[0][:, :, 0].shape == (3, 4) and D.gain_map(body, 6)[0][:, :, 0].shape == (4, 3) and np.array_equal(D.gain_map(body, 6)[0][:, :, 0], np.rot90(m.astype(np.float32), -1)) and np.array_equal(D.gain_map(body, 3)[0][:, :, 0], np.rot90(m.astype(np.float32), 2))
+    wp = struct.pack('>I', 1) + struct.pack('>6d', 1, 0, 0, 0, 0, 0) + struct.pack('>2d', 0.25, 0.4)
+    assert D.warp_params(wp)[1] == (0.25, 0.4) and np.allclose(D.warp_params(wp, 6)[1], (0.6, 0.25)) and np.allclose(D.warp_params(wp, 5)[1], (0.4, 0.75)) and np.allclose(D.warp_params(wp, 3)[1], (0.75, 0.6))

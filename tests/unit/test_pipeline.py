@@ -241,3 +241,40 @@ def test_cpu_picture_is_developed_whole_only_if_its_peak_fits_its_share_of_memor
     with resources.batch(4): t48 = resources.cpu_tile(48e6); assert t48 is not None and 256 <= t48 <= 2048                                 # four at once share 11 GB: 2.8 GB each, too little for a whole 48 MP picture
     monkeypatch.setattr(resources, 'total_ram', lambda: 3e9); assert 256 <= resources.cpu_tile(48e6) < 2048; monkeypatch.setattr(resources, 'total_ram', lambda: 2e9); assert resources.cpu_tile(48e6) == resources.MIN_TILE      # a small machine: small tiles
     monkeypatch.setattr(resources, 'total_ram', lambda: 0); assert resources.cpu_tile(48e6) is None
+
+
+def test_exposure_setting_is_auto_camera_or_stops_from_the_cameras():
+    b = PL.get_preset('best')['stages']; ex = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['exposure']
+    assert ex({}) == 'auto' and ex(dict(exposure='camera')) == 'camera' and ex(dict(exposure=0)) == 'camera' and ex(dict(exposure='-1')) == -1.0 and ex(dict(exposure=0.5)) == 0.5
+    for bad in ('bright', 9, -6): 
+        with pytest.raises(P.ProjectError): PL.apply_options(b, dict(exposure=bad))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(exposure='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(exposure='camera'))) != k           # auto is the default: not part of the key
+    assert PL.summary(PL.apply_options(b, dict(exposure='camera'))).endswith('camera exposure') and PL.summary(PL.apply_options(b, dict(exposure=-1))).endswith('camera exposure -1 EV')
+
+
+def test_recover_setting_is_auto_or_a_number_and_auto_is_left_out_of_the_key():
+    b = PL.get_preset('best')['stages']; rc = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['recover']
+    assert rc({}) == 'auto' and rc(dict(recover=0)) == 0.0 and rc(dict(recover='0.2')) == 0.2
+    for bad in ('lots', -0.1, 1.5):
+        with pytest.raises(P.ProjectError): PL.apply_options(b, dict(recover=bad))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(recover='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(recover=0))) != k
+
+
+def test_lens_setting_is_auto_or_off_and_auto_is_left_out_of_the_key():
+    b = PL.get_preset('best')['stages']; ln = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['lens']
+    assert ln({}) == 'auto' and ln(dict(lens='off')) == 'off'
+    with pytest.raises(P.ProjectError): PL.apply_options(b, dict(lens='maybe'))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(lens='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(lens='off'))) != k and PL.summary(PL.apply_options(b, dict(lens='off'))).endswith('no lens correction')
+
+
+def test_denoise_setting_is_one_of_four_and_auto_is_left_out_of_the_key():
+    b = PL.get_preset('best')['stages']; dn = lambda o: next(s for s in PL.apply_options(b, o) if s['stage'] == 'develop')['denoise']
+    assert dn({}) == 'auto' and dn(dict(denoise='ai')) == 'ai' and dn(dict(denoise='off')) == 'off'
+    with pytest.raises(P.ProjectError): PL.apply_options(b, dict(denoise='strong'))
+    k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(denoise='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(denoise='ai'))) != k
+
+
+def test_lens_setting_takes_five_values():
+    b = PL.get_preset('best')['stages']
+    for v in ('auto', 'off', 'camera', 'geometry', 'shading'): assert next(s for s in PL.apply_options(b, dict(lens=v)) if s['stage'] == 'develop')['lens'] == v
+    with pytest.raises(P.ProjectError): PL.apply_options(b, dict(lens='half'))

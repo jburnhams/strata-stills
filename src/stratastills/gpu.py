@@ -351,6 +351,33 @@ def finish(img, lut, knee, white, blend=1.0):
     return ratio if blend <= 0 else blend * apply_lut(img, lut) + (1 - blend) * ratio
 
 
+def look_to(look, device):
+    """A look (develop.tone_parts: (table, hue/saturation table), either maybe None) as tensors on the device; None stays None."""
+    if look is None: return None
+    t = torch_(); return tuple(None if x is None else t.from_numpy(x).to(device) for x in look)
+
+
+def hue_look(rgb, table):
+    """develop.hue_look on a (3, H, W) tensor with the table as a tensor."""
+    from stratastills import develop as D
+    t = torch_(); dv = rgb.device; w, e1, e2, cs = (t.from_numpy(x).to(dv) for x in (D._W, D._E1, D._E2, D.LOOK_CHROMA)); h, nc = table.shape[0], len(D.LOOK_CHROMA)
+    y = (rgb * w[:, None, None]).sum(0); d = rgb - y[None]; a = (d * e1[:, None, None]).sum(0); b = (d * e2[:, None, None]).sum(0); hue = t.atan2(b, a); ch = t.hypot(a, b)
+    fh = (hue / (2 * np.pi)) % 1.0 * h; i0 = fh.floor().long() % h; i1 = (i0 + 1) % h; fh = fh - fh.floor()
+    k = t.bucketize(ch, cs[1:-1]); fc = ((ch - cs[k]) / (cs[k + 1] - cs[k])).clamp(0, 1); j0 = k
+    q = lambda i, j: table[i, j]; fhh = fh[..., None]; fcc = fc[..., None]
+    tt = q(i0, j0) * (1 - fhh) * (1 - fcc) + q(i1, j0) * fhh * (1 - fcc) + q(i0, j0 + 1) * (1 - fhh) * fcc + q(i1, j0 + 1) * fhh * fcc
+    ang = hue + tt[..., 0] * (np.pi / 180); r = ch * tt[..., 1]; d2 = (r * t.cos(ang))[None] * e1[:, None, None] + (r * t.sin(ang))[None] * e2[:, None, None]
+    return (y[None] + d2).clamp_(0, 1)
+
+
+def chroma_scale(rgb, look):
+    """develop.chroma_scale on a (3, H, W) tensor with the look as tensors (look_to)."""
+    if look is None: return rgb
+    lut, tab = look
+    if lut is not None: y = luma(rgb)[None]; p = y.clamp(0, 1) * (len(lut) - 1); i = p.floor().long().clamp(max=len(lut) - 2); f = p - i; rgb = (y + (rgb - y) * (lut[i] * (1 - f) + lut[i + 1] * f)).clamp_(0, 1)
+    return rgb if tab is None else hue_look(rgb, tab)
+
+
 def limit_chroma(rgb, knee, ceil):
     """develop.limit_chroma on a (3, H, W) tensor."""
     t = torch_()
@@ -373,6 +400,18 @@ def apply_hue_sat_map(rgb, table, rows=512):
         cand = t.stack([t.stack([c, xx, z]), t.stack([xx, c, z]), t.stack([z, c, xx]), t.stack([z, xx, c]), t.stack([xx, z, c]), t.stack([c, z, xx])])        # (6, 3, rows, W)
         out[:, r0:r0 + rows] = cand.gather(0, k[None, None].expand(1, 3, *k.shape))[0] + m
     return out
+
+
+def blind_noise(rgb):
+    """develop.blind_noise on a (3, H, W) tensor (a float: the noise in 8-bit grey levels)."""
+    t = torch_(); F = t.nn.functional; y = (luma(rgb) * 255)[None, None]; k = t.tensor([[1., -2, 1], [-2, 4, -2], [1, -2, 1]], device=rgb.device)[None, None]
+    pad = lambda a: F.pad(a[None], (1, 1, 1, 1), mode='replicate'); r = F.conv2d(pad(y[0]), k)[0, 0, 2:-2, 2:-2].abs(); s = gaussian(y[0], 2.0)
+    sx = F.conv2d(pad(s), t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=rgb.device)[None, None])[0, 0]; sy = F.conv2d(pad(s), t.tensor([[-1., -2, -1], [0, 0, 0], [1, 2, 1]], device=rgb.device)[None, None])[0, 0]
+    g = t.hypot(sx, sy)[2:-2, 2:-2]; flat = g <= _quantile(g[::4, ::4], 0.25); return float(_quantile(r[flat], 0.5) / 0.6745 / 6)
+
+
+def _quantile(x, q):
+    x = x.reshape(-1); k = max(1, min(x.numel(), int(round(q * (x.numel() - 1))) + 1)); return x.kthvalue(k).values
 
 
 def noise_map8(img, noise_profile, blur=8.0, gain=None):
@@ -427,9 +466,17 @@ def sharpen_gain(freq, mtf, shape, scale, noise, max_gain, amount, rolloff):
     return gain
 
 
-def sharpen(rgb, gain, overshoot=0.05):
+def activity(y, mask):
+    """detail.activity on a (H, W) luminance tensor (None: everywhere)."""
+    if mask is None: return torch_().ones_like(y)
+    t = torch_(); F = t.nn.functional; s = gaussian(y[None] * 255, 1.0)[0]; kx = t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=y.device) / 8
+    gx = F.conv2d(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx[None, None])[0, 0]; gy = F.conv2d(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx.t()[None, None])[0, 0]
+    return gaussian(((t.hypot(gx, gy) - mask[0]) / (mask[1] - mask[0])).clamp(0, 1)[None], 1.5)[0]
+
+
+def sharpen(rgb, gain, overshoot=0.05, mask=None):
     """detail.sharpen on a (3, H, W) picture with a half-spectrum gain: the luminance (BT.601 weights, as there) is filtered by FFT, the change added equally to the three channels and held within the local range of the original plus `overshoot`."""
     t = torch_(); F = t.nn.functional; h, w = rgb.shape[1:]; y = rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114
     ys = t.fft.irfft2(t.fft.rfft2(y) * gain, s=(h, w)); pad = lambda a: F.pad(a[None, None], (2, 2, 2, 2), mode='replicate')
-    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot; d = t.minimum(t.maximum(ys, lo), hi) - y
+    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot; d = t.minimum(t.maximum(y + (ys - y) * activity(y, mask), lo), hi) - y
     return (rgb + d[None]).clamp_(0, 1)
