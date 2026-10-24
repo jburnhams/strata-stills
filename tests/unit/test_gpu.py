@@ -222,3 +222,12 @@ def test_no_usable_preview_falls_back_to_the_fixed_lightness_rule(monkeypatch):
     synthetic_dng(monkeypatch); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None); a = {}
     auto = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a); assert a['tone'] is None and np.allclose(auto, D.develop('x.dng', ev='auto', recover=0.35, backend='gpu'), atol=1e-6)
     assert np.isfinite(D.develop('x.dng', ev='match', recover='auto', tone='match', backend='gpu', analysis={})).all()
+
+
+def test_the_sharpening_activity_mask_matches_and_spares_the_flat_areas():
+    from stratastills import detail
+    y = picture(3)[..., 1]; ref = detail.activity(y, detail.SHARPEN_MASK); out = c(gpu.activity(g(y), detail.SHARPEN_MASK)); assert np.abs(out - ref).max() < 2e-2 and ref.min() >= 0 and ref.max() <= 1 and detail.activity(y, None).min() == 1
+    rng = np.random.default_rng(5); flat = np.full((H, W), 0.4, np.float32) + rng.normal(0, 0.004, (H, W)).astype(np.float32); edge = flat.copy(); edge[:, W // 2:] += 0.3
+    assert detail.activity(flat, detail.SHARPEN_MASK).mean() < 0.15 and detail.activity(edge, detail.SHARPEN_MASK)[:, W // 2 - 2:W // 2 + 2].min() > 0.5                                 # noise of 1 level is left alone, a step of 77 levels gets the full boost
+    img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)
+    a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK); b = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF), mask=detail.SHARPEN_MASK)); assert np.abs(a - b).max() < 3e-3

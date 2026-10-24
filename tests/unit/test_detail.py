@@ -59,7 +59,8 @@ def test_the_boost_fades_out_at_the_top_frequencies_where_there_is_only_noise():
     assert fine(detail.sharpen(white, new)) < fine(detail.sharpen(white, old)) * 0.7                                                                    # white noise is boosted much less
 
 
-def test_bright_areas_get_less_fine_scale_boost_than_dark_ones():
+def test_bright_areas_get_less_fine_scale_boost_than_dark_ones(monkeypatch):
+    monkeypatch.setattr(detail, 'SHARPEN_MASK', None)                                                    # the activity mask would take the boost off this noise everywhere: this test is about the brightness roll-off
     rng = np.random.default_rng(1); h, w = 256, 512; f = np.linspace(0.002, 0.498, 128); m = np.exp(-2 * np.pi ** 2 * 1.5 ** 2 * f ** 2)
     noise = rng.normal(0, 0.02, (h, w // 2)).astype(np.float32); img = np.concatenate([0.25 + noise, 0.85 + noise], axis=1); img = np.dstack([img] * 3).astype(np.float32)      # the same noise on a dark half and a bright half
     out = detail.sharpen_picture(img, f, m, 1.0, amount=1.5); plain = detail.sharpen(img, detail.sharpen_gain(f, m, (h, w), 1.0, amount=1.5)); hp = lambda a: a[..., 0] - cv2.GaussianBlur(a[..., 0], (0, 0), 1.0); fine = lambda a: (hp(a)[:, 40:216].std(), hp(a)[:, 296:472].std())

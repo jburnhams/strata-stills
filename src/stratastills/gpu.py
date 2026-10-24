@@ -454,9 +454,17 @@ def sharpen_gain(freq, mtf, shape, scale, noise, max_gain, amount, rolloff):
     return gain
 
 
-def sharpen(rgb, gain, overshoot=0.05):
+def activity(y, mask):
+    """detail.activity on a (H, W) luminance tensor (None: everywhere)."""
+    if mask is None: return torch_().ones_like(y)
+    t = torch_(); F = t.nn.functional; s = gaussian(y[None] * 255, 1.0)[0]; kx = t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=y.device) / 8
+    gx = F.conv2d(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx[None, None])[0, 0]; gy = F.conv2d(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx.t()[None, None])[0, 0]
+    return gaussian(((t.hypot(gx, gy) - mask[0]) / (mask[1] - mask[0])).clamp(0, 1)[None], 1.5)[0]
+
+
+def sharpen(rgb, gain, overshoot=0.05, mask=None):
     """detail.sharpen on a (3, H, W) picture with a half-spectrum gain: the luminance (BT.601 weights, as there) is filtered by FFT, the change added equally to the three channels and held within the local range of the original plus `overshoot`."""
     t = torch_(); F = t.nn.functional; h, w = rgb.shape[1:]; y = rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114
     ys = t.fft.irfft2(t.fft.rfft2(y) * gain, s=(h, w)); pad = lambda a: F.pad(a[None, None], (2, 2, 2, 2), mode='replicate')
-    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot; d = t.minimum(t.maximum(ys, lo), hi) - y
+    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot; d = t.minimum(t.maximum(y + (ys - y) * activity(y, mask), lo), hi) - y
     return (rgb + d[None]).clamp_(0, 1)
