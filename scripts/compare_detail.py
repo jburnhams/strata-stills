@@ -2,6 +2,7 @@
   python scripts/compare_detail.py docs/a7c_candidates.json candidates/a7c candidates/renders/ours candidates/renders/darktable candidates/renders/rawtherapee-auto-matched [--size 3000] [--ext .JPG]
 Per picture and program:
   sharp   the mean gradient (8-bit levels per pixel) of the strongest 2 % of the luminance edges: how crisp the edges are (noise and halos raise it too)
+  ring    the mean difference between the luminance and its 7x7 median in the 4 px around those edges: the narrow bright and dark lobes of a sharpened edge (a step edge itself survives the median), so it falls when ringing falls and, unlike halo, is not raised by simply having crisper edges
   halo    how far the luminance overshoots beside those edges (the mean of the largest overshoot over a 5 px neighbourhood, in levels): sharpening artefacts
   noise   the standard deviation (levels) of the luminance with its 1.5 px blur taken away, in the flat areas (where the camera JPEG, blurred, has almost no gradient)
   cnoise  the same for the two colour channels of CIELAB (the blotchy colour noise)
@@ -11,6 +12,10 @@ import argparse, glob, json, os, sys
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import parity_jpeg as PJ
+
+
+TIE = 0.03                      # a difference under 3 % of the other program's value is a tie
+HIGHER = ('sharp', 'detail')   # the metrics where more is better
 
 
 def load(path, size):
@@ -31,11 +36,13 @@ def masks(ref_bgr):
 def measure(bgr, flat, tex):
     y = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32); g = grad(y); hp = y - cv2.GaussianBlur(y, (0, 0), 1.5); top = g >= np.percentile(g, 98)
     over = cv2.dilate(y, np.ones((5, 5), np.uint8)) - y; under = y - cv2.erode(y, np.ones((5, 5), np.uint8)); lab = PJ.lab(np.ascontiguousarray(bgr[..., ::-1])); ch = np.mean([(lab[..., c] - cv2.GaussianBlur(lab[..., c], (0, 0), 1.5))[flat].std() for c in (1, 2)])
-    noise = float(hp[flat].std()); tex_hp = float(hp[tex].std()); return dict(sharp=float(g[top].mean()), halo=float(np.minimum(over, under)[top].mean()), noise=noise, cnoise=float(ch), detail=tex_hp / max(noise, 1e-3))
+    noise = float(hp[flat].std()); tex_hp = float(hp[tex].std())
+    y8 = np.clip(y + 0.5, 0, 255).astype(np.uint8); ring = np.abs(y - cv2.medianBlur(y8, 7).astype(np.float32)); near = cv2.dilate(top.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0          # ringing: a step edge survives a 7x7 median, the narrow bright and dark lobes beside a sharpened edge do not
+    return dict(sharp=float(g[top].mean()), halo=float(np.minimum(over, under)[top].mean()), ring=float(ring[near].mean()), noise=noise, cnoise=float(ch), detail=tex_hp / max(noise, 1e-3))
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('candidates'); ap.add_argument('cameras'); ap.add_argument('programs', nargs='+'); ap.add_argument('--size', type=int, default=3000); ap.add_argument('--ext', default='.JPG'); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument('candidates'); ap.add_argument('cameras'); ap.add_argument('programs', nargs='+'); ap.add_argument('--size', type=int, default=3000); ap.add_argument('--ext', default='.JPG'); ap.add_argument('--ours', default=None, help='name of our program (default: the first one given): the win table is ours against each other program'); ap.add_argument('--report', default=None, help='write the tables as markdown to this file'); a = ap.parse_args()
     names = ['camera'] + [os.path.basename(os.path.normpath(p)) for p in a.programs]; dirs = [a.cameras] + a.programs; rows = {n: {} for n in names}; sel = [c['stem'] for c in json.load(open(a.candidates))]
     for s in sel:
         ims = []
@@ -44,7 +51,7 @@ if __name__ == '__main__':
         if any(i is None for i in ims) or len({(i.shape[1] > i.shape[0]) for i in ims}) > 1: print(s, 'skipped (missing or turned differently)'); continue
         h = min(i.shape[0] for i in ims); w = min(i.shape[1] for i in ims); ims = [i[:h, :w] for i in ims]; flat, tex = masks(ims[0])
         for n, i in zip(names, ims): rows[n][s] = measure(i, flat, tex)
-    keys = ('sharp', 'halo', 'noise', 'cnoise', 'detail'); common = sorted(set.intersection(*[set(r) for r in rows.values()]))
+    keys = ('sharp', 'halo', 'ring', 'noise', 'cnoise', 'detail'); common = sorted(set.intersection(*[set(r) for r in rows.values()]))
     print('%-28s' % 'median over %d pictures' % len(common), ' '.join('%8s' % k for k in keys))
     for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in common]) for k in keys))
     def iso(s):
@@ -61,4 +68,27 @@ if __name__ == '__main__':
         if len(grp) >= 3:
             print('\nISO %d-%d (%d pictures):' % (lo, hi_, len(grp)))
             for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in grp]) for k in keys))
+    ours = a.ours or names[1]; md = [f'# Detail comparison: {ours} against the others', '', f'{len(common)} pictures from `{os.path.basename(a.candidates)}`, all at {a.size} px on the long side. sharp and detail: higher is better; halo, noise, cnoise: lower is better. Win = better by more than {TIE:.0%} (a tie otherwise).', '']
+    def table(grp, title):
+        md.extend([f'## {title}', '', '| program | ' + ' | '.join(keys) + ' | halo/sharp |', '|---|' + '---:|' * (len(keys) + 1)])
+        for n in names: md.append(f'| {n} | ' + ' | '.join('%.2f' % np.median([rows[n][s][k] for s in grp]) for k in keys) + ' | %.3f |' % np.median([rows[n][s]['halo'] / max(rows[n][s]['sharp'], 1e-3) for s in grp]))
+        md.extend(['', f'Pictures where {ours} wins / ties / loses:', '', '| against | ' + ' | '.join(keys) + ' |', '|---|' + '---|' * len(keys)])
+        for n in names:
+            if n == ours: continue
+            cells = []
+            for k in keys:
+                w = t = l = 0
+                for s in grp:
+                    a_, b_ = rows[ours][s][k], rows[n][s][k]; r = (a_ - b_) / max(abs(b_), 1e-3) * (1 if k in HIGHER else -1)
+                    if r > TIE: w += 1
+                    elif r < -TIE: l += 1
+                    else: t += 1
+                cells.append(f'{w} / {t} / {l}')
+            md.append(f'| {n} | ' + ' | '.join(cells) + ' |')
+        md.append('')
+    table(common, 'All pictures')
+    for lo, hi_ in ((0, 250), (251, 800), (801, 2500), (2501, 6000), (6001, 10 ** 6)):
+        grp = [s for s in common if lo <= isos[s] <= hi_]
+        if len(grp) >= 3: table(grp, f'ISO {lo}-{hi_} ({len(grp)} pictures)')
+    if a.report: open(a.report, 'w').write('\n'.join(md) + '\n'); print(f'report written to {a.report}')
     json.dump(rows, open(os.path.join(os.path.dirname(a.programs[0]), 'detail_metrics.json'), 'w'), indent=1)

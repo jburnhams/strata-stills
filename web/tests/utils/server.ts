@@ -29,12 +29,12 @@ export const handlers = [
 ]
 
 export const detail = { ok: true, native: [8064, 6048], recommended: 6016, scale50: 0.35, scale30: 0.75, scale20: 0.88, f50: 0.17, f30: 0.37, f20: 0.44 }
-export const BEST: Stage[] = [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'auto' }, { stage: 'sharpen', amount: 1.5 }, { stage: 'encode', format: 'jpeg', quality: 90 }]
+export const BEST: Stage[] = [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'auto' }, { stage: 'sharpen', amount: 3 }, { stage: 'encode', format: 'jpeg', quality: 90 }]
 export const presets: Preset[] = [
   { name: 'best', label: 'Best quality (automatic)', builtin: true, stages: BEST },
   { name: 'archive', label: 'Archive: 16 bit TIFF, native size, as developed', builtin: true, stages: [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'native' }, { stage: 'encode', format: 'tiff', quality: 'auto' }] },
 ]
-export const generatedRecord: GenerateRecord = { key: 'abc123', file: 'C:\p\generated\abc123.jpg', output: [6016, 4512], bytes: 15000000, format: 'jpeg', quality: 90, summary: 'JPEG q90 · size auto · levelled · sharpened 1.5', steps: ['developed from the raw'] }
+export const generatedRecord: GenerateRecord = { key: 'abc123', file: 'C:\p\generated\abc123.jpg', output: [6016, 4512], bytes: 15000000, format: 'jpeg', quality: 90, summary: 'JPEG q90 · size auto · levelled · sharpened 3', steps: ['developed from the raw'] }
 
 /** What the mock server remembers within a test (reset after each one). */
 export const mock = { fullres: { state: 'ready', text: '' } as { state: string; text: string }, exists: false, existingVariant: 'gen-abc123', checks: [] as GenerateBody[], generates: [] as GenerateBody[], saved: [] as unknown[], rules: [] as Rule[], applies: 0, statusCalls: 0 }

@@ -8,7 +8,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('candidates'); ap.add_argument('--out', default=os.path.join('candidates', 'renders', 'ours')); ap.add_argument('--size', default='3000'); ap.add_argument('--preset', default='best'); ap.add_argument('--option', action='append', default=[]); ap.add_argument('--patch', action='append', default=[], help='for tuning: module.NAME=python-literal, e.g. detail.SHARPEN_MASK=(2,6)'); a = ap.parse_args()
     tmp = tempfile.mkdtemp(); os.environ['STRATASTILLS_PROJECTS'] = os.path.join(tmp, 'projects'); os.environ['STRATASTILLS_HOME'] = os.path.join(tmp, 'home')
     from stratastills import projects as P, pipeline as PL
-    opts = dict(size=a.size)
+    opts = dict(size=a.size, quality=95)                                                                      # q95 for comparison runs (see sharpen_sweep.COMPARE_QUALITY); --option quality=90 for the product's default
     for o in a.option:
         k, _, v = o.partition('='); opts[k] = {'true': True, 'false': False}.get(v.lower(), v)
     import importlib

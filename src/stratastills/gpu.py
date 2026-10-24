@@ -19,8 +19,17 @@ def torch_():
     global _torch
     if _torch is None:
         import torch
-        _torch = torch
+        _torch = torch; _cudnn_probe(torch)
     return _torch
+
+
+def _cudnn_probe(torch):
+    """Where cuDNN has no engine for a plain convolution (found on a Pascal card, GTX 1050, with the cuDNN 9.10 that ships with torch 2.9 cu126: even a 1x9 float32 kernel fails), turn cuDNN off for the process: PyTorch's own kernels do the same convolutions with the same result, and every pixel and model step here is a convolution."""
+    if not torch.cuda.is_available() or not torch.backends.cudnn.enabled: return
+    try:
+        for dt in (torch.float32, torch.float16): torch.nn.functional.conv2d(torch.zeros(1, 1, 16, 16, device='cuda', dtype=dt), torch.ones(1, 1, 1, 9, device='cuda', dtype=dt))
+        torch.cuda.synchronize()
+    except (RuntimeError, AttributeError): torch.backends.cudnn.enabled = False
 
 
 def _choose():
