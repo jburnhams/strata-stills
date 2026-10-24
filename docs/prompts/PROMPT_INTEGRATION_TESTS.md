@@ -9,7 +9,7 @@ You run without a human: nobody will answer questions, approve a plan or review 
 - If the branch name, the slice, a convention or a tool is unclear, decide using this prompt, `AGENTS.md`, the READMEs and the sister project `../strata-360`; record the choice under "Decisions" in the PR.
 - If a command fails or a tool is missing (no GPU, no node, no network access to a registry), work around it or rely on CI as the runner; do not stop. If you truly cannot make progress on part of the slice, drop that part, list it under "Not done" in the PR, and finish the rest.
 - If you find a bug or something out of scope, record it under "Findings" in the PR (as an xfail or `it.fails` where this prompt says so); don't ask whether to fix it.
-- Always finish by opening the PR (or, if one already exists for your branch, pushing to it) and driving CI to green as described below; a PR with a clear "Not done" list beats no PR. Don't merge it, and don't wait for a reviewer.
+- Whenever you have made changes, finish by opening the PR (or, if one already exists for your branch, pushing to it) and driving CI to green as described below; a PR with a clear "Not done" list beats no PR. If the stop condition applies and there is nothing to change, open no PR. Don't merge, and don't wait for a reviewer.
 
 ## 0. Orient yourself (read before writing anything)
 
@@ -25,7 +25,7 @@ You run without a human: nobody will answer questions, approve a plan or review 
 2. Check what's in flight: `git log --oneline -20`, `git branch -a`, open PRs (GitHub MCP tools). Don't pick what another branch or PR covers; check `tests/unit/README.md` so you don't duplicate unit coverage. If an earlier run's PR for the same slice is still open, continue on it.
 3. Pick **one cohesive slice**: aim for 15-30 tests across 1-3 files. Prefer behaviour users depend on (resumable and cached results, stale handling, error reporting, **originals untouched**: after any command the source folder must be byte-identical, with no new, renamed or deleted file), things that broke before (see `git log --grep fix`), and boundaries: an empty folder, an unsupported or zero-byte or truncated file, a JPEG without EXIF/XMP, a DNG without a profile, a folder with only a video, non-ASCII or very long paths, two projects over the same source, a picture too big for the tile limit.
 4. State the chosen slice and why at the top of the PR description.
-5. **Stop condition:** if the table shows nothing valuable left that can be tested without models or special hardware, change nothing in the code, open a PR whose only content is a one-line ledger/notes update saying so (or, if there is truly nothing to change, report it in your final message), and don't invent work.
+5. **Stop condition:** if the table shows nothing valuable left that can be tested without models or special hardware, change nothing, open no PR, say so in your final message, and don't invent work.
 
 ## 2. Reuse and extend the shared fixtures (don't bypass them)
 
