@@ -203,7 +203,8 @@ def test_a_non_dng_raw_is_cut_to_the_makers_active_area(monkeypatch):
         sizes = z
         def postprocess(self, half_size, **kw): z.flip = 0; n = 2 if half_size else 1; return np.zeros((16 // n, 24 // n, 3), np.uint16)
     mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
-    assert D._raw_u16('x.arw', False).shape == (12, 20, 3) and D._raw_u16('x.arw', True).shape == (6, 10, 3) and D._raw_u16('x.dng', False).shape == (16, 24, 3)
+    assert D._raw_u16('x.arw', False).shape == (12, 20, 3) and D._raw_u16('x.arw', True).shape == (6, 10, 3) and D._raw_u16('x.dng', False).shape == (12, 20, 3)           # a DNG without opcodes is cut like any raw
+    monkeypatch.setattr(D, '_has_opcodes', lambda path: True); assert D._raw_u16('x.dng', False).shape == (16, 24, 3) and D._raw_u16('x.arw', False).shape == (12, 20, 3)           # one with opcodes (sensor geometry) keeps its full area
     for flip, shape in ((3, (12, 20, 3)), (6, (20, 12, 3)), (5, (20, 12, 3))): z.flip = flip; assert D._raw_u16('x.arw', False).shape == shape                                                                  # turned upright by the camera's orientation
 
 

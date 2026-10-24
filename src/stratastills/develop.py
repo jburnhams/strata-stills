@@ -413,6 +413,13 @@ def auto_ev(img, lut, target=TARGET_MEDIAN, stride=8):
 
 # ---- the whole development ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+def _has_opcodes(path):
+    import tifffile
+    try:
+        with tifffile.TiffFile(path) as t: return any(tag.name == 'OpcodeList3' for pg in [t.pages[0]] + list(getattr(t.pages[0], 'pages', []) or []) for tag in pg.tags.values())
+    except Exception: return False
+
+
 def _raw_u16(path, half):
     """The demosaiced raw as LibRaw gives it: uint16 (H, W, 3), camera RGB, white-balanced, linear. A linear DNG (demosaiced RGB, which LibRaw refuses: Lightroom's merged panoramas) is read by lineardng.py into the same form."""
     import rawpy
@@ -421,11 +428,9 @@ def _raw_u16(path, half):
             flip = r.sizes.flip                                                                                                                                                  # before postprocess: with user_flip=0 LibRaw overwrites it with 0
             out = r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
             z = r.sizes; k = 2 if half else 1
-            dng = os.path.splitext(path)[1].lower() == '.dng'
-            if dng: return np.ascontiguousarray(np.rot90(out, FLIP_TURNS[flip])) if flip in FLIP_TURNS else out                                                                  # a DNG: no crop (its opcodes, lens and shading, are in the sensor's geometry: they are turned with the picture, gain_map and warp_params)
-            if z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight):                                                                                       # a raw that is not a DNG has no DefaultCrop tag: the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here
+            if z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight) and not (os.path.splitext(path)[1].lower() == '.dng' and _has_opcodes(path)):               # the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here, for every raw alike; except a DNG that carries opcodes (lens, shading): they are in the sensor's geometry, so it keeps it
                 out = out[z.crop_top_margin // k: (z.crop_top_margin + z.crop_height) // k, z.crop_left_margin // k: (z.crop_left_margin + z.crop_width) // k]
-            return np.ascontiguousarray(np.rot90(out, {3: 2, 5: 1, 6: -1}.get(flip, 0))) if flip in (3, 5, 6) else out                                                     # and turned upright by the camera's orientation (LibRaw flip 3: 180, 5: 90 counter-clockwise, 6: 90 clockwise), as the rest of the program expects
+            return np.ascontiguousarray(np.rot90(out, FLIP_TURNS[flip])) if flip in FLIP_TURNS else out                                                                       # and turned upright by the camera's orientation (LibRaw flip 3: 180, 5: 90 counter-clockwise, 6: 90 clockwise): opcodes are turned with it (gain_map, warp_params)
     except Exception as e:
         if not lineardng.is_linear(path): raise
         try: return lineardng.read(path, half)
