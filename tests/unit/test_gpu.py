@@ -249,3 +249,34 @@ def test_auto_denoise_brings_the_model_in_on_a_noisy_picture_only(monkeypatch):
         called.clear(); D.develop('x.dng', denoise='classical', backend=backend, analysis=a); assert not called and a['ai'] is False
         called.clear(); D.develop('x.dng', denoise='ai', backend=backend, analysis=a); assert called and a['ai'] is True
     monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off
+
+
+class FakeOOM(RuntimeError): pass
+FakeOOM.__name__ = 'OutOfMemoryError'
+
+
+def test_is_oom():
+    assert gpu.is_oom(FakeOOM('x')) and gpu.is_oom(RuntimeError('CUDA out of memory. Tried to allocate')) and not gpu.is_oom(RuntimeError('bad shape')) and not gpu.is_oom(ValueError('out of memory'))
+
+
+def test_out_of_memory_falls_back_to_smaller_tiles_then_cpu(monkeypatch):
+    calls = []; monkeypatch.setattr(gpu, 'available', lambda: True)
+
+    def fake_gpu(path, half, ev, denoise, recover, hc, analysis=None, tone=None, lens='auto', smaller=False): calls.append(('gpu', smaller)); raise FakeOOM('out of memory')
+    monkeypatch.setattr(D, '_develop_gpu', fake_gpu)
+    monkeypatch.setattr(D, '_raw_u16', lambda p, half=False: (_ for _ in ()).throw(KeyError('reached the CPU')))
+    with pytest.raises(KeyError): D.develop('x.dng', tone=None)
+    assert calls == [('gpu', False), ('gpu', True)]
+    calls.clear(); monkeypatch.setattr(D, '_develop_gpu', lambda *a, **k: (_ for _ in ()).throw(ValueError('not memory')))
+    with pytest.raises(ValueError): D.develop('x.dng', tone=None)
+    with pytest.raises(FakeOOM):
+        monkeypatch.setattr(D, '_develop_gpu', fake_gpu); D.develop('x.dng', tone=None, backend='gpu')
+
+
+def test_sharpen_out_of_memory_falls_back_to_cpu(monkeypatch):
+    from stratastills import detail
+    monkeypatch.setattr(detail, '_sharpen_picture_gpu', lambda *a: (_ for _ in ()).throw(FakeOOM('out of memory')))
+    monkeypatch.setattr(gpu, 'available', lambda: True)
+    p = picture(); f = np.linspace(0.01, 0.5, 20); m = np.linspace(1, 0.2, 20)
+    out = detail.sharpen_picture(p, f, m, 0.5, amount=1.0); assert out.shape == p.shape
+    with pytest.raises(FakeOOM): detail.sharpen_picture(p, f, m, 0.5, backend='gpu')

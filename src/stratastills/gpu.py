@@ -90,11 +90,18 @@ _tiled_batch = False
 
 
 def _cuda_total():
+    """The memory of a CUDA card this program may plan with, or None for another device: the card's total, but no more than what is free plus what this process already holds (a card shared with the desktop or another program has far less free than its total: a 2 GB GTX 1050 with the desktop on it has about 1.6 GB, and plans made on 2 GB ran out of memory)."""
     try:
         d = dev()
-        if d.type == 'cuda': return torch_().cuda.mem_get_info()[1]
+        if d.type == 'cuda':
+            t = torch_(); free, total = t.cuda.mem_get_info(); return min(total, free + t.cuda.memory_reserved())
     except Exception: pass
     return None
+
+
+def is_oom(e):
+    """Whether the exception is the device running out of memory (CUDA, or the allocator of MPS)."""
+    return type(e).__name__ == 'OutOfMemoryError' or (isinstance(e, RuntimeError) and 'out of memory' in str(e).lower())
 
 
 def whole_slots():
