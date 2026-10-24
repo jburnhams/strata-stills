@@ -47,8 +47,18 @@ if __name__ == '__main__':
     keys = ('sharp', 'halo', 'noise', 'cnoise', 'detail'); common = sorted(set.intersection(*[set(r) for r in rows.values()]))
     print('%-28s' % 'median over %d pictures' % len(common), ' '.join('%8s' % k for k in keys))
     for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in common]) for k in keys))
-    hi = [s for s in common if any(t in s for t in ('00449', '00450', '00451', '00282', '00287', '00283'))]
-    if hi:
-        print('\nhigh-ISO indoor frames (%d):' % len(hi))
-        for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in hi]) for k in keys))
+    def iso(s):
+        import tifffile
+        for ext in ('.ARW', '.DNG', '.arw', '.dng'):
+            f = os.path.join(a.cameras, s + ext)
+            if os.path.exists(f):
+                try: return int(tifffile.TiffFile(f).pages[0].tags['ExifTag'].value['ISOSpeedRatings'])
+                except Exception: return 0
+        return 0
+    isos = {s: iso(s) for s in common}
+    for lo, hi_ in ((0, 250), (251, 800), (801, 2500), (2501, 6000), (6001, 10 ** 6)):
+        grp = [s for s in common if lo <= isos[s] <= hi_]
+        if len(grp) >= 3:
+            print('\nISO %d-%d (%d pictures):' % (lo, hi_, len(grp)))
+            for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in grp]) for k in keys))
     json.dump(rows, open(os.path.join(os.path.dirname(a.programs[0]), 'detail_metrics.json'), 'w'), indent=1)

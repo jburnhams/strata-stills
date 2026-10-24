@@ -29,15 +29,23 @@ def _bundle(name):
     return _cache[name]
 
 
-def adjust_tags(tags):
-    """The DNG tags to develop with: a file Lightroom wrote with the Adobe Standard profile gets its device's own colour profile (see `bundle`); and every file whose device profile has a `LookTable` (the hue/saturation look fitted to the camera's JPEGs: scripts/fit_look_table.py) gets it and has its noise profile multiplied by the profile's `NoiseScale` (how much stronger the clean-up has to be than the profile says to leave what the camera's own JPEG leaves: scripts/fit_noise_scale.py), whatever kind of file it is (the dict is changed in place)."""
+def noise_scale(spec, iso):
+    """The factor of a profile's `NoiseScale`: a number, or a table [[iso, factor]] interpolated in log-log between its ISOs (the end ones beyond; the plain number when the ISO is not known)."""
+    if spec is None: return None
+    if not isinstance(spec, (list, tuple)): return float(spec)
+    t = sorted(spec); xs = np.log([r[0] for r in t]); ys = np.log([r[1] for r in t])
+    return float(np.exp(np.interp(np.log(iso), xs, ys))) if iso else float(np.exp(np.mean(ys)))
+
+
+def adjust_tags(tags, iso=None):
+    """The DNG tags to develop with: a file Lightroom wrote with the Adobe Standard profile gets its device's own colour profile (see `bundle`); and every file whose device profile has a `LookTable` (the hue/saturation look fitted to the camera's JPEGs: scripts/fit_look_table.py) gets it and has its noise profile multiplied by the profile's `NoiseScale` (a factor, or a table over the ISO; how much stronger the clean-up has to be than the profile says to leave what the camera's own JPEG leaves: scripts/fit_noise_scale.py), whatever kind of file it is (the dict is changed in place)."""
     name = profile(tags.get('Make'), tags.get('Model')).get('bundle')
     if not name: return tags
     if _text(tags.get('ProfileName')) == 'adobe standard':
         for k, v in _bundle(name).items(): tags[k] = tuple(v) if isinstance(v, list) else v
         tags['ProfileName'] = 'Embedded'
     if 'LookTable' in _bundle(name): tags.setdefault('LookTable', _bundle(name)['LookTable'])
-    k = _bundle(name).get('NoiseScale')
+    k = noise_scale(_bundle(name).get('NoiseScale'), iso)
     if k and tags.get('NoiseProfile') is not None: tags['NoiseProfile'] = (tags['NoiseProfile'][0] * k, tags['NoiseProfile'][1] * k)                      # the device's calibration of its noise profile (scripts/fit_noise_scale.py), whether the profile is the file's own or made from a table
     return tags
 
@@ -69,7 +77,7 @@ def synthesize_tags(path, tags, lens='auto'):
     if wb[1] <= 0 or wb[0] <= 0 or wb[2] <= 0: return tags
     if lens != 'off' and 'OpcodeList3' not in tags:                                                                           # the camera's own shading, distortion and colour-fringe tables, as the opcodes a DNG would carry (lenscorr.py)
         from stratastills import lenscorr
-        ops = lenscorr.from_file(path, w, h)
+        ops = lenscorr.from_file(path, w, h, lens)
         if ops: tags['OpcodeList3'] = ops
     tags['AsShotNeutral'] = _rat([wb[1] / wb[0], 1.0, wb[1] / wb[2]]); name = profile(tags.get('Make'), tags.get('Model')).get('bundle')
     if name:

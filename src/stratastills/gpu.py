@@ -402,6 +402,18 @@ def apply_hue_sat_map(rgb, table, rows=512):
     return out
 
 
+def blind_noise(rgb):
+    """develop.blind_noise on a (3, H, W) tensor (a float: the noise in 8-bit grey levels)."""
+    t = torch_(); F = t.nn.functional; y = (luma(rgb) * 255)[None, None]; k = t.tensor([[1., -2, 1], [-2, 4, -2], [1, -2, 1]], device=rgb.device)[None, None]
+    pad = lambda a: F.pad(a[None], (1, 1, 1, 1), mode='replicate'); r = F.conv2d(pad(y[0]), k)[0, 0, 2:-2, 2:-2].abs(); s = gaussian(y[0], 2.0)
+    sx = F.conv2d(pad(s), t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=rgb.device)[None, None])[0, 0]; sy = F.conv2d(pad(s), t.tensor([[-1., -2, -1], [0, 0, 0], [1, 2, 1]], device=rgb.device)[None, None])[0, 0]
+    g = t.hypot(sx, sy)[2:-2, 2:-2]; flat = g <= _quantile(g[::4, ::4], 0.25); return float(_quantile(r[flat], 0.5) / 0.6745 / 6)
+
+
+def _quantile(x, q):
+    x = x.reshape(-1); k = max(1, min(x.numel(), int(round(q * (x.numel() - 1))) + 1)); return x.kthvalue(k).values
+
+
 def noise_map8(img, noise_profile, blur=8.0, gain=None):
     """develop.noise_map8: the noise expected at each pixel in 8-bit grey levels, as a plane. `gain` (a plane, the lens-shading field) multiplies the pixel's signal AND its noise beyond the global exposure gain the profile is scaled for: variance = S G v + O G^2."""
     t = torch_(); h, w = img.shape[1:]; sz = (max(8, round(h / 8)), max(8, round(w / 8))); v = gaussian(resize_area(luma(img), sz), blur / 8 * 2).clamp_(min=1e-5)

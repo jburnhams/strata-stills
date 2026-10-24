@@ -1,6 +1,7 @@
 import struct
 
 import numpy as np
+import pytest
 
 from stratastills import develop as D, lenscorr as L
 
@@ -37,3 +38,31 @@ def test_the_opcodes_are_read_back_by_the_development_and_correct_a_vignetted_pi
 
 def test_a_file_without_a_valid_set_of_tables_gets_no_opcodes(tmp_path):
     p = tmp_path / 'x.arw'; p.write_bytes(b'not a tiff'); assert L.read_tables(str(p)) is None and L.from_file(str(p), 10, 10) is None
+
+
+def test_the_lens_setting_picks_the_corrections_asked_for():
+    on = dict(distortion=17, shading=257, ca=1); off = dict(distortion=0, shading=257, ca=1)
+    assert L.parts('auto') == (True, True) and L.parts('off') == (False, False) and L.parts('shading') == (True, False) and L.parts('geometry') == (False, True)
+    assert L.parts('camera', on) == (False, True) and L.parts('camera', off) == (False, False) and L.parts('camera', dict(distortion=255)) == (False, False) and L.parts('camera', None) == (False, False)           # the camera's JPEG: distortion only when the camera's setting is on, never shading
+    full = L.opcodes(dict(TABLES, settings=on), 60, 40, 'auto'); assert [i for i, _ in D.parse_opcodes(full)] == [9, 1]
+    assert [i for i, _ in D.parse_opcodes(L.opcodes(dict(TABLES, settings=on), 60, 40, 'camera'))] == [1] and L.opcodes(dict(TABLES, settings=off), 60, 40, 'camera') is None and [i for i, _ in D.parse_opcodes(L.opcodes(TABLES, 60, 40, 'shading'))] == [9]
+
+
+def test_a_dngs_own_opcodes_can_be_cut_to_one_part():
+    full = L.opcodes(TABLES, 60, 40); g = D.parse_opcodes(L.keep_opcodes(full, {9})); w = D.parse_opcodes(L.keep_opcodes(full, {1}))
+    assert [i for i, _ in g] == [9] and [i for i, _ in w] == [1] and g[0][1] == D.parse_opcodes(full)[0][1] and w[0][1] == D.parse_opcodes(full)[1][1] and D.parse_opcodes(L.keep_opcodes(full, set())) == []
+
+
+def test_each_part_comes_from_the_best_source(monkeypatch):
+    from stratastills import lensfundb
+    lf_gain = lambda r: np.full_like(r, 2.0); lf_warp = np.ones((3, 6)) * 0.5
+    monkeypatch.setattr(lensfundb, 'corrections_from_exif', lambda p, w, h: (lf_gain, lf_warp)); cam = dict(TABLES, settings=dict(distortion=17, shading=257, ca=1))
+    ids = lambda ops: [i for i, _ in D.parse_opcodes(ops)] if ops else []
+    monkeypatch.setattr(L, 'read_tables', lambda p: cam)
+    ops = D.parse_opcodes(L.from_file('x.arw', 60, 40, 'auto')); assert [i for i, _ in ops] == [9, 1]
+    m = D.gain_map(ops[0][1])[0]; assert m[32, 32, 0] == pytest.approx(1.0, abs=1e-3) and m[0, 0, 0] < 1.8                                                   # the shading is the camera's table (about 1.7 in the corner), not lensfun's 2.0 everywhere
+    assert D.warp_params(ops[1][1])[0][0, 0] == pytest.approx(0.5)                                                                                         # the geometry is lensfun's, never the camera's table
+    assert ids(L.from_file('x.arw', 60, 40, 'camera')) == [1] and ids(L.from_file('x.arw', 60, 40, 'shading')) == [9] and ids(L.from_file('x.arw', 60, 40, 'off')) == []
+    monkeypatch.setattr(L, 'read_tables', lambda p: dict(cam, settings=dict(distortion=0))); assert ids(L.from_file('x.arw', 60, 40, 'camera')) == []                # the camera's distortion setting is off: its JPEG is not corrected
+    monkeypatch.setattr(L, 'read_tables', lambda p: None); ops = D.parse_opcodes(L.from_file('x.arw', 60, 40, 'auto')); assert [i for i, _ in ops] == [9, 1] and D.gain_map(ops[0][1])[0][0, 0, 0] == pytest.approx(2.0)   # no table in the file: the shading from lensfun too
+    monkeypatch.setattr(lensfundb, 'corrections_from_exif', lambda p, w, h: (None, None)); assert L.from_file('x.arw', 60, 40, 'auto') is None                          # nothing describes this lens

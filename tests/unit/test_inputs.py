@@ -95,3 +95,9 @@ def test_a_devices_noise_scale_multiplies_the_noise_profile_of_any_file_of_it(mo
     monkeypatch.setitem(inputs.PROFILES, ('acme', 'x1'), dict(label='Acme', bundle='acme_profile.json')); monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict(NoiseScale=8.0))
     assert inputs.adjust_tags(dict(Make='ACME', Model='X1', NoiseProfile=(0.001, 1e-6)))['NoiseProfile'] == pytest.approx((0.008, 8e-6)) and 'NoiseProfile' not in inputs.adjust_tags(dict(Make='ACME', Model='X1'))
     monkeypatch.setitem(inputs._cache, 'acme_profile.json', dict()); assert inputs.adjust_tags(dict(Make='ACME', Model='X1', NoiseProfile=(0.001, 1e-6)))['NoiseProfile'] == (0.001, 1e-6)
+
+
+def test_noise_scale_can_be_a_table_over_the_iso():
+    assert inputs.noise_scale(8.0, 400) == 8.0 and inputs.noise_scale(None, 400) is None
+    t = [[100, 4.0], [400, 16.0], [1600, 64.0]]
+    assert inputs.noise_scale(t, 100) == pytest.approx(4.0) and inputs.noise_scale(t, 200) == pytest.approx(8.0) and inputs.noise_scale(t, 6400) == pytest.approx(64.0) and inputs.noise_scale(t, 50) == pytest.approx(4.0) and inputs.noise_scale(t, None) == pytest.approx(16.0)

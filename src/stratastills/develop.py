@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2, numpy as np
 
-from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lineardng, resources
+from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
 VERSION = 11
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
@@ -39,8 +39,9 @@ def read_dng_tags(path, lens='auto'):
             for tag in pg.tags.values():
                 if tag.name in want and tag.name not in out: out[tag.name] = tag.value
     if lens == 'off': out.pop('OpcodeList3', None)
+    elif lens in ('shading', 'geometry') and 'OpcodeList3' in out: out['OpcodeList3'] = lenscorr.keep_opcodes(out['OpcodeList3'], {9} if lens == 'shading' else {1})                   # a DNG's own: only the part asked for (gain map = shading, warp = geometry); 'camera' and 'auto' keep what the file has
     if path.lower().endswith('.dng') and flip: out['Flip'] = flip                                                                       # the opcodes are in the sensor's orientation: the picture is turned upright first (_raw_u16), so they are turned with it (gain_map, warp_params)
-    return inputs.adjust_tags(inputs.synthesize_tags(path, out, lens))
+    return inputs.adjust_tags(inputs.synthesize_tags(path, out, lens), inputs._iso(path))
 
 
 def _rationals(v): return np.array([a / b if b else 0.0 for a, b in zip(v[0::2], v[1::2])], float)
@@ -202,6 +203,20 @@ def tone_lut(curve, n=4096):
 def noise_sigma(noise_profile, level):
     """The standard deviation of the noise (0..1 linear) of a pixel of linear value `level`, from the DNG NoiseProfile (scale S, offset O: variance = S * level + O)."""
     s, o = noise_profile[0], noise_profile[1]; return float(np.sqrt(max(s * level + o, 1e-12)))
+
+
+AUTO_AI_NOISE = 1.5                      # `denoise: auto` brings the learned model in when the picture's own noise, estimated before any clean-up (blind_noise, 8-bit levels), is this high or higher (measured on 46 A7C pictures: ISO 100 0.3, 400 0.9, 1250 1.2, 3200 1.7, 10000 2.3): the classical clean-up leaves 1.3-1.6 levels of luminance noise in the flat areas there, RawTherapee 0.8-1.1, the model 0.5-0.6
+
+
+def _auto_ai(blind):
+    """Whether `denoise: auto` uses the learned model for a picture whose blind noise is `blind` (and the weights are there, and STRATASTILLS_AI is not 0)."""
+    return os.environ.get('STRATASTILLS_AI', '1') != '0' and blind >= AUTO_AI_NOISE and denoise_ai.available()
+
+
+def blind_noise(rgb):
+    """The noise of a finished picture (float32 (H, W, 3), 0..1) in 8-bit grey levels, estimated from the picture alone (so it holds for any device and any ISO): the response of Immerkaer's 3x3 noise mask (variance 36 sigma^2 for white noise) on the luminance, taken in the flattest quarter of the picture (where the smoothed gradient is lowest: texture and edges would count as noise), through the robust median (|r| / 0.6745 / 6)."""
+    y = (rgb @ _W) * 255; r = cv2.filter2D(y, cv2.CV_32F, np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], np.float32))[2:-2, 2:-2]; s = cv2.GaussianBlur(y, (0, 0), 2.0); g = np.hypot(cv2.Sobel(s, cv2.CV_32F, 1, 0), cv2.Sobel(s, cv2.CV_32F, 0, 1))[2:-2, 2:-2]
+    flat = g <= np.percentile(g[::4, ::4], 25); return float(np.median(np.abs(r[flat])) / 0.6745 / 6)
 
 
 def visible_noise(img, noise_profile, stride=8):
@@ -479,30 +494,33 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
       'ai'      'auto' plus a learned model (`model`, `strength`: denoise_ai) where the noise is visible
       'chroma'  colour only; 'off' nothing; a number: non-local-means h (8-bit grey levels) everywhere.
     `analysis`: pass a dict and it gets 'luma', the analysis luminance of this very raw (what analysis_luma gives, from the same decode, so the caller need not decode the raw a second time). `lens`: 'auto' applies the correction data of the file (lenscorr.py), 'off' none. `tone`: a tone curve (pairs of linear input, display-encoded output, as ProfileToneCurve) to use instead of the file's or its device's (tonematch.py makes one that matches the camera's own JPEG). `backend`: 'auto' runs on the GPU (gpu.py) when there is one and the options are ones it does ('auto', 'chroma', 'off'), else on the CPU; 'cpu' and 'gpu' force it (the CPU code is the reference the GPU code is tested against)."""
-    on_gpu = backend != 'cpu' and denoise in ('auto', 'chroma', 'off') and (backend == 'gpu' or gpu.available())
+    on_gpu = backend != 'cpu' and denoise in ('auto', 'ai', 'classical', 'chroma', 'off') and (backend == 'gpu' or gpu.available())
     if tone == 'match' and not on_gpu: tone = _match_on_cpu(path, ev, recover, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover
     elif recover == 'auto' and tone != 'match': recover = 0.35
     if on_gpu: return _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
     u16 = _raw_u16(path, half)
-    if denoise in ('auto', 'chroma', 'off'):                                                                                  # a picture too big for the memory it may use is developed in tiles (cpu_tiled.py)
+    if denoise in ('auto', 'classical', 'chroma', 'off'):                                                                     # a picture too big for the memory it may use is developed in tiles (cpu_tiled.py: the classical clean-up only)
         tile = resources.cpu_tile(u16.shape[0] * u16.shape[1])
         if tile:
-            try: return cpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tile, tone=tone, lens=lens)
+            try: return cpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise == 'classical' else denoise, recover, highlight_contrast, analysis, tile, tone=tone, lens=lens)
             except cpu_tiled.Unsupported: pass
     if analysis is not None: analysis['luma'] = analysis_luma(path, None if half else u16)
     P = develop_parts(path, half, ev, recover, u16=u16, tone=tone, lens=lens); img, lut, npf, field, chroma = P['linear'], P['lut'], P['noise'], P['gain'], P['chroma']
-    classical = denoise in ('auto', 'ai', 'chroma') and npf is not None
-    if denoise in ('auto', 'ai'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
+    classical = denoise in ('auto', 'ai', 'classical', 'chroma') and npf is not None
+    if denoise in ('auto', 'ai', 'classical'): img = denoise_linear(img, npf, 'auto', field)                                                           # colour noise (the luminance grain is cored below, driven by the noise map)
     elif denoise not in ('off', 'chroma'): img = denoise_linear(img, npf, denoise, field)
     sig8 = noise_map8(img, npf, gain=field) if npf is not None else None
     out = limit_chroma(chroma_scale(finish(img, lut), chroma), None if chroma is None else 0.0)                                  # a matched look has its own colour scale: the roll-off of strong colours that tames a curve applied per channel would only undo it
+    blind = blind_noise(out) if denoise in ('auto', 'ai') and npf is not None else 0.0
     if classical:
         out = clean_colour(out, sig8)
-        if denoise in ('auto', 'ai'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
+        if denoise in ('auto', 'ai', 'classical'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
     if highlight_contrast > 0: out = highlight_detail(out, highlight_contrast)
-    if denoise == 'ai' and sig8 is not None:
-        model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
-        if denoise_ai.available(model): out = denoise_ai.adaptive(out, sig8, model, strength)
+    ai = sig8 is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(blind)))
+    model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
+    if ai and denoise_ai.available(model): out = denoise_ai.adaptive(out, sig8, model, strength)
+    else: ai = False
+    if analysis is not None: analysis['ai'] = ai; analysis['blind_noise'] = blind
     return out
 
 
@@ -520,7 +538,7 @@ def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=
     with gpu.slot():
         if limit and u16.shape[0] * u16.shape[1] > limit:
             if tone == 'match': tone = _match_on_cpu(path, ev, recover, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover        # a picture too big for the card is developed in tiles: its curve the slow way
-            try: return gpu_tiled.develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens)
+            try: return gpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise in ('ai', 'classical') else denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens)
             except gpu_tiled.Unsupported:
                 k = (limit / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
         return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
@@ -546,13 +564,14 @@ def gpu_colour(img, tags):
     return img
 
 
-def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=None):
+def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=None, extras=None):
     """The last part of the GPU development, from the exposed linear picture `img` (3, H, W) to the finished one: colour noise blurred by `sc` (the visible-noise estimate of the whole picture), the noise map, the tone curve and colour limit, the colour and luminance clean-up, the highlight contrast. Everything in it is local (the widest reach is about 90 pixels), so it can be run on a tile with a margin (gpu_tiled.py) and give what the whole picture would."""
     classical = denoise in ('auto', 'chroma') and npf is not None
     if classical and sc > 0.3:                                                                                         # denoise_linear: colour noise blurred in proportion to the noise
         y = gpu.luma(img); cc = gpu.gaussian(img - y[None], sc); img = (y[None] + cc).clamp_(min=0)
     sig8 = gpu.noise_map8(img, npf, gain=field) if npf is not None else None
     out = gpu.limit_chroma(gpu.chroma_scale(gpu.finish(img, lut_t, KNEE, WHITE, TONE_BLEND), chroma_t), CHROMA_KNEE if chroma_t is None else 0.0, CHROMA_CEIL)
+    if extras is not None: extras['sig8'] = sig8; extras['blind'] = gpu.blind_noise(out) if npf is not None else 0.0
     if classical:
         out = gpu.clean_colour(out, sig8)
         if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)
@@ -581,6 +600,11 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
     sample = gpu.to_numpy(img[:, ::8, ::8]); g = 2.0 ** (auto_ev(sample, lut, stride=1) if ev == 'auto' else ev_stops(ev)); img = img * g
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None
     sc = 0.0
-    if npf is not None and denoise in ('auto', 'chroma'): sc = float(np.clip(visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1) * 0.6, 0.0, 1.5))
-    out = gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t); del img
-    res = gpu.to_numpy(out); del out; gpu.free(); return res
+    mode = 'auto' if denoise in ('ai', 'classical') else denoise                                                                 # the tail knows 'auto', 'chroma' and 'off'; the learned model is added after it
+    if npf is not None and mode in ('auto', 'chroma'): sc = float(np.clip(visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1) * 0.6, 0.0, 1.5))
+    ex = {}; out = gpu_tail(img, lut_t, npf, field, sc, mode, highlight_contrast, chroma_t, extras=ex); del img
+    res = gpu.to_numpy(out); del out
+    ai = npf is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(ex['blind']))) and denoise_ai.available()
+    if analysis is not None: analysis['ai'] = bool(ai); analysis['blind_noise'] = ex.get('blind', 0.0)
+    if ai: res = denoise_ai.adaptive(res, gpu.to_numpy(ex['sig8']), denoise_ai.DEFAULT, denoise_ai.DEFAULT_STRENGTH)                    # where the noise is visible (the same call as the CPU route)
+    gpu.free(); return res

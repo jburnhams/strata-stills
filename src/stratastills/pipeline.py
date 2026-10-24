@@ -44,14 +44,14 @@ def _exposure(v):
 
 
 def _denoise(v):
-    """The noise clean-up of the develop: 'auto' (colour noise and fringes taken out edge-aware, the luminance grain cored band by band, both driven by the noise the profile of the device says each pixel has), 'ai' (that plus a learned model where the noise is visible: slow, on the CPU route), 'chroma' (colour only), 'off'."""
-    if str(v).lower() not in ('auto', 'ai', 'chroma', 'off'): raise P.ProjectError("develop denoise is 'auto', 'ai', 'chroma' or 'off'")
+    """The noise clean-up of the develop: 'auto' (the classical clean-up, colour noise and fringes taken out edge-aware and the luminance grain cored band by band, both driven by the noise the device's profile says each pixel has; and the learned model on top where the picture's own noise is high: blind_noise >= AUTO_AI_NOISE, about ISO 2500 and up), 'classical' (never the model), 'ai' (always the model), 'chroma' (colour only), 'off'. Only 'auto' is meant for use: the others are for tests and tuning."""
+    if str(v).lower() not in ('auto', 'ai', 'classical', 'chroma', 'off'): raise P.ProjectError("develop denoise is 'auto', 'ai', 'classical', 'chroma' or 'off'")
     return str(v).lower()
 
 
 def _lens(v):
-    """'auto': the lens correction the file carries is applied (a DNG's own opcodes, or the camera's shading, distortion and colour-fringe tables of a raw that is not a DNG: lenscorr.py); 'off': none (what the camera's own JPEG shows when its correction is off, so the parity with it is measured with this)."""
-    if str(v).lower() not in ('auto', 'off'): raise P.ProjectError("develop lens is 'auto' or 'off'")
+    """'auto': all the lens correction there is for the file is applied (a DNG's own opcodes; for another raw the camera's own shading, distortion and colour-fringe tables, else the lensfun profile of its lens: lenscorr.py, lensfundb.py); 'off': none; 'shading' or 'geometry' (distortion and colour fringes): only that; 'camera': what the camera's own JPEG shows (geometry when its distortion setting is on, never the shading: the setting the parity with the JPEGs is measured with)."""
+    if str(v).lower() not in ('auto', 'off', 'camera', 'geometry', 'shading'): raise P.ProjectError("develop lens is 'auto', 'off', 'camera', 'geometry' or 'shading'")
     return str(v).lower()
 
 

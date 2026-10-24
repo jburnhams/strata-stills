@@ -134,8 +134,8 @@ def test_develop_picks_the_gpu_only_when_there_is_one_and_the_option_is_one_it_d
 
     def cpu_path(*a, **k): calls.append('cpu'); raise CpuPath()
     synthetic_dng(monkeypatch); calls = []; monkeypatch.setattr(D, '_develop_gpu', lambda *a: calls.append('gpu') or np.zeros((2, 2, 3), np.float32)); monkeypatch.setattr(D, 'develop_parts', cpu_path)
-    monkeypatch.setattr(gpu, 'available', lambda: True); D.develop('x.dng'); D.develop('x.dng', denoise='chroma'); assert calls == ['gpu', 'gpu']
-    for kw in (dict(denoise=3.0), dict(denoise='ai'), dict(backend='cpu')):
+    monkeypatch.setattr(gpu, 'available', lambda: True); D.develop('x.dng'); D.develop('x.dng', denoise='chroma'); D.develop('x.dng', denoise='ai'); D.develop('x.dng', denoise='classical'); assert calls == ['gpu'] * 4        # 'ai' (the model on the card's result) and 'classical' too
+    for kw in (dict(denoise=3.0), dict(backend='cpu')):
         with pytest.raises(CpuPath): D.develop('x.dng', **kw)
     monkeypatch.setattr(gpu, 'available', lambda: False)
     with pytest.raises(CpuPath): D.develop('x.dng')
@@ -231,3 +231,21 @@ def test_the_sharpening_activity_mask_matches_and_spares_the_flat_areas():
     assert detail.activity(flat, detail.SHARPEN_MASK).mean() < 0.15 and detail.activity(edge, detail.SHARPEN_MASK)[:, W // 2 - 2:W // 2 + 2].min() > 0.5                                 # noise of 1 level is left alone, a step of 77 levels gets the full boost
     img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)
     a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK); b = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF), mask=detail.SHARPEN_MASK)); assert np.abs(a - b).max() < 3e-3
+
+
+def test_blind_noise_finds_the_noise_of_a_picture_on_the_cpu_and_the_card():
+    rng = np.random.default_rng(2); base = np.dstack([cv2.GaussianBlur(rng.random((H, W)).astype(np.float32), (0, 0), 12)] * 3) * 0.5 + 0.25
+    for sigma in (0.5, 2.0, 5.0):
+        img = np.clip(base + rng.normal(0, sigma / 255, base.shape).astype(np.float32), 0, 1); a = D.blind_noise(img); b = gpu.blind_noise(g(img))
+        assert abs(a - sigma * 0.8) < 0.45 * sigma + 0.15 and abs(a - b) < 0.1 * a + 0.05, (sigma, a, b)                                                       # the luminance of three equal noisy channels carries the noise of one; the flattest quarter is a little under it
+
+
+def test_auto_denoise_brings_the_model_in_on_a_noisy_picture_only(monkeypatch):
+    from stratastills import denoise_ai
+    synthetic_dng(monkeypatch); a = {}; monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); called = []; monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: called.append(1) or rgb)          # (after synthetic_dng, which says the weights are not there)
+    for backend in ('cpu', 'gpu'):
+        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
+        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 1e9); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert not called and a['ai'] is False and a['blind_noise'] > 0
+        called.clear(); D.develop('x.dng', denoise='classical', backend=backend, analysis=a); assert not called and a['ai'] is False
+        called.clear(); D.develop('x.dng', denoise='ai', backend=backend, analysis=a); assert called and a['ai'] is True
+    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off

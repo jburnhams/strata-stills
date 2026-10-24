@@ -272,3 +272,9 @@ def test_denoise_setting_is_one_of_four_and_auto_is_left_out_of_the_key():
     assert dn({}) == 'auto' and dn(dict(denoise='ai')) == 'ai' and dn(dict(denoise='off')) == 'off'
     with pytest.raises(P.ProjectError): PL.apply_options(b, dict(denoise='strong'))
     k = PL.stage_key('a~x', 'raw', b); assert PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(denoise='auto'))) == k and PL.stage_key('a~x', 'raw', PL.apply_options(b, dict(denoise='ai'))) != k
+
+
+def test_lens_setting_takes_five_values():
+    b = PL.get_preset('best')['stages']
+    for v in ('auto', 'off', 'camera', 'geometry', 'shading'): assert next(s for s in PL.apply_options(b, dict(lens=v)) if s['stage'] == 'develop')['lens'] == v
+    with pytest.raises(P.ProjectError): PL.apply_options(b, dict(lens='half'))

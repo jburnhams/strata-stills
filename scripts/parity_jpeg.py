@@ -1,7 +1,7 @@
 """How close is our development of a raw to the camera's own JPEG of it? For raw+JPG pairs: develop each raw (half size, `exposure` as given) and compare with the JPEG area-averaged to 1/8 (CIELAB): median lightness and chroma of both, the median CIE76 colour difference, and the hue difference of the coloured pixels. Prints one line per picture and the medians over the set.
 Usage: python scripts/parity_jpeg.py <folder> [--n 40] [--ev camera] [--ext .ARW]
   --candidates docs/a7c_candidates.json   only those pictures (scripts/pick_candidates.py): each is compared with the numbers saved in the file and any that got worse (the 90th-percentile and the per-region colour differences, or the median, by more than 5 % and 0.3) is flagged: the check that a change helps the worst without hurting the best
-  --lens off|auto                         the lens correction of the file: 'off' (default) is what the A7C JPEGs show (they are not corrected for shading); the DJI JPEGs are corrected, so DJI is measured with 'auto'
+  --lens camera|off|auto|geometry|shading the lens correction of the file (pipeline setting `lens`): 'camera' (default) is what the camera's own JPEG shows: distortion when the camera's setting is on, never the shading (the A7C JPEGs are not corrected for it, with any of four lenses); the DJI JPEGs are corrected by their own opcodes: 'camera' keeps them
   --accept                                with --candidates: store this run's numbers in the file as the new numbers to beat (a change that was judged better overall)
   --sheets <dir>                          also write a picture per candidate: ours | the camera's | where they differ (colour difference, white = 12 or more)"""
 import argparse, glob, os, sys
@@ -33,7 +33,7 @@ def local(A, J, cj):
     return dict(dE_p90=float(np.percentile(d, 90)), dE_sat=med(cj > 25), dE_dark=med(J[..., 0] < 20), dE_bright=med(J[..., 0] > 70))
 
 
-def proxies(raw, jpg, ev, sheet=None, lens='off'):
+def proxies(raw, jpg, ev, sheet=None, lens='camera'):
     """(ours, the camera's) as uint8 RGB at 1/8 of the JPEG's size, or None when there is no match (ev 'match' without a usable preview)."""
     if ev == 'match': an = {}; a = develop.develop(raw, half=True, ev='match', tone='match', recover='auto', lens=lens, analysis=an) if tonematch.embedded_jpeg(raw) is not None else None; a = a if an.get('tone') else None                      # the pipeline's own route (the card when there is one)
     else: a = develop.develop(raw, half=True, ev=ev, lens=lens)
@@ -50,12 +50,12 @@ def metrics(a, j):
     return dict(dL=float(np.median(A[..., 0]) - np.median(J[..., 0])), Lj=float(np.median(J[..., 0])), chroma_ratio=float(np.median(ca) / max(np.median(cj), 1e-3)), dE=float(np.median(np.linalg.norm(A - J, axis=2))), dhue=float(np.median(dh[m] if m.any() else dh)), dL_pix=float(np.median(A[..., 0] - J[..., 0])), **local(A, J, cj))
 
 
-def compare(raw, jpg, ev, sheet=None, lens='off'):
+def compare(raw, jpg, ev, sheet=None, lens='camera'):
     p = proxies(raw, jpg, ev, sheet, lens); return None if p is None else metrics(*p)
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('--n', type=int, default=40); ap.add_argument('--ev', default='camera'); ap.add_argument('--ext', default='.ARW'); ap.add_argument('--candidates'); ap.add_argument('--sheets'); ap.add_argument('--accept', action='store_true'); ap.add_argument('--lens', default='off', choices=('off', 'auto')); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('--n', type=int, default=40); ap.add_argument('--ev', default='camera'); ap.add_argument('--ext', default='.ARW'); ap.add_argument('--candidates'); ap.add_argument('--sheets'); ap.add_argument('--accept', action='store_true'); ap.add_argument('--lens', default='camera', choices=('camera', 'off', 'auto', 'geometry', 'shading')); a = ap.parse_args()
     ev = a.ev if a.ev in ('auto', 'camera', 'match') else float(a.ev); raws = sorted(glob.glob(os.path.join(a.folder, '*' + a.ext))); raws = [raws[i] for i in np.linspace(0, len(raws) - 1, min(a.n, len(raws))).astype(int)]; rows = []; was = {}; got = {}
     if a.candidates:
         import json; was = {c['stem']: c['metrics'] for c in json.load(open(a.candidates))}; raws = [r for r in sorted(glob.glob(os.path.join(a.folder, '*' + a.ext))) if os.path.splitext(os.path.basename(r))[0] in was]
