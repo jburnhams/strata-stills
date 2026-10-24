@@ -4,7 +4,7 @@ Where the project is going, in three horizons. The detailed milestone list is [d
 
 ## Short term (days)
 
-- **Land the sharpening PR** (#7): amount 3, wider roll-off, overshoot 0, comparison tooling. Then re-run `sharpen_sweep.py` + `compare_detail.py --report` after any change to develop, denoise or sharpen, at q95, and keep the tables in `docs/sharpening_comparison.md` current.
+- **Keep the sharpening comparison current** (the sharpening PR #7 is merged: amount 3, wider roll-off, overshoot 0, comparison tooling): re-run `sharpen_sweep.py` + `compare_detail.py --report` after any change to develop, denoise or sharpen, at q95, and keep the tables in `docs/sharpening_comparison.md` current.
 - **Close what is still behind RawTherapee/the camera JPEG** (see the tables): ringing beside edges (`ring`, +3 to 6 %), `halo` in the A7C ISO 251-800 band, and the DJI sharpness against the camera's own JPEG (52 against 66). Ideas: ring-aware clamp (limit overshoot only on strong edges), per-device or per-ISO sharpening from the measured MTF instead of one amount, a halo/ringing term inside the Wiener gain.
 - **Make the GPU route safe on small cards.** On the 2 GB GTX 1050 (shared with the desktop) it runs out of memory or gives wrong pictures; the tile planner must use the memory that is actually free, an OOM must fall back to tiles then the CPU, and a parity check against the CPU reference should run on the real card (not only synthetic data). Until then use `STRATASTILLS_GPU=0` there.
 - **Lens gaps:** no lensfun profile for the Samyang AF 50mm F1.4 II (shading from the camera table only); the FE 28-60's camera-table distortion convention is unexplained (lensfun fixes it); the image-circle crop is in, check the crop on all E 50mm candidates by eye.
