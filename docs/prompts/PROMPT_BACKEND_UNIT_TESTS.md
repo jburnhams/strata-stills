@@ -2,6 +2,15 @@
 
 You are a coding agent new to this repo. Find a coherent slice of **under-tested Python code**, cover it with thorough, best-practice unit tests, and extend and refactor the shared test helpers as you go. Open **one PR**, drive CI to green, then stop. This prompt is run many times: each run continues from the state the last one left, so choose work from the *current* coverage ledger and leave it up to date.
 
+## Unattended operation (read first)
+
+You run without a human: nobody will answer questions, approve a plan or review before you open the PR. Never ask for clarification or confirmation, never stop to wait for input, and never end your turn with a question. When something is ambiguous, pick the most reasonable option, note the decision in the PR description and carry on. Specifically:
+
+- If the branch name, the slice, a convention or a tool is unclear, decide using this prompt, `AGENTS.md`, the READMEs and the sister project `../strata-360`; record the choice under "Decisions" in the PR.
+- If a command fails or a tool is missing (no GPU, no node, no network access to a registry), work around it or rely on CI as the runner; do not stop. If you truly cannot make progress on part of the slice, drop that part, list it under "Not done" in the PR, and finish the rest.
+- If you find a bug or something out of scope, record it under "Findings" in the PR (as an xfail or `it.fails` where this prompt says so); don't ask whether to fix it.
+- Whenever you have made changes, finish by opening the PR (or, if one already exists for your branch, pushing to it) and driving CI to green as described below; a PR with a clear "Not done" list beats no PR. If the stop condition applies and there is nothing to change, open no PR. Don't merge, and don't wait for a reviewer.
+
 ## 0. Orient yourself (read before writing anything)
 
 1. Read `AGENTS.md` and `CLAUDE.md` at the repo root. They are authoritative. Web code (`web/`) is out of scope for this task. This project is the sister of `../strata-360`: if a convention is unclear here, strata-360 shows how it was solved.
@@ -24,7 +33,7 @@ You are a coding agent new to this repo. Find a coherent slice of **under-tested
    - bug-prone areas: cache keys and versions (a stage whose settings change must change its key), the "originals are read-only" guarantee (nothing may write into, rename or delete in a source folder), path security in the server, concurrency (GPU slots, workers), `auto` rules that choose a treatment from picture data, boundaries (zero-size, 1-pixel, odd sizes, NaN/Inf, 16-bit extremes, missing metadata).
    Test the pure parts of modules that need torch, a GPU, a model or LibRaw, and fake the rest at the boundary (`monkeypatch` on the single function that loads a model or reads a raw; `pytest.importorskip('torch')`). A change to a CPU reference in `develop.py`/`detail.py` and its mirror in `gpu.py` is held to the equivalence tests: new `gpu.py` coverage goes in `test_gpu.py` as an equivalence test against the CPU original, with mean and 99.9th-percentile bounds as tight as they pass.
 4. State the chosen slice and why at the top of the PR description.
-5. **Stop condition:** if every module is `done` (>= 90%, or a justified gap in the ledger), change nothing and say so. Don't invent work.
+5. **Stop condition:** if every module is `done` (>= 90%, or a justified gap in the ledger), change nothing, open no PR, say so in your final message, and don't invent work.
 
 ## 2. Reuse and extend the shared helpers (don't bypass them)
 

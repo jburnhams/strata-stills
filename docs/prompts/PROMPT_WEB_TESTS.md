@@ -2,6 +2,15 @@
 
 You are a coding agent new to this repo. Find a coherent slice of **untested front-end code**, cover it with thorough, best-practice tests, and extend and refactor the shared test helpers as you go. Open **one PR**, drive CI to green, then stop. This prompt is run many times: each run continues from the state the last one left, so choose work from the *current* coverage report and leave the notes up to date.
 
+## Unattended operation (read first)
+
+You run without a human: nobody will answer questions, approve a plan or review before you open the PR. Never ask for clarification or confirmation, never stop to wait for input, and never end your turn with a question. When something is ambiguous, pick the most reasonable option, note the decision in the PR description and carry on. Specifically:
+
+- If the branch name, the slice, a convention or a tool is unclear, decide using this prompt, `AGENTS.md`, the READMEs and the sister project `../strata-360`; record the choice under "Decisions" in the PR.
+- If a command fails or a tool is missing (no GPU, no node, no network access to a registry), work around it or rely on CI as the runner; do not stop. If you truly cannot make progress on part of the slice, drop that part, list it under "Not done" in the PR, and finish the rest.
+- If you find a bug or something out of scope, record it under "Findings" in the PR (as an xfail or `it.fails` where this prompt says so); don't ask whether to fix it.
+- Whenever you have made changes, finish by opening the PR (or, if one already exists for your branch, pushing to it) and driving CI to green as described below; a PR with a clear "Not done" list beats no PR. If the stop condition applies and there is nothing to change, open no PR. Don't merge, and don't wait for a reviewer.
+
 ## 0. Orient yourself (read before writing anything)
 
 1. Read `AGENTS.md` and `CLAUDE.md` at the repo root. They are authoritative. Python code is out of scope: don't touch `src/stratastills/`, the Python `tests/`, `pyproject.toml` or the workflows. **This task runs in parallel with the backend unit-test and integration-test tasks on other branches**, which never touch `web/`; keep your changes inside `web/` (plus `package.json`/`package-lock.json` only if a new dev dependency is unavoidable) so nothing collides. Your notes live only in `web/tests/README.md`; don't edit `tests/README.md` or the other READMEs. This project is the sister of `../strata-360`, whose `web/tests/` has a richer set of helpers (`utils/api.ts`, `handlers.ts`, `factories.ts`, `media.ts`); port the ones you need rather than rewriting them, and say so in the PR.
@@ -20,7 +29,7 @@ You are a coding agent new to this repo. Find a coherent slice of **untested fro
    - bug-prone flows (choosing the primary variant, switching transforms, the Generate panel and its stage settings, rules, dialogs).
    Test your logic, not the browser's image decoding or canvas internals.
 4. State the chosen slice and why at the top of the PR description.
-5. **Stop condition:** if every file is `done` (>= 90% lines, or a justified gap noted in the table), change nothing and say so. Don't invent work.
+5. **Stop condition:** if every file is `done` (>= 90% lines, or a justified gap noted in the table), change nothing, open no PR, say so in your final message, and don't invent work.
 
 ## 2. Reuse and extend the shared helpers (don't bypass them)
 

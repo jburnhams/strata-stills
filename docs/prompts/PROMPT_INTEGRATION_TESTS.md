@@ -2,6 +2,15 @@
 
 You are a coding agent new to this repo. Find a coherent slice of **CLI, pipeline or server behaviour that has no integration test**, cover it with thorough, best-practice tests on small synthetic photos, and extend and refactor the shared fixtures as you go. Open **one PR**, drive CI to green, then stop. This prompt is run many times: each run continues from the state the last one left, so choose work from the *current* ledger and leave it up to date.
 
+## Unattended operation (read first)
+
+You run without a human: nobody will answer questions, approve a plan or review before you open the PR. Never ask for clarification or confirmation, never stop to wait for input, and never end your turn with a question. When something is ambiguous, pick the most reasonable option, note the decision in the PR description and carry on. Specifically:
+
+- If the branch name, the slice, a convention or a tool is unclear, decide using this prompt, `AGENTS.md`, the READMEs and the sister project `../strata-360`; record the choice under "Decisions" in the PR.
+- If a command fails or a tool is missing (no GPU, no node, no network access to a registry), work around it or rely on CI as the runner; do not stop. If you truly cannot make progress on part of the slice, drop that part, list it under "Not done" in the PR, and finish the rest.
+- If you find a bug or something out of scope, record it under "Findings" in the PR (as an xfail or `it.fails` where this prompt says so); don't ask whether to fix it.
+- Whenever you have made changes, finish by opening the PR (or, if one already exists for your branch, pushing to it) and driving CI to green as described below; a PR with a clear "Not done" list beats no PR. If the stop condition applies and there is nothing to change, open no PR. Don't merge, and don't wait for a reviewer.
+
 ## 0. Orient yourself (read before writing anything)
 
 1. Read `AGENTS.md` and `CLAUDE.md` at the repo root. They are authoritative. The web app (`web/`) is out of scope. This project is the sister of `../strata-360`: if a convention is unclear, strata-360's integration tests show how it was solved.
@@ -16,7 +25,7 @@ You are a coding agent new to this repo. Find a coherent slice of **CLI, pipelin
 2. Check what's in flight: `git log --oneline -20`, `git branch -a`, open PRs (GitHub MCP tools). Don't pick what another branch or PR covers; check `tests/unit/README.md` so you don't duplicate unit coverage. If an earlier run's PR for the same slice is still open, continue on it.
 3. Pick **one cohesive slice**: aim for 15-30 tests across 1-3 files. Prefer behaviour users depend on (resumable and cached results, stale handling, error reporting, **originals untouched**: after any command the source folder must be byte-identical, with no new, renamed or deleted file), things that broke before (see `git log --grep fix`), and boundaries: an empty folder, an unsupported or zero-byte or truncated file, a JPEG without EXIF/XMP, a DNG without a profile, a folder with only a video, non-ASCII or very long paths, two projects over the same source, a picture too big for the tile limit.
 4. State the chosen slice and why at the top of the PR description.
-5. **Stop condition:** if the table shows nothing valuable left that can be tested without models or special hardware, change nothing and say so. Don't invent work.
+5. **Stop condition:** if the table shows nothing valuable left that can be tested without models or special hardware, change nothing, open no PR, say so in your final message, and don't invent work.
 
 ## 2. Reuse and extend the shared fixtures (don't bypass them)
 
