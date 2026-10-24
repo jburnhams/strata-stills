@@ -46,7 +46,7 @@ def test_a_device_profile_supplies_the_tone_curve_only_when_the_file_has_none():
 def test_lightroom_adobe_standard_files_get_the_cameras_own_colour_profile_back():
     adobe = dict(ProfileName='Adobe Standard', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2), ProfileHueSatMapDims=(90, 30, 1), AsShotNeutral=(4, 10, 1, 1, 6, 10)); out = inputs.adjust_tags(dict(adobe))
     assert out['ProfileHueSatMapDims'] == (36, 10, 1) and len(out['ProfileToneCurve']) == 256 and len(out['ColorMatrix1']) == 18 and out['AsShotNeutral'] == adobe['AsShotNeutral']       # the white balance stays the file's own
-    own = dict(ProfileName='Embedded', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2)); assert inputs.adjust_tags(dict(own)) == own
+    own = dict(ProfileName='Embedded', Make='DJI', Model='FC8482', ColorMatrix1=(1, 2)); got = inputs.adjust_tags(dict(own)); assert {k: v for k, v in got.items() if k != 'LookTable'} == own and 'LookTable' in got           # the device's look table is added, nothing else changes
     other = dict(adobe, Make='Nobody'); assert inputs.adjust_tags(dict(other)) == other                                                          # no device profile: left alone
 
 
