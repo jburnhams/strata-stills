@@ -108,11 +108,12 @@ def corrections(lens, width, height, focal, aperture=None, distance=None, camera
 
 
 def shot_of(path):
-    """(lens model, focal length mm, aperture, subject distance m or None) from the EXIF of a raw, or None."""
+    """(lens model, focal length mm, aperture, subject distance m or None, crop factor of the camera's sensor or None) from the EXIF of a raw, or None."""
     import tifffile
     try:
         with tifffile.TiffFile(path) as t: ex = t.pages[0].tags['ExifTag'].value
-        r = lambda k: (ex[k][0] / ex[k][1]) if k in ex and ex[k][1] else None; d = r('SubjectDistance'); return str(ex.get('LensModel', '')), r('FocalLength'), r('FNumber'), (d if d and 0 < d < 1e4 else None)
+        r = lambda k: (ex[k][0] / ex[k][1]) if k in ex and ex[k][1] else None; d = r('SubjectDistance'); f, f35 = r('FocalLength'), ex.get('FocalLengthIn35mmFilm'); crop = (f35 / f) if f and f35 else None; crop = 1.0 if crop and abs(crop - 1) < 0.06 else crop      # the 35 mm equivalent is rounded to whole mm: a full frame body reads 0.98 .. 1.02
+        return str(ex.get('LensModel', '')), f, r('FNumber'), (d if d and 0 < d < 1e4 else None), crop
     except Exception: return None
 
 
@@ -121,7 +122,7 @@ def corrections_from_exif(path, width, height):
     shot = shot_of(path)
     if not shot or not shot[0] or not shot[1]: return None, None
     lens = find(shot[0])
-    return (None, None) if lens is None else corrections(lens, width, height, shot[1], shot[2], shot[3])
+    return (None, None) if lens is None else corrections(lens, width, height, shot[1], shot[2], shot[3], camera_crop=shot[4])
 
 
 def from_exif(path, width, height, lens_setting='auto'):
@@ -129,3 +130,14 @@ def from_exif(path, width, height, lens_setting='auto'):
     from stratastills import lenscorr
     gain, warp = corrections_from_exif(path, width, height); sh, ge = lenscorr.parts(lens_setting)
     return lenscorr.opcodes_from(gain if sh else None, warp if ge else None, width, height)
+
+
+CIRCLE_MARGIN = 1.08            # a lens counts as made for a smaller sensor only when its crop factor is this much above the camera's (the database's crop factors of lenses for the same format differ by a few percent)
+
+
+def image_circle(path):
+    """The fraction of the picture's width and height that the lens covers (1 for a lens made for this sensor or when the lens or the sensor is unknown): an APS-C lens on a full frame body lights a circle as wide as its own image diagonal, so the largest picture of the same shape inside it is the camera crop factor over the lens's (about 0.65 for APS-C on full frame), the 'DX mode' of the camera. Outside it the picture is black falloff (about 5 stops in the corners) that no correction can bring back."""
+    shot = shot_of(path)
+    if not shot or not shot[0] or not shot[4]: return 1.0
+    lens = find(shot[0])
+    return 1.0 if lens is None or lens['crop'] < shot[4] * CIRCLE_MARGIN else round(shot[4] / lens['crop'], 4)
