@@ -280,3 +280,9 @@ def test_sharpen_out_of_memory_falls_back_to_cpu(monkeypatch):
     p = picture(); f = np.linspace(0.01, 0.5, 20); m = np.linspace(1, 0.2, 20)
     out = detail.sharpen_picture(p, f, m, 0.5, amount=1.0); assert out.shape == p.shape
     with pytest.raises(FakeOOM): detail.sharpen_picture(p, f, m, 0.5, backend='gpu')
+
+
+def test_mps_takes_one_picture_at_a_time(monkeypatch):
+    import types
+    monkeypatch.setattr(gpu, 'dev', lambda: types.SimpleNamespace(type='mps')); monkeypatch.setattr(gpu, '_cuda_total', lambda: None); monkeypatch.setattr(gpu, '_slots', None)
+    assert gpu.whole_slots() == 1 and gpu.tile_slots() == 1 and not gpu.tiling_pays(4) and gpu.plan_workers() == 2           # two threads on the Apple GPU at once aborted the process (macOS CI)

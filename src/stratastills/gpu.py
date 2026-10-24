@@ -110,11 +110,10 @@ def whole_slots():
 
 
 def tile_slots():
-    """How many pictures may be on the device at once while they go through in tiles: what fits in a CUDA card's memory (90 % of it over TILE_PEAK_BYTES), two for MPS (not measured), one for CPU."""
+    """How many pictures may be on the device at once while they go through in tiles: what fits in a CUDA card's memory (90 % of it over TILE_PEAK_BYTES), one for MPS (two threads at once crashed it) and for CPU."""
     total = _cuda_total()
     if total: return max(1, int(total * 0.9 // TILE_PEAK_BYTES))
-    try: return 2 if dev().type == 'mps' else 1
-    except Exception: return 1
+    return 1                                                                                                           # MPS too: two threads running kernels on it at once abort the process (torch's MPS backend; macOS CI, test_pipeline's batch: 'Fatal Python error: Aborted' in two sharpening threads), so it takes one picture at a time like the CPU
 
 
 def tile_size(halo=128):
