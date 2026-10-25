@@ -1,8 +1,8 @@
 # Build the stratastills environment from scratch on Windows (Python 3.13, NVIDIA GPU).
-#   scripts\setup_env.ps1 [-Cuda cu128] [-WithVision]
+#   scripts\setup_env.ps1 [-Cuda cu128] [-WithVision] [-Report]
 # Prerequisites: winget install Python.Python.3.13 OpenJS.NodeJS
 # -Cuda is the PyTorch wheel index suffix (cu128 or newer is needed for RTX 50-series / Blackwell); -Cuda cpu installs the CPU build.
-param([string]$Cuda = 'cu128', [switch]$WithVision)
+param([string]$Cuda = 'cu128', [switch]$WithVision, [switch]$Report)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot; $Venv = Join-Path $Root '.venv'; $Py = Join-Path $Venv 'Scripts\python.exe'
 function Say($m) { Write-Host "`n==> $m" }
@@ -28,3 +28,8 @@ Say 'checking'
 & $Py -m stratastills doctor
 if (Get-Command npm -ErrorAction SilentlyContinue) { Push-Location (Join-Path $Root 'web'); npm install --silent; npm run build; Pop-Location; Write-Host 'web app built' }
 else { Write-Host 'npm not found: winget install OpenJS.NodeJS, then cd web; npm install; npm run build' }
+
+if ($Report) {
+    if (Test-Path (Join-Path $Root 'candidates')) { & $Py (Join-Path $Root 'scripts/build_report.py'); Write-Host 'report: out/report/index.html' }
+    else { Write-Host 'no candidates folder: report skipped (scripts/copy_candidates.py)' }
+}

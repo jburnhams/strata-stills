@@ -340,8 +340,8 @@ def find_existing(pid, iid, variant=None, stages=None, preset=None, options=None
     return key, next((g for g in item['variants'] if g['kind'] == 'generated' and g.get('key') == key), None)
 
 
-def generate(pid, iid, variant=None, preset=None, options=None, stages=None, progress=None):
-    """Run a pipeline on a source variant and return the record of the new generated variant (`key`, `file`, `stages`, ...; `existing` True if these exact settings had been generated before, in which case nothing is done). `progress(text)` is called as the steps go."""
+def generate(pid, iid, variant=None, preset=None, options=None, stages=None, progress=None, on_stage=None):
+    """Run a pipeline on a source variant and return the record of the new generated variant (`key`, `file`, `stages`, ...; `existing` True if these exact settings had been generated before, in which case nothing is done). `progress(text)` is called as the steps go; `on_stage(name, state)` after each stage (scripts/build_report.py takes the picture as it is at every stage)."""
     say = progress or (lambda t: None); st = resolve(preset, options, stages)
     item = P.get_item(pid, iid); v = source_variant(item, variant); key = stage_key(iid, v['id'], st); d = P.generated_dir(pid, iid); base = os.path.join(d, key)
     if any(g['kind'] == 'generated' and g.get('key') == key for g in item['variants']):
@@ -352,6 +352,7 @@ def generate(pid, iid, variant=None, preset=None, options=None, stages=None, pro
         p = {k: val for k, val in s.items() if k != 'stage'}
         if s['stage'] == 'encode': os.makedirs(d, exist_ok=True); run_encode(state, p, base)
         else: runners[s['stage']](state, p)
+        if on_stage: on_stage(s['stage'], state)
     rec = dict(state.rec, version=1, key=key, created=dt.datetime.now().astimezone().isoformat(timespec='seconds'), item=iid, stem=item['stem'], source_variant=v['id'], source=v['path'], preset=preset, stages=st, summary=summary(st),
                output=[int(state.rgb.shape[1]), int(state.rgb.shape[0])], file=state.file, bytes=os.path.getsize(state.file), format=st[-1]['format'], quality=state.quality, existing=False)
     with open(base + '.json', 'w') as f: json.dump(rec, f, indent=1)
