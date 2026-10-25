@@ -1,14 +1,28 @@
 """A visual report on the candidate photos: each one rendered by our pipeline (with the picture kept at every stage), set beside the camera's own JPEG and the other raw tools' renders (darktable, RawTherapee) where candidates/renders/ has them, as crops from the places where the programs differ most, each shown in context on an overview of the picture. No full-size picture goes into the report, only an overview and the crops, so it stays a few MB.
-  python scripts/build_report.py [--out out/report] [--set a7c --set dji] [--pictures 4 | --all | --stems DSC00014,...] [--quality 95] [--crops 3] [--refresh]
-Reads candidates/<set>/ (scripts/copy_candidates.py) and docs/<set>_candidates.json; writes <out>/index.html and <out>/assets/*.jpg (gitignored with out/). The pictures of ours are made again on every run (a temporary project: nothing of the app's projects is touched); an optional step of the build (scripts/setup_env.sh --report), skipped when there are no candidate photos.
+  python scripts/build_report.py [--out out/report] [--set a7c --set dji] [--min-lens 2] [--min-device 5] [--all] [--stems DSC00014,...] [--include-people] [--quality 95] [--crops 3] [--refresh]
+Reads candidates/<set>/ (scripts/copy_candidates.py) and docs/report_public.json (the pictures whose subject is not a person, so that the report could be public; hand-picked); shows at least --min-lens of each lens and --min-device of each device, then more until every octave of ISO the pool has is covered; writes <out>/index.html and <out>/assets/*.jpg (gitignored with out/). The pictures of ours are made again on every run (a temporary project: nothing of the app's projects is touched); an optional step of the build (scripts/setup_env.sh --report), skipped when there are no candidate photos.
 How the crops are chosen: every program's picture is brought to the size of ours and registered to it; the disagreement at each place is the colour and brightness difference (blurred, so that a one pixel shift does not count) plus the difference in how much fine detail and noise there is, each relative to its median over the picture; the best window of each kind that does not overlap an earlier one is shown (1: the two together, 2: the detail and noise, 3: the colour and tone)."""
-import argparse, html, json, os, shutil, sys, tempfile, time
+import argparse, collections, glob, html, json, os, shutil, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import compare_detail as CD
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-SETS = dict(a7c=dict(label='Sony A7C', ext='.ARW', camera_ext='.JPG', prefix='', note='Sony A7C raw (ARW)'), dji=dict(label='DJI drone', ext='.DNG', camera_ext='.JPG', prefix='dji-', note='DJI drone raw (DNG)'))
+RAW_EXTS = ('.arw', '.cr2', '.cr3', '.nef', '.dng', '.rw2', '.orf', '.raf', '.pef', '.srw')
+
+
+def discover_sets():
+    """The candidate sets there are: every docs/<set>_candidates.json (scripts/add_candidates.py makes them) whose folder candidates/<set>/ exists. The renders of the other programs are in candidates/renders/[<set>-]<program>/ (no prefix for a7c: the first set)."""
+    out = {}
+    for f in sorted(glob.glob(os.path.join(ROOT, 'docs', '*_candidates.json'))):
+        name = os.path.basename(f)[:-len('_candidates.json')]; folder = os.path.join(ROOT, 'candidates', name)
+        if not os.path.isdir(folder): continue
+        exts = collections.Counter(os.path.splitext(x)[1].lower() for x in os.listdir(folder) if os.path.splitext(x)[1].lower() in RAW_EXTS)
+        if exts: out[name] = dict(label=name, ext=exts.most_common(1)[0][0], camera_ext='.JPG', prefix='' if name == 'a7c' else name + '-')
+    return out
+
+
+SETS = discover_sets()
 OTHERS = [('darktable', 'darktable'), ('rawtherapee-auto-matched', 'RawTherapee (auto-matched)'), ('rawtherapee', 'RawTherapee (default)')]   # (folder in candidates/renders, name shown)
 OTHER_SETTINGS = {
     'Camera': "The camera's own JPEG (the one next to the raw): its in-camera processing, whatever the camera was set to; lens corrections and noise reduction are the camera's.",
@@ -21,6 +35,52 @@ WIN = (200, 140)                # the window of a crop, in pixels of the final p
 ZOOM = 2
 OVERVIEW = 1100
 JPEG_Q = 80
+
+
+def shot(path):
+    """(device, lens, focal mm, aperture, ISO) of a raw, for grouping the pictures by device and lens: from the profile bundle and the EXIF."""
+    import tifffile
+    from stratastills import inputs, lensfundb
+    try: dev = inputs.describe(path).get('profile') or 'unknown device'
+    except Exception: dev = 'unknown device'
+    sh = lensfundb.shot_of(path); lens = (sh[0] if sh else '') or 'built-in lens'
+    try:
+        with tifffile.TiffFile(path) as t: iso = t.pages[0].tags['ExifTag'].value.get('ISOSpeedRatings'); iso = float(iso[0] if isinstance(iso, (tuple, list)) else iso)
+    except Exception: iso = None
+    return dev, lens, (sh[1] if sh else None), (sh[2] if sh else None), iso
+
+
+def look(path):
+    """A small feature of what the scene is like (a 12x8 colour thumbnail of the camera's JPEG, in Lab), for picking pictures that differ."""
+    im = read(os.path.splitext(path)[0] + '.JPG') if os.path.exists(os.path.splitext(path)[0] + '.JPG') else None
+    if im is None: return np.zeros(12 * 8 * 3, np.float32)
+    return cv2.cvtColor(cv2.resize(im, (12, 8), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2LAB).astype(np.float32).ravel() / 255
+
+
+def choose(pool, shots, feats, min_lens, min_device):
+    """Which pictures of `pool` (stems) to show: at least `min_lens` of each lens and `min_device` of each device, then more where an octave of ISO that the pool has is not covered yet. Each pick is the one most unlike those already chosen (ISO in stops, and the look of the scene), so that the range of scenes and light is covered. -> {(device, lens): [stem]} in the order of first appearance."""
+    iso = lambda x: float(np.log2(shots[x][4] or 100))
+    def far(cands, chosen):
+        if not chosen: return min(cands, key=lambda x: (iso(x), x))
+        return max(cands, key=lambda x: min(abs(iso(x) - iso(c)) * 0.15 + float(np.abs(feats[x] - feats[c]).mean()) for c in chosen))
+    picked = []
+    devices = {}
+    for st in pool: devices.setdefault(shots[st][0], []).append(st)
+    for dev, ss in devices.items():
+        lenses = {}
+        for st in ss: lenses.setdefault(shots[st][1], []).append(st)
+        chosen = []
+        for lens, ls in lenses.items():
+            mine = []
+            while len(mine) < min(min_lens, len(ls)): mine.append(far([x for x in ls if x not in mine], mine + chosen))
+            chosen += mine
+        while len(chosen) < min(min_device, len(ss)): chosen.append(far([x for x in ss if x not in chosen], chosen))
+        for octave in sorted({round(iso(x)) for x in ss} - {round(iso(x)) for x in chosen}):                          # more where the range of ISO has a gap
+            chosen.append(far([x for x in ss if round(iso(x)) == octave], chosen))
+        picked += chosen
+    out = {}
+    for st in sorted(picked, key=lambda x: (pool.index(x))): out.setdefault(shots[st][:2], []).append(st)
+    return {g: sorted(v, key=lambda x: iso(x)) for g, v in out.items()}
 
 
 def read(path, size=None):
@@ -83,10 +143,10 @@ def window(im, x0, y0, win):
 
 
 def run_ours(folder, items_wanted, quality, workdir, say):
-    """Our pipeline on the wanted pictures of `folder` (stems) in a temporary project: {stem: dict(record, stages={name: npy path of the picture at that stage (uint8 RGB)}, file)}."""
+    """Our pipeline on the wanted pictures of `folder` (stems) in a temporary project: (stem, dict(rec, stages={name: npy path of the picture at that stage (uint8 RGB)}, file)) one at a time (the caller deletes the stage files when done with a picture: they are big)."""
     os.environ['STRATASTILLS_PROJECTS'] = os.path.join(workdir, 'projects'); os.environ['STRATASTILLS_HOME'] = os.path.join(workdir, 'home')
     from stratastills import projects as P, pipeline as PL, export as X
-    pid = P.create('report-' + os.path.basename(os.path.normpath(folder)), [os.path.abspath(folder)])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path']); items = {i['stem']: i for i in P.source_items(pid, sid)}; res = {}
+    pid = P.create('report-' + os.path.basename(os.path.normpath(folder)), [os.path.abspath(folder)])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path']); items = {i['stem']: i for i in P.source_items(pid, sid)}; 
     for stem in items_wanted:
         it = items.get(stem)
         if not it: say(f'  {stem}: not found in {folder}'); continue
@@ -94,9 +154,10 @@ def run_ours(folder, items_wanted, quality, workdir, say):
         def on_stage(name, st, stem=stem, dumps=dumps):
             if name == 'encode': return
             f = os.path.join(workdir, f'{stem}-{name}.npy'); np.save(f, X.to_u8(st.rgb)); dumps[name] = f
-        r = PL.generate(pid, it['id'], preset='best', options=dict(quality=quality), progress=lambda m: None, on_stage=on_stage)
-        res[stem] = dict(rec=r, stages=dumps, file=r['file']); say(f'  {stem}: ours made in {time.time() - t0:.0f} s')
-    return res
+        try: r = PL.generate(pid, it['id'], preset='best', options=dict(quality=quality), progress=lambda m: None, on_stage=on_stage)
+        except Exception as e:                                                                                              # one picture that fails does not stop the report
+            say(f'  {stem}: FAILED ({type(e).__name__}: {e})'); [os.remove(f) for f in dumps.values() if os.path.exists(f)]; continue
+        say(f'  {stem}: ours made in {time.time() - t0:.0f} s'); yield stem, dict(rec=r, stages=dumps, file=r['file'])
 
 
 def settings_html(rec):
@@ -127,21 +188,22 @@ table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-ali
 
 def build(a):
     out = os.path.abspath(a.out); assets = os.path.join(out, 'assets'); shutil.rmtree(out, ignore_errors=True); os.makedirs(assets); say = lambda m: print(m, flush=True)
-    work = tempfile.mkdtemp(prefix='report-'); sections = []; legend = {}; nav = []; total_pics = 0
+    work = tempfile.mkdtemp(prefix='report-', dir=os.path.dirname(out)); sections = []; legend = {}; nav = []; total_pics = 0
     try:
         for setname in a.set:
             cfg = SETS[setname]; folder = os.path.join(ROOT, 'candidates', setname); cj = os.path.join(ROOT, 'docs', f'{setname}_candidates.json')
             if not os.path.isdir(folder) or not os.path.exists(cj): say(f'{setname}: no candidate photos here ({folder}), skipped'); continue
-            cands = json.load(open(cj)); whys = {c['stem']: c.get('why', '') for c in cands}; stems = [c['stem'] for c in cands]
-            if a.stems: stems = [s for s in a.stems.split(',') if s in whys or os.path.exists(os.path.join(folder, s + cfg['ext']))]
-            elif not a.all: stems = stems[:a.pictures]
-            say(f'{cfg["label"]}: {len(stems)} pictures'); ours = run_ours(folder, stems, a.quality, work, say)
-            for stem in stems:
-                if stem not in ours: continue
-                o = ours[stem]; fin = read(o['file'])
+            cands = json.load(open(cj)); whys = {c['stem']: c.get('why', '') for c in cands}
+            files = {os.path.splitext(f)[0]: os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in RAW_EXTS}; shots = {st: shot(f) for st, f in files.items()}
+            public = set(json.load(open(os.path.join(ROOT, 'docs', 'report_public.json'))).get(setname, []))      # (a set without an entry has not been looked through: nothing of it in a report that may go public)
+            pool = [s for s in a.stems.split(',') if s in files] if a.stems else [s for s in files if a.include_people or s in public]
+            groups = choose(pool, shots, {s: look(files[s]) for s in pool}, 10 ** 6 if a.all else a.min_lens, 10 ** 6 if a.all else a.min_device); stems = [s for ss in groups.values() for s in ss]
+            say(f'{cfg["label"]}: {len(stems)} pictures ({"; ".join(f"{g[1]}: {len(ss)}" for g, ss in groups.items())})')
+            for stem, o in run_ours(folder, stems, a.quality, work, say):
+                fin = read(o['file'])
                 if fin is None: continue
                 H, W = fin.shape[:2]; size = (W, H)
-                cam = read(os.path.join(folder, stem + cfg['camera_ext']), size); methods = [('Camera', cam)]
+                cam = read(next(iter(glob.glob(os.path.join(folder, stem + '.[jJ][pP][gG]'))), ''), size); methods = [('Camera', cam)]
                 for d, nm in OTHERS:
                     im = read(os.path.join(ROOT, 'candidates', 'renders', cfg['prefix'] + d, stem + '.jpg'), size)
                     if im is not None: methods.append((nm, im))
@@ -171,7 +233,8 @@ def build(a):
                     blocks.append(dict(n=n, kind=kind, x=x0 / W, y=y0 / H, w=WIN[0] / W, h=WIN[1] / H, sheet=name, sheet_size=(cols * pw, rows * ph), names=[nm for nm, _ in panels], cols=cols, pw=pw, ph=ph))
                 metrics = metric_table([im for _, im in aligned] + [fin], [nm for nm, _ in aligned] + ['Ours (final)'])
                 legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm, _ in aligned}); total_pics += 1
-                sections.append(render_picture(cfg, stem, whys.get(stem, ''), W, H, o['rec'], blocks, metrics)); nav.append((stem, f'{cfg["label"]} {stem}'))
+                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); sections.append(render_picture(cfg, stem, whys.get(stem, ''), W, H, o['rec'], blocks, metrics, kind)); nav.append((stem, f'{sh[1]} {stem}'))
+                for f in o['stages'].values(): os.remove(f)
     finally: shutil.rmtree(work, ignore_errors=True)
     if not sections: say('nothing to report on (no candidate photos)'); return 1
     leg = ''.join(f'<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>' for k, v in legend.items())
@@ -183,17 +246,17 @@ def build(a):
     say(f'report: {os.path.join(out, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
 
 
-def render_picture(cfg, stem, why, W, H, rec, blocks, metrics):
+def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind):
     boxes = ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks); crops = []
     for b in blocks:
         tiles = ''.join(f'<div style="width:{b["pw"]}px;height:{b["ph"]}px;background-image:url(assets/{b["sheet"]});background-position:-{(i % b["cols"]) * b["pw"]}px -{(i // b["cols"]) * b["ph"]}px"></div>' for i in range(len(b['names'])))
         mini = f'<div class=ov style="width:300px"><img src="assets/{stem}-overview.jpg" width=300><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div>'
         crops.append(f'<h3>Crop {b["n"]}: where the programs differ most in {html.escape(b["kind"])}</h3><div class=crop>{mini}<div class=sheet style="grid-template-columns:repeat({b["cols"]},{b["pw"]}px)">{tiles}</div></div>')
-    return f"""<section class=pic id="{stem}"><h2>{html.escape(cfg['label'])} {html.escape(stem)} <small class=why>{html.escape(why)} · {W}x{H} final</small></h2><div class=ov style="width:{OVERVIEW}px;max-width:100%"><img src="assets/{stem}-overview.jpg">{boxes}</div>
+    return f"""<section class=pic id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{' · ' + html.escape(why) if why else ''}</small></h2><div class=ov style="width:{OVERVIEW}px;max-width:100%"><img src="assets/{stem}-overview.jpg">{boxes}</div>
 <details open><summary>What ours did, and the settings of each stage</summary>{settings_html(rec)}</details><details><summary>Numbers (scripts/compare_detail.py, on this picture)</summary>{metrics}<p class=m>sharp: edge crispness; ring/halo: sharpening artefacts; noise/cnoise: luminance and colour noise in flat areas; detail: texture kept against the noise.</p></details>{''.join(crops)}</section>"""
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--pictures', type=int, default=4, help='per set (the first of the candidate list)')
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--min-lens', type=int, default=2, help='at least this many pictures of each lens'); ap.add_argument('--min-device', type=int, default=5, help='at least this many of each device'); ap.add_argument('--include-people', action='store_true', help='also pictures with people as the subject (not for a report that may go public)')
     ap.add_argument('--all', action='store_true'); ap.add_argument('--stems'); ap.add_argument('--quality', type=int, default=95); ap.add_argument('--crops', type=int, default=3)
     a = ap.parse_args(); a.set = a.set or list(SETS); sys.exit(build(a))

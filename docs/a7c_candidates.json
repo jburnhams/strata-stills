@@ -838,5 +838,418 @@
    "dE_dark": 3.63,
    "dE_bright": 2.37
   }
+ },
+ {
+  "stem": "2023-08-23_DSC04216",
+  "why": "E 28-200mm F2.8-5.6 A071 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-23",
+  "original": "DSC04216",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-06-03_DSC02476",
+  "why": "E 28-200mm F2.8-5.6 A071 ISO 200, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-06-03",
+  "original": "DSC02476",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-05-24_DSC01839",
+  "why": "E 28-200mm F2.8-5.6 A071 ISO 250, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-05-24",
+  "original": "DSC01839",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-08-23_DSC04336",
+  "why": "E 28-200mm F2.8-5.6 A071 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-23",
+  "original": "DSC04336",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-11_DSC00010",
+  "why": "E 35mm F1.8 OSS ISO 160, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-11",
+  "original": "DSC00010",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-11_DSC00071",
+  "why": "E 50mm F1.8 OSS ISO 500, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-11",
+  "original": "DSC00071",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-11_DSC00038",
+  "why": "E 50mm F1.8 OSS ISO 12800, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-11",
+  "original": "DSC00038",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-11_DSC00069",
+  "why": "E 50mm F1.8 OSS ISO 2000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-11",
+  "original": "DSC00069",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-11_DSC00024",
+  "why": "E 50mm F1.8 OSS ISO 6400, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-11",
+  "original": "DSC00024",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-02-04_DSC00535",
+  "why": "FE 20mm F1.8 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-02-04",
+  "original": "DSC00535",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-02-02_DSC00508",
+  "why": "FE 20mm F1.8 G ISO 400, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-02-02",
+  "original": "DSC00508",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-04-02_DSC01220",
+  "why": "FE 20mm F1.8 G ISO 250, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-04-02",
+  "original": "DSC01220",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-02-04_DSC00553",
+  "why": "FE 20mm F1.8 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-02-04",
+  "original": "DSC00553",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-02-04_DSC00531",
+  "why": "FE 20mm F1.8 G ISO 200, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-02-04",
+  "original": "DSC00531",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-11-29_DSC05322",
+  "why": "FE 24-70mm F2.8 GM II ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-11-29",
+  "original": "DSC05322",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-02-28_DSC06200",
+  "why": "FE 24-70mm F2.8 GM II ISO 4000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-02-28",
+  "original": "DSC06200",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-09-10_DSC09657",
+  "why": "FE 24-70mm F2.8 GM II ISO 250, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-09-10",
+  "original": "DSC09657",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-03-20_DSC06590",
+  "why": "FE 24-70mm F2.8 GM II ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-03-20",
+  "original": "DSC06590",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-02-28_DSC06364",
+  "why": "FE 24-70mm F2.8 GM II ISO 640, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-02-28",
+  "original": "DSC06364",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-02-05_DSC05877",
+  "why": "FE 24mm F2.8 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-02-05",
+  "original": "DSC05877",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-02-07_DSC06049",
+  "why": "FE 24mm F2.8 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-02-07",
+  "original": "DSC06049",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-02-09_DSC06099",
+  "why": "FE 24mm F2.8 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-02-09",
+  "original": "DSC06099",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-02-07_DSC06030",
+  "why": "FE 24mm F2.8 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-02-07",
+  "original": "DSC06030",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-22_DSC00236",
+  "why": "FE 28-60mm F4-5.6 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-22",
+  "original": "DSC00236",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-15_DSC00161",
+  "why": "FE 28-60mm F4-5.6 ISO 500, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-15",
+  "original": "DSC00161",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-05-01_DSC01443",
+  "why": "FE 28-60mm F4-5.6 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-05-01",
+  "original": "DSC01443",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-05-02_DSC01445",
+  "why": "FE 28-60mm F4-5.6 ISO 200, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-05-02",
+  "original": "DSC01445",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-10-30_DSC08077",
+  "why": "FE 35mm F1.4 GM ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-10-30",
+  "original": "DSC08077",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-12-04_DSC00298",
+  "why": "FE 35mm F1.4 GM ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-12-04",
+  "original": "DSC00298",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-09-01_DSC04647",
+  "why": "FE 40mm F2.5 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-09-01",
+  "original": "DSC04647",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-03-06_DSC08753",
+  "why": "FE 40mm F2.5 G ISO 1000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-03-06",
+  "original": "DSC08753",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-03-04_DSC08734",
+  "why": "FE 40mm F2.5 G ISO 200, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-03-04",
+  "original": "DSC08734",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-09-21_DSC09722",
+  "why": "FE 40mm F2.5 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-09-21",
+  "original": "DSC09722",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-09-03_DSC04773",
+  "why": "FE 40mm F2.5 G ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-09-03",
+  "original": "DSC04773",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-09-19_DSC09713",
+  "why": "FE 50mm F1.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-09-19",
+  "original": "DSC09713",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-03-20_DSC06684",
+  "why": "FE 70-200mm F2.8 GM OSS II ISO 400, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-03-20",
+  "original": "DSC06684",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-12-25_DSC08236",
+  "why": "FE 85mm F1.8 ISO 200, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-12-25",
+  "original": "DSC08236",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-01-25_DSC05726",
+  "why": "FE 85mm F1.8 ISO 5000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-01-25",
+  "original": "DSC05726",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-01-25_DSC05727",
+  "why": "FE 85mm F1.8 ISO 800, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-01-25",
+  "original": "DSC05727",
+  "metrics": {}
+ },
+ {
+  "stem": "2024-01-25_DSC05724",
+  "why": "FE 85mm F1.8 ISO 2000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2024/2024-01-25",
+  "original": "DSC05724",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-08-16_DSC03975",
+  "why": "FE 90mm F2.8 Macro G OSS ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-16",
+  "original": "DSC03975",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-08-16_DSC04089",
+  "why": "FE 90mm F2.8 Macro G OSS ISO 2000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-16",
+  "original": "DSC04089",
+  "metrics": {}
+ },
+ {
+  "stem": "2025-05-26_DSC09187",
+  "why": "FE 90mm F2.8 Macro G OSS ISO 320, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2025/2025-05-26",
+  "original": "DSC09187",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-08-18_DSC04116",
+  "why": "FE 90mm F2.8 Macro G OSS ISO 125, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-18",
+  "original": "DSC04116",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-10-07_DSC04938",
+  "why": "SAMYANG AF 14mm F2.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-10-07",
+  "original": "DSC04938",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-10-02_DSC04919",
+  "why": "SAMYANG AF 14mm F2.8 ISO 400, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-10-02",
+  "original": "DSC04919",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-10-07_DSC04939",
+  "why": "SAMYANG AF 14mm F2.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-10-07",
+  "original": "DSC04939",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-10-07_DSC04940",
+  "why": "SAMYANG AF 14mm F2.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-10-07",
+  "original": "DSC04940",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-03-04_DSC00908",
+  "why": "SAMYANG AF 24mm F2.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-03-04",
+  "original": "DSC00908",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-03-04_DSC00902",
+  "why": "SAMYANG AF 24mm F2.8 ISO 4000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-03-04",
+  "original": "DSC00902",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-03-19_DSC01128",
+  "why": "SAMYANG AF 24mm F2.8 ISO 400, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-03-19",
+  "original": "DSC01128",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-03-04_DSC00911",
+  "why": "SAMYANG AF 24mm F2.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-03-04",
+  "original": "DSC00911",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-16_DSC00170",
+  "why": "SAMYANG AF 35mm F2.8 ISO 2000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-16",
+  "original": "DSC00170",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-29_DSC00444",
+  "why": "SAMYANG AF 35mm F2.8 ISO 1000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-29",
+  "original": "DSC00444",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-02-18_DSC00824",
+  "why": "SAMYANG AF 35mm F2.8 ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-02-18",
+  "original": "DSC00824",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-01-28_DSC00277",
+  "why": "SAMYANG AF 50mm F1.4 II ISO 100, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-01-28",
+  "original": "DSC00277",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-08-06_DSC03919",
+  "why": "SAMYANG AF 50mm F1.4 II ISO 2000, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-06",
+  "original": "DSC03919",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-08-06_DSC03900",
+  "why": "SAMYANG AF 50mm F1.4 II ISO 250, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-08-06",
+  "original": "DSC03900",
+  "metrics": {}
+ },
+ {
+  "stem": "2023-02-01_DSC00487",
+  "why": "SAMYANG AF 50mm F1.4 II ISO 1250, added from the archive (no people)",
+  "source": "/home/jburnhams/raw/2023/2023-02-01",
+  "original": "DSC00487",
+  "metrics": {}
  }
 ]
