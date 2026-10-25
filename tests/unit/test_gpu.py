@@ -244,11 +244,28 @@ def test_auto_denoise_brings_the_model_in_on_a_noisy_picture_only(monkeypatch):
     from stratastills import denoise_ai
     synthetic_dng(monkeypatch); a = {}; monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); called = []; monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: called.append(1) or rgb)          # (after synthetic_dng, which says the weights are not there)
     for backend in ('cpu', 'gpu'):
-        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
+        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
         called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 1e9); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert not called and a['ai'] is False and a['blind_noise'] > 0
         called.clear(); D.develop('x.dng', denoise='classical', backend=backend, analysis=a); assert not called and a['ai'] is False
         called.clear(); D.develop('x.dng', denoise='ai', backend=backend, analysis=a); assert called and a['ai'] is True
-    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off
+    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off
+
+
+def test_the_tiled_route_brings_the_model_in_too(monkeypatch):
+    from stratastills import denoise_ai, gpu_tiled as T
+    synthetic_dng(monkeypatch, h=240, w=320); u16 = D._raw_u16('x.dng', False); monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); seen = []
+    monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: seen.append(np.shape(sig)) or rgb)
+    monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0)
+    for threshold, denoise, want in ((0.0, 'auto', True), (1e9, 'auto', False), (1e9, 'ai', True)):
+        seen.clear(); a = {}; monkeypatch.setattr(D, 'AUTO_AI_NOISE', threshold); T.develop_tiled('x.dng', u16, 'auto', denoise, 0.35, D.HIGHLIGHT_CONTRAST, a, tile=192)
+        assert bool(seen) is want and a['ai'] is want and a['blind_noise'] > 0 and (not want or seen[0] == (240, 320)), (threshold, denoise, seen, a)
+
+
+def test_auto_leaves_the_model_out_when_the_clean_up_already_did_it(monkeypatch):
+    from stratastills import denoise_ai
+    monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True)
+    assert not D._auto_ai(2.4, lambda: 0.5) and D._auto_ai(2.4, lambda: 1.1) and D._auto_ai(2.4) and not D._auto_ai(1.0, lambda: 9)     # a DJI file (2.4 before, 0.5 after) against an A7C one at ISO 1600 (2.1, 1.05)
+    assert D._auto_ai(8.0, lambda: 0.0)                                                                                              # cored to nothing: the estimate fails, the picture is noisy
 
 
 class FakeOOM(RuntimeError): pass
