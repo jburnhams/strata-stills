@@ -56,3 +56,16 @@ def test_models_remove_noise_in_a_real_run(model):
 
 def test_unknown_model_is_refused():
     with pytest.raises(ValueError): A.denoise(np.zeros((8, 8, 3), np.float32), 'nope')
+
+
+def test_an_out_of_memory_halves_the_tile_and_goes_on(monkeypatch):
+    import torch
+    seen = []
+
+    def run(net, t, mult, post):
+        seen.append(t.shape[0])
+        if t.shape[0] > 300: raise torch.OutOfMemoryError('CUDA out of memory')
+        return t
+    monkeypatch.setattr(A, '_load', lambda m, s: object()); monkeypatch.setattr(A, '_run', run)
+    x = np.full((600, 600, 3), 0.4, np.float32); out = A.denoise(x, tile=512, overlap=8)
+    assert seen[0] == 512 and max(seen[1:]) <= 256 and np.allclose(out, x)

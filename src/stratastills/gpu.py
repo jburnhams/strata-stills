@@ -241,8 +241,18 @@ def box(x, r):
 def gaussian(x, sigma):
     """Gaussian blur of a plane (H, W) or a stack (N, H, W) with standard deviation `sigma` pixels, a kernel of +-4 sigma (what cv2.GaussianBlur uses for float images), edges reflected."""
     t = torch_(); F = t.nn.functional; r = int(math.ceil(sigma * 4)); xs = t.arange(-r, r + 1, device=x.device, dtype=t.float32); k = t.exp(-0.5 * (xs / sigma) ** 2); k = k / k.sum()
-    y = x[:, None] if x.dim() == 3 else x[None, None]; y = _pad(y, r); y = F.conv2d(y, k.view(1, 1, 1, -1)); y = F.conv2d(y, k.view(1, 1, -1, 1))
+    y = x[:, None] if x.dim() == 3 else x[None, None]; y = _pad(y, r); y = conv(y, k.view(1, 1, 1, -1)); y = conv(y, k.view(1, 1, -1, 1))
     return y[:, 0] if x.dim() == 3 else y[0, 0]
+
+
+CONV_WORKSPACE = 96 << 20       # bytes: what one strip of a convolution may take for its working buffer (below)
+
+
+def conv(y, k):
+    """F.conv2d of the kernel `k` (1, 1, kh, kw) over `y` (N, 1, H, W) (no padding), done in strips of rows (with the kernel's overlap) so that the working buffer stays small: the answer is the same. Where cuDNN is off (a Pascal card, see _choose) a convolution builds a buffer of kernel-size times the input: a sigma 8 blur of a 2304 px tile asked for 1.25 GB, and the 3x3 gradient of a 21 MP picture 0.7 GB, out of memory on a 2 GB card (the whole development then ran twice, and the sharpening went to the CPU)."""
+    F = torch_().nn.functional; kh, kw = k.shape[-2:]; out_h = y.shape[2] - kh + 1; step = max(8, CONV_WORKSPACE // max(1, kh * kw * 4 * y.shape[0] * y.shape[3]))
+    if step >= out_h: return F.conv2d(y, k)
+    return torch_().cat([F.conv2d(y[:, :, i:i + step + kh - 1], k) for i in range(0, out_h, step)], dim=2)
 
 
 def guided(p, guide, r, eps):
@@ -430,8 +440,8 @@ def apply_hue_sat_map(rgb, table, rows=512):
 def blind_noise(rgb):
     """develop.blind_noise on a (3, H, W) tensor (a float: the noise in 8-bit grey levels)."""
     t = torch_(); F = t.nn.functional; y = (luma(rgb) * 255)[None, None]; k = t.tensor([[1., -2, 1], [-2, 4, -2], [1, -2, 1]], device=rgb.device)[None, None]
-    pad = lambda a: F.pad(a[None], (1, 1, 1, 1), mode='replicate'); r = F.conv2d(pad(y[0]), k)[0, 0, 2:-2, 2:-2].abs(); s = gaussian(y[0], 2.0)
-    sx = F.conv2d(pad(s), t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=rgb.device)[None, None])[0, 0]; sy = F.conv2d(pad(s), t.tensor([[-1., -2, -1], [0, 0, 0], [1, 2, 1]], device=rgb.device)[None, None])[0, 0]
+    pad = lambda a: F.pad(a[None], (1, 1, 1, 1), mode='replicate'); r = conv(pad(y[0]), k)[0, 0, 2:-2, 2:-2].abs(); s = gaussian(y[0], 2.0)
+    sx = conv(pad(s), t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=rgb.device)[None, None])[0, 0]; sy = conv(pad(s), t.tensor([[-1., -2, -1], [0, 0, 0], [1, 2, 1]], device=rgb.device)[None, None])[0, 0]
     g = t.hypot(sx, sy)[2:-2, 2:-2]; flat = g <= _quantile(g[::4, ::4], 0.25); return float(_quantile(r[flat], 0.5) / 0.6745 / 6)
 
 
@@ -495,13 +505,19 @@ def activity(y, mask):
     """detail.activity on a (H, W) luminance tensor (None: everywhere)."""
     if mask is None: return torch_().ones_like(y)
     t = torch_(); F = t.nn.functional; s = gaussian(y[None] * 255, 1.0)[0]; kx = t.tensor([[-1., 0, 1], [-2, 0, 2], [-1, 0, 1]], device=y.device) / 8
-    gx = F.conv2d(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx[None, None])[0, 0]; gy = F.conv2d(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx.t()[None, None])[0, 0]
+    gx = conv(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx[None, None])[0, 0]; gy = conv(F.pad(s[None, None], (1, 1, 1, 1), mode='replicate'), kx.t()[None, None])[0, 0]
     return gaussian(((t.hypot(gx, gy) - mask[0]) / (mask[1] - mask[0])).clamp(0, 1)[None], 1.5)[0]
 
 
-def sharpen(rgb, gain, overshoot=0.05, mask=None):
-    """detail.sharpen on a (3, H, W) picture with a half-spectrum gain: the luminance (BT.601 weights, as there) is filtered by FFT, the change added equally to the three channels and held within the local range of the original plus `overshoot`."""
+def sharpen_delta(rgb, gain, overshoot=0.05, mask=None):
+    """The change detail.sharpen makes to the luminance, (H, W), for a (3, H, W) picture and a half-spectrum gain: the luminance (BT.601 weights, as there) is filtered by FFT and the change held within the local range of the original plus `overshoot`. Each intermediate is freed as soon as it is not needed (the peak is about 5 planes: 21 MP in 0.45 GB, where holding them all took 1.3 GB and ran a 2 GB card out of memory)."""
     t = torch_(); F = t.nn.functional; h, w = rgb.shape[1:]; y = rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114
-    ys = t.fft.irfft2(t.fft.rfft2(y) * gain, s=(h, w)); pad = lambda a: F.pad(a[None, None], (2, 2, 2, 2), mode='replicate')
-    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot; d = t.minimum(t.maximum(y + (ys - y) * activity(y, mask), lo), hi) - y
-    return (rgb + d[None]).clamp_(0, 1)
+    f = t.fft.rfft2(y); f *= gain; d = t.fft.irfft2(f, s=(h, w)); del f; d -= y; d *= activity(y, mask); d += y                          # d is now the filtered, masked luminance
+    pad = lambda a: F.pad(a[None, None], (2, 2, 2, 2), mode='replicate')
+    d = t.minimum(d, F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot); d = t.maximum(d, -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot); d -= y
+    return d
+
+
+def sharpen(rgb, gain, overshoot=0.05, mask=None):
+    """detail.sharpen on a (3, H, W) picture with a half-spectrum gain: the change of `sharpen_delta` added equally to the three channels."""
+    return (rgb + sharpen_delta(rgb, gain, overshoot, mask)[None]).clamp_(0, 1)

@@ -63,8 +63,18 @@ RAW_EXTS = ('.dng', '.arw', '.cr2', '.cr3', '.nef', '.orf', '.raf', '.rw2')
 def is_camera_raw(path): return os.path.splitext(path)[1].lower() in RAW_EXTS
 
 
+_dims = {}
+
+
 def dims(path):
-    """(width, height) of the biggest picture in a file, read from its header: Pillow for ordinary pictures, the largest IFD or sub-IFD level for a DNG (the main IFD of a camera DNG is only a thumbnail)."""
+    """(width, height) of the biggest picture in a file, read from its header: Pillow for ordinary pictures, the largest IFD or sub-IFD level for a DNG (the main IFD of a camera DNG is only a thumbnail). Remembered per file (and its size and time stamp): the 'auto' size asks for every picture of a folder for each picture it makes (sizeplan.folder_size), which took 3 s per picture in a folder of 100 raws, and more as the folder grows."""
+    try: st = os.stat(path); key = (path, st.st_size, st.st_mtime_ns)
+    except OSError: return _dims_of(path)
+    if key not in _dims: _dims[key] = _dims_of(path)
+    return _dims[key]
+
+
+def _dims_of(path):
     if is_camera_raw(path):
         import tifffile
         with tifffile.TiffFile(path) as t:

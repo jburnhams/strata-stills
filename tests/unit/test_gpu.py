@@ -303,3 +303,18 @@ def test_mps_takes_one_picture_at_a_time(monkeypatch):
     import types
     monkeypatch.setattr(gpu, 'dev', lambda: types.SimpleNamespace(type='mps')); monkeypatch.setattr(gpu, '_cuda_total', lambda: None); monkeypatch.setattr(gpu, '_slots', None)
     assert gpu.whole_slots() == 1 and gpu.tile_slots() == 1 and not gpu.tiling_pays(4) and gpu.plan_workers() == 2           # two threads on the Apple GPU at once aborted the process (macOS CI)
+
+
+def test_a_blur_in_strips_is_the_same_as_one_pass(monkeypatch):
+    import numpy as np
+    t = gpu.torch_(); x = t.from_numpy(np.random.default_rng(3).random((3, 90, 70), dtype=np.float32)).to(gpu.dev()); whole = gpu.gaussian(x, 2.5).cpu()
+    monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 4000); strips = gpu.gaussian(x, 2.5).cpu()                                       # a workspace this small makes strips of 8 rows and columns
+    assert float((whole - strips).abs().max()) < 1e-5
+
+
+def test_conv_in_strips_is_the_same_as_one_convolution(monkeypatch):
+    import numpy as np
+    t = gpu.torch_(); rng = np.random.default_rng(5); y = t.from_numpy(rng.random((1, 1, 70, 50), dtype=np.float32)).to(gpu.dev())
+    monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 1000)                                                                          # strips of 8 rows
+    for shape in ((3, 3), (1, 9), (9, 1)):
+        k = t.from_numpy(rng.random((1, 1) + shape, dtype=np.float32)).to(gpu.dev()); assert float((gpu.conv(y, k) - t.nn.functional.conv2d(y, k)).abs().max()) < 1e-4

@@ -4,7 +4,7 @@
           general model (0: keeps most grain and texture) with its `wdn` (weak-denoise-noise-trained) sibling (1: cleanest), as the Real-ESRGAN `--denoise_strength` option does. The default.
   scunet  SCUNet `scunet_color_real_psnr` (Apache-2.0): the cleanest, and too smooth for these pictures (it takes roof-tile and brick texture with the grain); kept as an option.
 
-Both are loaded with spandrel and run in half precision in tiles on the GPU. `adaptive` blends the cleaned picture into the original by a weight map from the noise expected at each pixel (develop.noise_map8: the file's NoiseProfile), so areas whose noise is below what the eye sees are left exactly as the sensor recorded them,
+Both are loaded with spandrel and run in tiles on the GPU (in half precision where the card is fast at it, see `_fp16`). `adaptive` blends the cleaned picture into the original by a weight map from the noise expected at each pixel (develop.noise_map8: the file's NoiseProfile), so areas whose noise is below what the eye sees are left exactly as the sensor recorded them,
 and the model's slight shifts of broad brightness and colour are taken back (`keep_tones`). Weights live in `models/` (gitignored): `fetch()` downloads what a model needs."""
 import os, urllib.request
 
@@ -19,7 +19,7 @@ FILES = {
 MODELS = tuple(FILES)
 DEFAULT = 'esrgan'
 DEFAULT_STRENGTH = 0.6          # esrgan: how far towards the stronger-denoise weights (0..1)
-TILE = {'scunet': 1024, 'esrgan': 512}
+TILE = {'scunet': 1024, 'esrgan': 768}      # esrgan: 768 px tiles took 9 % less time than 512 on a GTX 1050 (less overlap to redo); 1024 ran out of its memory, so an out-of-memory halves the tile (`denoise`)
 OVERLAP = {'scunet': 64, 'esrgan': 32}
 _models = {}
 
@@ -39,6 +39,14 @@ def _device():
     return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+def _fp16(dev):
+    """Whether the network runs in half precision: on a CUDA card with fast half arithmetic (compute capability 7 and up). A Pascal card such as the GTX 10xx runs half at a fraction of its float32 speed (measured on a GTX 1050: 1.39 s per 512 px tile against 1.09 s in float32)."""
+    if dev.type != 'cuda': return False
+    import torch
+    try: return torch.cuda.get_device_capability(dev)[0] >= 7
+    except Exception: return True
+
+
 def _load(model, strength):
     key = (model, round(float(strength), 2) if model == 'esrgan' else 0)
     if key not in _models:
@@ -49,7 +57,7 @@ def _load(model, strength):
             a, b = (torch.load(p, map_location='cpu') for p in paths(model)); a, b = a.get('params', a), b.get('params', b)
             net = ModelLoader().load_from_state_dict({k: (1 - strength) * a[k] + strength * b[k] for k in a}).model
         else: net = ModelLoader().load_from_file(paths(model)[0]).model
-        net = net.eval().to(dev); _models[key] = net.half() if dev.type == 'cuda' else net
+        net = net.eval().to(dev); _models[key] = net.half() if _fp16(dev) else net
     return _models[key]
 
 
@@ -59,7 +67,7 @@ def _run(net, tile, multiple, post):
     dev = next(net.parameters()).device; th, tw = tile.shape[:2]; ph, pw = (-th) % multiple, (-tw) % multiple
     tp = np.pad(tile, ((0, ph), (0, pw), (0, 0)), mode='reflect') if ph or pw else tile
     x = torch.from_numpy(np.ascontiguousarray(tp.transpose(2, 0, 1)))[None].to(dev)
-    with torch.no_grad(): y = net(x.half() if dev.type == 'cuda' else x).float()[0].cpu().numpy().transpose(1, 2, 0)
+    with torch.no_grad(): y = net(x.to(next(net.parameters()).dtype)).float()[0].cpu().numpy().transpose(1, 2, 0)
     return post(y, tp.shape)[:th, :tw]
 
 
@@ -78,6 +86,16 @@ def denoise(rgb, model=DEFAULT, strength=DEFAULT_STRENGTH, tile=None, overlap=No
     net = _load(model, strength); tile = tile or TILE[model]; overlap = overlap if overlap is not None else OVERLAP[model]
     if model == 'esrgan': post, mult = (lambda y, shape: cv2.resize(y, (shape[1], shape[0]), interpolation=cv2.INTER_AREA)), 4                      # x4 from the network, averaged back down: the supersampled clean
     else: post, mult = (lambda y, shape: y), 64
+    while True:
+        try: out, wsum = _tiles(rgb, net, tile, overlap, mult, post, need); break
+        except Exception as e:                                                                        # the card (shared with the desktop) cannot hold a tile this size: half the side, and again
+            from stratastills import gpu
+            if not gpu.is_oom(e) or tile <= 256: raise
+            gpu.free(); tile //= 2
+    return np.clip(out / np.maximum(wsum, 1e-6), 0, 1)
+
+
+def _tiles(rgb, net, tile, overlap, mult, post, need):
     h, w = rgb.shape[:2]; out = np.zeros_like(rgb); wsum = np.zeros((h, w, 1), np.float32); step = tile - 2 * overlap
     for y0 in range(0, max(h - overlap, 1), step):
         for x0 in range(0, max(w - overlap, 1), step):
@@ -85,7 +103,7 @@ def denoise(rgb, model=DEFAULT, strength=DEFAULT_STRENGTH, tile=None, overlap=No
             wt = np.outer(_feather(th, y0c == 0, y1 == h, overlap), _feather(tw, x0c == 0, x1 == w, overlap))[..., None].astype(np.float32)
             y = t if need is not None and not need(y0c, y1, x0c, x1) else _run(net, t, mult, post)
             out[y0c:y1, x0c:x1] += y * wt; wsum[y0c:y1, x0c:x1] += wt
-    return np.clip(out / np.maximum(wsum, 1e-6), 0, 1)
+    return out, wsum
 
 
 def weight_map(sigma8, lo=1.5, hi=5.0, top=0.9):

@@ -113,9 +113,11 @@ def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
     from stratastills import gpu
     with gpu.slot():                                                                                       # one device slot while the picture is on the card (several pictures may be in flight)
         x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
-        mask = sharpen_mask(mtf_freq, mtf); base = gpu.sharpen(x, g(ROLLOFF), OVERSHOOT, mask=mask); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
-        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=mask) * k
-        out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
+        mask = sharpen_mask(mtf_freq, mtf); d1 = gpu.sharpen_delta(x, g(ROLLOFF), OVERSHOOT, mask=mask); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN); del y
+        d2 = gpu.sharpen_delta(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=mask) if float(k.max()) > 0 else None                  # the two filters' results, blended by brightness, one channel at a time (the whole picture of each would not fit a small card)
+        for c in range(3):
+            x[c] = (x[c] + d1).clamp_(0, 1) if d2 is None else (x[c] + d1).clamp_(0, 1) * (1 - k) + (x[c] + d2).clamp_(0, 1) * k
+        out = gpu.to_numpy(x); del x, d1, d2, k; gpu.free(); return out
 
 
 OVERSHOOT = 0.0                # how far (0..1 of the range) the sharpening may take a pixel beyond the local minimum and maximum of the original (5x5): the halos beside edges. Was 0.05; measured on the A7C set the overshoot metric falls 19.5 -> 17.0 (RawTherapee 18.5; the unsharpened pictures are at 17.7) for 1 level of sharpness
