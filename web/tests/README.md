@@ -20,3 +20,19 @@ vitest 4, Testing Library, user-event, msw (backend mocks). Run from `web/`: `np
 ## Coverage floors
 
 `coverage-floor.json` holds the floors of `npm run test:coverage:gate` (lines, statements, functions, branches). After CI is green, raise them to the new totals; never lower them.
+
+## Coverage status
+
+| File | % Lines | Status | Notes |
+|---|---|---|---|
+| `src/App.tsx` | 100 | done | Covered by top-level integration tests |
+| `src/api.ts` | 94.73 | done | Covered through handlers in integration tests |
+| `src/route.ts` | 100 | done | Tested indirectly via navigation |
+| `src/components/AutoGenerate.tsx` | 95.65 | done | Handled in integration/AutoGenerate.test.tsx |
+| `src/components/GeneratePanel.tsx` | 89.28 | partial | Generate and Loupe handle this |
+| `src/components/ItemPage.tsx` | 94.73 | done | Tested in ItemPage.test.tsx |
+| `src/components/Loupe.tsx` | 100 | done | Handled in Loupe.test.tsx |
+| `src/components/ProjectList.tsx` | 90.9 | done | ProjectList.test.tsx handles this |
+| `src/components/ProjectPage.tsx` | 100 | done | ProjectPage.test.tsx handles this |
+| `src/components/SourcePage.tsx` | 100 | done | SourcePage.test.tsx handles this |
+| `src/components/ui.tsx` | 100 | done | Util components |
