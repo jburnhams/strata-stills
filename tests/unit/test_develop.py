@@ -228,7 +228,8 @@ def test_a_dng_with_an_orientation_is_turned_upright_and_its_opcodes_are_turned_
 
 
 def test_match_from_decode_uses_the_card_and_gives_no_tone_without_a_preview(monkeypatch):
-    pytest.importorskip('torch'); from stratastills import tonematch
+    pytest.importorskip('torch'); from stratastills import gpu, tonematch
+    if not gpu.available(): pytest.skip('needs a device (a card, or the torch CPU device forced)')
     monkeypatch.setattr(D, 'read_dng_tags', lambda path, lens: {}); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None)
     u16 = (np.random.default_rng(0).random((64, 48, 3)) * 65535).astype(np.uint16); an = {}
     assert D._match_from_decode('x.dng', u16, 'auto', an) is None and an['tone'] is None
