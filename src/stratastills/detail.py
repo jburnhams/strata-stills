@@ -101,10 +101,10 @@ def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
         except Exception as e:
             if backend == 'gpu' or not gpu.is_oom(e): raise
         gpu.free()                                                                                                    # the card ran out of memory: the CPU does it
-    h, w = rgb.shape[:2]; base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), overshoot=OVERSHOOT, mask=SHARPEN_MASK); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    h, w = rgb.shape[:2]; mask = sharpen_mask(mtf_freq, mtf); base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), overshoot=OVERSHOOT, mask=mask); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
     if float(k.max()) <= 0: return base
-    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT), overshoot=OVERSHOOT, mask=SHARPEN_MASK)
+    alt = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount, rolloff=ROLLOFF_BRIGHT), overshoot=OVERSHOOT, mask=mask)
     return base * (1 - k) + alt * k
 
 
@@ -113,13 +113,25 @@ def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
     from stratastills import gpu
     with gpu.slot():                                                                                       # one device slot while the picture is on the card (several pictures may be in flight)
         x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
-        base = gpu.sharpen(x, g(ROLLOFF), OVERSHOOT, mask=SHARPEN_MASK); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN)[None]; del y
-        if float(k.max()) > 0: base = base * (1 - k) + gpu.sharpen(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=SHARPEN_MASK) * k
-        out = gpu.to_numpy(base); del x, base, k; gpu.free(); return out
+        mask = sharpen_mask(mtf_freq, mtf); d1 = gpu.sharpen_delta(x, g(ROLLOFF), OVERSHOOT, mask=mask); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN); del y
+        d2 = gpu.sharpen_delta(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=mask) if float(k.max()) > 0 else None                  # the two filters' results, blended by brightness, one channel at a time (the whole picture of each would not fit a small card)
+        for c in range(3):
+            x[c] = (x[c] + d1).clamp_(0, 1) if d2 is None else (x[c] + d1).clamp_(0, 1) * (1 - k) + (x[c] + d2).clamp_(0, 1) * k
+        out = gpu.to_numpy(x); del x, d1, d2, k; gpu.free(); return out
 
 
 OVERSHOOT = 0.0                # how far (0..1 of the range) the sharpening may take a pixel beyond the local minimum and maximum of the original (5x5): the halos beside edges. Was 0.05; measured on the A7C set the overshoot metric falls 19.5 -> 17.0 (RawTherapee 18.5; the unsharpened pictures are at 17.7) for 1 level of sharpness
 SHARPEN_MASK = (2.0, 6.0)      # the sharpening goes only where there is structure: its weight rises from 0 to 1 as the gradient of the (1 px blurred) luminance goes from the first to the second number, in 8-bit levels per pixel; in the flat areas the boost would only lift the noise (measured: flat-area noise 1.17 -> 1.53 levels with the filter on everywhere)
+
+MASK_REF_FREQ = 0.2             # the native frequency (cycles per pixel) at which the measured MTF decides how far the mask is raised
+MASK_REF_MTF = 0.45             # a picture whose MTF there is this or more keeps SHARPEN_MASK (the A7C pictures of the candidates measure 0.5-0.85, DJI 0.2-0.7)
+MASK_MAX_FACTOR = 3.5           # the most the mask thresholds are multiplied by
+
+
+def sharpen_mask(mtf_freq, mtf):
+    """SHARPEN_MASK raised for a picture that measures soft (its MTF at MASK_REF_FREQ under MASK_REF_MTF): what the measurement describes there is mostly a soft scene (or a soft lens), the Wiener gain sits at its cap over a wide band, and boosting the low-contrast mottling of the texture makes blobs (a smooth ground comes out as cobbles, edges as scallops: seen on NEX-5N pictures, f50 0.06). Only structure strong enough to be real edges is sharpened then. Factor = MASK_REF_MTF / MTF, 1 to MASK_MAX_FACTOR."""
+    if SHARPEN_MASK is None: return None
+    m = float(np.interp(MASK_REF_FREQ, mtf_freq, mtf)); k = float(np.clip(MASK_REF_MTF / max(m, 1e-3), 1.0, MASK_MAX_FACTOR)); return (SHARPEN_MASK[0] * k, SHARPEN_MASK[1] * k)
 
 
 def activity(y, mask=SHARPEN_MASK):

@@ -244,11 +244,28 @@ def test_auto_denoise_brings_the_model_in_on_a_noisy_picture_only(monkeypatch):
     from stratastills import denoise_ai
     synthetic_dng(monkeypatch); a = {}; monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); called = []; monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: called.append(1) or rgb)          # (after synthetic_dng, which says the weights are not there)
     for backend in ('cpu', 'gpu'):
-        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
+        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
         called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 1e9); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert not called and a['ai'] is False and a['blind_noise'] > 0
         called.clear(); D.develop('x.dng', denoise='classical', backend=backend, analysis=a); assert not called and a['ai'] is False
         called.clear(); D.develop('x.dng', denoise='ai', backend=backend, analysis=a); assert called and a['ai'] is True
-    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off
+    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off
+
+
+def test_the_tiled_route_brings_the_model_in_too(monkeypatch):
+    from stratastills import denoise_ai, gpu_tiled as T
+    synthetic_dng(monkeypatch, h=240, w=320); u16 = D._raw_u16('x.dng', False); monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); seen = []
+    monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: seen.append(np.shape(sig)) or rgb)
+    monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0)
+    for threshold, denoise, want in ((0.0, 'auto', True), (1e9, 'auto', False), (1e9, 'ai', True)):
+        seen.clear(); a = {}; monkeypatch.setattr(D, 'AUTO_AI_NOISE', threshold); T.develop_tiled('x.dng', u16, 'auto', denoise, 0.35, D.HIGHLIGHT_CONTRAST, a, tile=192)
+        assert bool(seen) is want and a['ai'] is want and a['blind_noise'] > 0 and (not want or seen[0] == (240, 320)), (threshold, denoise, seen, a)
+
+
+def test_auto_leaves_the_model_out_when_the_clean_up_already_did_it(monkeypatch):
+    from stratastills import denoise_ai
+    monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True)
+    assert not D._auto_ai(2.4, lambda: 0.5) and D._auto_ai(2.4, lambda: 1.1) and D._auto_ai(2.4) and not D._auto_ai(1.0, lambda: 9)     # a DJI file (2.4 before, 0.5 after) against an A7C one at ISO 1600 (2.1, 1.05)
+    assert D._auto_ai(8.0, lambda: 0.0)                                                                                              # cored to nothing: the estimate fails, the picture is noisy
 
 
 class FakeOOM(RuntimeError): pass
@@ -286,3 +303,18 @@ def test_mps_takes_one_picture_at_a_time(monkeypatch):
     import types
     monkeypatch.setattr(gpu, 'dev', lambda: types.SimpleNamespace(type='mps')); monkeypatch.setattr(gpu, '_cuda_total', lambda: None); monkeypatch.setattr(gpu, '_slots', None)
     assert gpu.whole_slots() == 1 and gpu.tile_slots() == 1 and not gpu.tiling_pays(4) and gpu.plan_workers() == 2           # two threads on the Apple GPU at once aborted the process (macOS CI)
+
+
+def test_a_blur_in_strips_is_the_same_as_one_pass(monkeypatch):
+    import numpy as np
+    t = gpu.torch_(); x = t.from_numpy(np.random.default_rng(3).random((3, 90, 70), dtype=np.float32)).to(gpu.dev()); whole = gpu.gaussian(x, 2.5).cpu()
+    monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 4000); strips = gpu.gaussian(x, 2.5).cpu()                                       # a workspace this small makes strips of 8 rows and columns
+    assert float((whole - strips).abs().max()) < 1e-5
+
+
+def test_conv_in_strips_is_the_same_as_one_convolution(monkeypatch):
+    import numpy as np
+    t = gpu.torch_(); rng = np.random.default_rng(5); y = t.from_numpy(rng.random((1, 1, 70, 50), dtype=np.float32)).to(gpu.dev())
+    monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 1000)                                                                          # strips of 8 rows
+    for shape in ((3, 3), (1, 9), (9, 1)):
+        k = t.from_numpy(rng.random((1, 1) + shape, dtype=np.float32)).to(gpu.dev()); assert float((gpu.conv(y, k) - t.nn.functional.conv2d(y, k)).abs().max()) < 1e-4

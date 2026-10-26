@@ -208,9 +208,14 @@ def noise_sigma(noise_profile, level):
 AUTO_AI_NOISE = 1.5                      # `denoise: auto` brings the learned model in when the picture's own noise, estimated before any clean-up (blind_noise, 8-bit levels), is this high or higher (measured on 46 A7C pictures: ISO 100 0.3, 400 0.9, 1250 1.2, 3200 1.7, 10000 2.3): the classical clean-up leaves 1.3-1.6 levels of luminance noise in the flat areas there, RawTherapee 0.8-1.1, the model 0.5-0.6
 
 
-def _auto_ai(blind):
-    """Whether `denoise: auto` uses the learned model for a picture whose blind noise is `blind` (and the weights are there, and STRATASTILLS_AI is not 0)."""
-    return os.environ.get('STRATASTILLS_AI', '1') != '0' and blind >= AUTO_AI_NOISE and denoise_ai.available()
+AUTO_AI_LEFT = 0.8                       # ... and the classical clean-up leaves at least this much (the same estimate on the finished picture): a DJI file measures 2.1-2.6 before it and 0.0-0.7 after (the camera's own JPEG 1.7), so the model, which would cost three times the time and some fine detail, is left out; the A7C leaves 0.8-1.2 from ISO 500 up
+AUTO_AI_FLAT = 4.0                       # a picture this noisy before the clean-up always gets the model: the estimate on the cleaned one fails (0.00) when the flat areas are cored to nothing
+
+
+def _auto_ai(blind, left=None):
+    """Whether `denoise: auto` uses the learned model for a picture whose blind noise is `blind` (and the weights are there, and STRATASTILLS_AI is not 0). `left`: a function that gives the blind noise of the picture after the classical clean-up, asked only when it matters."""
+    if os.environ.get('STRATASTILLS_AI', '1') == '0' or blind < AUTO_AI_NOISE or not denoise_ai.available(): return False
+    return left is None or blind >= AUTO_AI_FLAT or left() >= AUTO_AI_LEFT
 
 
 def blind_noise(rgb):
@@ -524,7 +529,7 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
         out = clean_colour(out, sig8)
         if denoise in ('auto', 'ai', 'classical'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
     if highlight_contrast > 0: out = highlight_detail(out, highlight_contrast)
-    ai = sig8 is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(blind)))
+    ai = sig8 is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(blind, lambda: blind_noise(out))))
     model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
     if ai and denoise_ai.available(model): out = denoise_ai.adaptive(out, sig8, model, strength)
     else: ai = False
@@ -546,7 +551,7 @@ def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=
     with gpu.slot():
         if limit and u16.shape[0] * u16.shape[1] > limit:
             if tone == 'match': tone = _match_on_cpu(path, ev, recover, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover        # a picture too big for the card is developed in tiles: its curve the slow way
-            try: return gpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise in ('ai', 'classical') else denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens, tile=max(256, gpu.tile_size() // 2) if smaller else None)
+            try: return gpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise == 'classical' else denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens, tile=max(256, gpu.tile_size() // 2) if smaller else None)
             except gpu_tiled.Unsupported:
                 k = ((gpu.max_pixels() or u16.shape[0] * u16.shape[1] // 2) / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
         return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
@@ -612,7 +617,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
     if npf is not None and mode in ('auto', 'chroma'): sc = float(np.clip(visible_noise(gpu.to_numpy(img[:, ::8, ::8]), npf, stride=1) * 0.6, 0.0, 1.5))
     ex = {}; out = gpu_tail(img, lut_t, npf, field, sc, mode, highlight_contrast, chroma_t, extras=ex); del img
     res = gpu.to_numpy(out); del out
-    ai = npf is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(ex['blind']))) and denoise_ai.available()
+    ai = npf is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(ex['blind'], lambda: blind_noise(res)))) and denoise_ai.available()
     if analysis is not None: analysis['ai'] = bool(ai); analysis['blind_noise'] = ex.get('blind', 0.0)
     if ai: res = denoise_ai.adaptive(res, gpu.to_numpy(ex['sig8']), denoise_ai.DEFAULT, denoise_ai.DEFAULT_STRENGTH)                    # where the noise is visible (the same call as the CPU route)
     gpu.free(); return res

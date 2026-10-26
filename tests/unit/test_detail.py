@@ -67,3 +67,10 @@ def test_bright_areas_get_less_fine_scale_boost_than_dark_ones(monkeypatch):
     (od, ob), (pd, pb) = fine(out), fine(plain)
     assert od == pytest.approx(pd, rel=0.05) and ob < pb * 0.97                                         # dark half as before, bright half boosted less
     assert np.allclose(detail.sharpen_picture(np.full((64, 64, 3), 0.3, np.float32), f, m, 1.0), 0.3, atol=1e-3)
+
+
+def test_the_mask_is_raised_only_for_a_picture_that_measures_soft():
+    f = np.array([0.05, 0.5]); base = detail.SHARPEN_MASK
+    for m in (0.9, 0.6, detail.MASK_REF_MTF): assert detail.sharpen_mask(f, np.array([m, m])) == base                                      # sharp enough: untouched
+    lo, hi = detail.sharpen_mask(f, np.array([0.3, 0.3])); assert base[0] < lo < detail.sharpen_mask(f, np.array([0.1, 0.1]))[0] and abs(hi / lo - base[1] / base[0]) < 1e-6         # the softer, the higher, in the same proportion
+    assert detail.sharpen_mask(f, np.array([0.001, 0.001])) == (base[0] * detail.MASK_MAX_FACTOR, base[1] * detail.MASK_MAX_FACTOR)          # and not without limit

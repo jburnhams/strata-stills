@@ -13,11 +13,11 @@ Presets: built in (BUILTIN: 'best' is the default and needs nothing chosen) or t
 `apply_rules` generates what is missing, so adding a folder and pressing one button gives the preferred variants of every picture in it.
 
 Nothing is ever written into a source folder."""
-import contextlib, datetime as dt, hashlib, json, math, os, re
+import contextlib, datetime as dt, hashlib, json, math, os, re, time
 
 import cv2, numpy as np
 
-from stratastills import detail, develop, export as X, images, inputs, jpeg_quality, lensfundb, match, preview, projects as P, settings, sizeplan, tonematch, transforms
+from stratastills import detail, develop, export as X, gpu, images, inputs, jpeg_quality, lensfundb, match, preview, projects as P, settings, sizeplan, tonematch, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 3.0            # chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
@@ -106,7 +106,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=5, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=6, encode=2)[stage]
 
 
 class State:
@@ -340,18 +340,21 @@ def find_existing(pid, iid, variant=None, stages=None, preset=None, options=None
     return key, next((g for g in item['variants'] if g['kind'] == 'generated' and g.get('key') == key), None)
 
 
-def generate(pid, iid, variant=None, preset=None, options=None, stages=None, progress=None):
-    """Run a pipeline on a source variant and return the record of the new generated variant (`key`, `file`, `stages`, ...; `existing` True if these exact settings had been generated before, in which case nothing is done). `progress(text)` is called as the steps go."""
+def generate(pid, iid, variant=None, preset=None, options=None, stages=None, progress=None, on_stage=None):
+    """Run a pipeline on a source variant and return the record of the new generated variant (`key`, `file`, `stages`, ...; `existing` True if these exact settings had been generated before, in which case nothing is done). `progress(text)` is called as the steps go; `on_stage(name, state)` after each stage (scripts/build_report.py takes the picture as it is at every stage)."""
     say = progress or (lambda t: None); st = resolve(preset, options, stages)
     item = P.get_item(pid, iid); v = source_variant(item, variant); key = stage_key(iid, v['id'], st); d = P.generated_dir(pid, iid); base = os.path.join(d, key)
     if any(g['kind'] == 'generated' and g.get('key') == key for g in item['variants']):
         try: r = json.load(open(base + '.json')); r['existing'] = True; return r
         except (OSError, ValueError): pass
     state = State(pid, iid, item, v, say); runners = dict(develop=run_develop, level=run_level, resize=run_resize, sharpen=run_sharpen)
+    timing = state.rec['timing'] = []                                                                                  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
     for s in st:
-        p = {k: val for k, val in s.items() if k != 'stage'}
+        p = {k: val for k, val in s.items() if k != 'stage'}; t0 = time.perf_counter(); a0 = gpu.allocations()
         if s['stage'] == 'encode': os.makedirs(d, exist_ok=True); run_encode(state, p, base)
         else: runners[s['stage']](state, p)
+        a1 = gpu.allocations(); timing.append(dict(stage=s['stage'], seconds=round(time.perf_counter() - t0, 2), gpu=None if a0 is None or a1 is None else a1 > a0))
+        if on_stage: on_stage(s['stage'], state)
     rec = dict(state.rec, version=1, key=key, created=dt.datetime.now().astimezone().isoformat(timespec='seconds'), item=iid, stem=item['stem'], source_variant=v['id'], source=v['path'], preset=preset, stages=st, summary=summary(st),
                output=[int(state.rgb.shape[1]), int(state.rgb.shape[0])], file=state.file, bytes=os.path.getsize(state.file), format=st[-1]['format'], quality=state.quality, existing=False)
     with open(base + '.json', 'w') as f: json.dump(rec, f, indent=1)

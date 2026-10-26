@@ -17,7 +17,9 @@ def doctor(args):
         import torch
         if gpu.available():
             d = gpu.dev(); name = torch.cuda.get_device_name(0) if d.type == 'cuda' else 'Apple silicon (MPS)'
-            try: x = torch.ones(64, 64, device=d); float((x @ x).sum()); print(f'  ok       torch {torch.__version__}: the pixel work runs on the GPU: {name}')
+            try:
+                x = torch.ones(64, 64, device=d); float((x @ x).sum()); print(f'  ok       torch {torch.__version__}: the pixel work runs on the GPU: {name}')
+                if d.type == 'cuda' and not torch.backends.cudnn.enabled: print('  SLOW     cuDNN does not work on this card (turned off for the run): convolutions, the learned denoise above all, take 3 times as long; python scripts/setup_torch.py repairs a clashing cuDNN or picks the newest torch the card supports')
             except Exception as e: ok = False; print(f'  BROKEN   torch {torch.__version__} sees {name} but cannot run a kernel on it ({str(e).splitlines()[0][:90]}): install the build that includes this card (a Pascal GTX 10xx needs the cu126 wheels, see README), or set STRATASTILLS_GPU=0')
         else: print(f'  ok       torch {torch.__version__}: no CUDA or MPS device (or STRATASTILLS_GPU=0): the pixel work runs on the CPU (slower, same result)')
     except ImportError: print('  missing  torch (optional: needed for the GPU path and the detector models; pip install torch, see README)')
@@ -26,6 +28,8 @@ def doctor(args):
     except ImportError: have_net = False
     if denoise_ai.available() and have_net: print('  ok       learned denoise (Real-ESRGAN weights, spandrel)')
     else: print(f'  missing  learned denoise ({"weights" if have_net else "spandrel"}): high-ISO pictures get the classical clean-up only; scripts/setup_env installs it, or pip install spandrel==0.4.2 einops && python -c "from stratastills import denoise_ai; denoise_ai.fetch()"')
+    from stratastills import externaltools
+    gone = externaltools.missing(); print('  ok       darktable and RawTherapee (for the comparison report and scripts/render_external.py)' if not gone else f'  missing  {", ".join(gone)}: needed for the comparison report and scripts/render_external.py (they stop without them); {externaltools.HINT.get(sys.platform if sys.platform in externaltools.HINT else "linux")}')
     return 0 if ok else 1
 
 

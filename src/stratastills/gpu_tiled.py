@@ -6,7 +6,7 @@ It is possible because almost nothing in the recipe looks far: the lens correcti
 tests/unit/test_gpu_tiled.py holds the result to that of the whole-picture version. Operations the tiling cannot do (an opcode list in an order it does not handle) raise Unsupported and the caller falls back to developing a reduced picture."""
 import cv2, numpy as np
 
-from stratastills import develop as D, gpu
+from stratastills import denoise_ai, develop as D, gpu
 
 TILE = 2048
 HALO = 128                      # the widest reach of the clean-up (guided filters, grain bands, the noise map's blur at 1/8 scale: about 90) with room to spare; a multiple of 8, which the noise map's reduction wants
@@ -79,14 +79,19 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         return region * t.exp2(new - ly)[None]
     sample = local_tone(t.from_numpy(np.ascontiguousarray(lin[:, ::8, ::8])).to(dv), sy, sx); g = 2.0 ** (D.auto_ev(gpu.to_numpy(sample), lut, stride=1) if ev == 'auto' else D.ev_stops(ev))
     npf = tags.get('NoiseProfile'); npf = (npf[0] * g * 2.0 ** be, npf[1] * (g * 2.0 ** be) ** 2) if npf is not None else None; sc = 0.0
-    if npf is not None and denoise in ('auto', 'chroma'): sc = float(np.clip(D.visible_noise(gpu.to_numpy(sample * g), npf, stride=1) * 0.6, 0.0, 1.5))
+    if npf is not None and denoise in ('auto', 'ai', 'chroma'): sc = float(np.clip(D.visible_noise(gpu.to_numpy(sample * g), npf, stride=1) * 0.6, 0.0, 1.5))
     del sample
     # ---- pass B
-    out = np.empty((H, W, 3), np.float32)
+    out = np.empty((H, W, 3), np.float32); sig8 = np.empty((H, W), np.float32) if npf is not None else None; blinds = []
     for box in boxes(H, W, tile):
         y0, y1, x0, x1 = box; ry0, ry1, rx0, rx1 = max(0, y0 - halo), min(H, y1 + halo), max(0, x0 - halo), min(W, x1 + halo); ys, xs = np.arange(ry0, ry1), np.arange(rx0, rx1)
         img = local_tone(t.from_numpy(np.ascontiguousarray(lin[:, ry0:ry1, rx0:rx1])).to(dv), ys, xs) * g
         field = _gain_plane(field_map[0], field_map[1], (H, W), ys, xs) if field_map is not None else None
-        res = D.gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t); del img
+        ex = {}; res = D.gpu_tail(img, lut_t, npf, field, sc, 'auto' if denoise == 'ai' else denoise, highlight_contrast, chroma_t, extras=ex); del img
         out[y0:y1, x0:x1] = gpu.to_numpy(res[:, y0 - ry0:y1 - ry0, x0 - rx0:x1 - rx0]); del res
-    gpu.free(); return out
+        if sig8 is not None: sig8[y0:y1, x0:x1] = gpu.to_numpy(ex['sig8'][y0 - ry0:y1 - ry0, x0 - rx0:x1 - rx0]); blinds.append(float(ex['blind']))
+    gpu.free()
+    blind = float(np.median(blinds)) if blinds else 0.0                                                                  # the whole picture's blind noise: the median of the tiles' (each from its flattest quarter)
+    ai = npf is not None and (denoise == 'ai' or (denoise == 'auto' and D._auto_ai(blind, lambda: D.blind_noise(out)))) and denoise_ai.available()
+    if analysis is not None: analysis['ai'] = bool(ai); analysis['blind_noise'] = blind
+    return denoise_ai.adaptive(out, sig8, denoise_ai.DEFAULT, denoise_ai.DEFAULT_STRENGTH) if ai else out

@@ -278,3 +278,8 @@ def test_lens_setting_takes_five_values():
     b = PL.get_preset('best')['stages']
     for v in ('auto', 'off', 'camera', 'geometry', 'shading'): assert next(s for s in PL.apply_options(b, dict(lens=v)) if s['stage'] == 'develop')['lens'] == v
     with pytest.raises(P.ProjectError): PL.apply_options(b, dict(lens='half'))
+
+
+def test_generate_keeps_the_time_and_gpu_use_of_each_stage(proj):
+    pid, sid, iid = proj; r = PL.generate(pid, iid, options=dict(size='native', quality=90))
+    t = r['timing']; assert [x['stage'] for x in t] == [x['stage'] for x in r['stages']] and all(x['seconds'] >= 0 and x['gpu'] in (True, False, None) for x in t)

@@ -28,11 +28,15 @@ export interface Transform { id: string; label: string }
 /** The transforms the server offers on a picture, in order (transforms.py ORDER). */
 export const TRANSFORMS: Transform[] = [{ id: 'original', label: 'Original' }, { id: 'level', label: 'Levelled' }]
 
+// Where the app is served from: '' at the server's own root, '/strata-stills' behind a reverse proxy at that path (Caddy on the home server). Taken from the page's own URL (index.html has relative asset paths: vite.config.ts base './'), so one build works in both places.
+export const BASE = typeof document === 'undefined' ? '' : new URL('.', document.baseURI).pathname.replace(/\/$/, '')      // no page (the unit tests run in node): the root
+export const withBase = (u: string) => (u.startsWith('/') ? BASE + u : u)
+
 export const q = (id: string) => '?id=' + encodeURIComponent(id)
 const qi = (id: string, item: string) => q(id) + '&item=' + encodeURIComponent(item)
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init)
+  const r = await fetch(withBase(url), init)
   const d = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error((d as { detail?: string }).detail || r.statusText)
   return d as T
@@ -40,6 +44,7 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 const send = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 export const api = {
+  report: () => req<{ available: boolean; built: number | null }>('/api/report'),
   settings: () => req<{ projects_dir: string }>('/api/settings'),
   projects: () => req<Project[]>('/api/projects'),
   createProject: (name: string, sources: string[]) => req<Project>('/api/projects', send('POST', { name, sources })),
@@ -68,16 +73,16 @@ export const api = {
 
 /** URL of a picture: an item's variant with a transform, at most `px` on the long side. */
 export function imageUrl(id: string, item: string, variant: string | null, transform = 'original', px = 1600) {
-  return '/api/project/image' + qi(id, item) + (variant ? '&variant=' + encodeURIComponent(variant) : '') + '&transform=' + transform + '&px=' + px
+  return withBase('/api/project/image' + qi(id, item) + (variant ? '&variant=' + encodeURIComponent(variant) : '') + '&transform=' + transform + '&px=' + px)
 }
 
 /** URL of the loupe's crop: the `size` px square around the point (x, y in 0..1 of the picture) of a variant with a transform, enlarged `zoom` times. */
 export function cropUrl(id: string, item: string, variant: string, transform: string, x: number, y: number, size: number, zoom: number) {
-  return '/api/project/crop' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform + `&x=${x.toFixed(4)}&y=${y.toFixed(4)}&size=${size}&zoom=${zoom}`
+  return withBase('/api/project/crop' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform + `&x=${x.toFixed(4)}&y=${y.toFixed(4)}&size=${size}&zoom=${zoom}`)
 }
 
 /** Download address of a generated variant's file. */
-export const generatedFileUrl = (id: string, item: string, variant: string) => '/api/project/generated/file' + qi(id, item) + '&variant=' + encodeURIComponent(variant)
+export const generatedFileUrl = (id: string, item: string, variant: string) => withBase('/api/project/generated/file' + qi(id, item) + '&variant=' + encodeURIComponent(variant))
 
 /** The value of one setting of a stage list (what the Advanced panel shows for the pipeline that will run). */
 export const stageValue = (stages: Stage[] | undefined, stage: string, key: string) => stages?.find(s => s.stage === stage)?.[key]
