@@ -1,13 +1,19 @@
 """resources.py: how much memory there is, and how many pictures and how big a tile that allows."""
 import ctypes, os, sys, types
 
+import pytest
+
 from stratastills import resources as R
 
 
-def test_the_memory_of_this_machine_is_found_and_zero_when_it_cannot_be(monkeypatch):
+def test_the_memory_of_this_machine_is_found():
     assert R.total_ram() > 0
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows asks the kernel, not sysconf (tested below)')
+def test_memory_is_zero_when_sysconf_cannot_say(monkeypatch):
     def boom(name): raise OSError('no sysconf')
-    monkeypatch.setattr(os, 'sysconf', boom, raising=False); assert R.total_ram() == 0
+    monkeypatch.setattr(os, 'sysconf', boom); assert R.total_ram() == 0
 
 
 def test_windows_asks_the_kernel_for_its_physical_memory(monkeypatch):
