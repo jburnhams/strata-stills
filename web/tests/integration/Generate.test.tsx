@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import App from '../../src/App'
-import { items, mock, server } from '../utils/server'
+import { generatedRecord, items, mock, presets, server } from '../utils/server'
 
 const open = (hash: string) => { window.location.hash = hash; return render(<App />) }
 const willMake = () => screen.getByTestId('will-make')
@@ -79,5 +79,38 @@ describe('auto-generate a source folder', () => {
     server.use(http.get('/api/project/apply', () => HttpResponse.json({ state: 'done', done: 3, total: 3, failed: [['abcd1234~A_2', 'boom']] })))
     open('#/p/demo/s/abcd1234'); await userEvent.click(await screen.findByRole('button', { name: 'Generate 3 missing' }))
     expect(await screen.findByText('A_2: boom', {}, { timeout: 4000 })).toBeInTheDocument(); expect(screen.getByText(/1 failed/)).toBeInTheDocument()
+  })
+})
+
+describe('generate: the background job and saved presets', () => {
+  it('polls a running job and stops showing it as running once it is done', async () => {
+    let polls = 0
+    server.use(http.get('/api/project/generate', () => { polls += 1; return HttpResponse.json({ state: 'done', result: generatedRecord }) }))
+    open('#/p/demo/i/abcd1234~A_1'); await waitFor(() => expect(willMake()).toHaveTextContent('Will make'))
+    await userEvent.click(screen.getByRole('button', { name: 'Generate' }))
+    expect(await screen.findByText(/Generating/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/Generating/)).toBeNull(), { timeout: 5000 })           // the poll runs every 1.5 s
+    expect(polls).toBeGreaterThanOrEqual(1)
+  })
+
+  it('keeps polling while the job runs and shows the server error if asking for its state fails', async () => {
+    server.use(http.get('/api/project/generate', () => HttpResponse.json({ detail: 'the job vanished' }, { status: 500 })))
+    open('#/p/demo/i/abcd1234~A_1'); await waitFor(() => expect(willMake()).toHaveTextContent('Will make'))
+    await userEvent.click(screen.getByRole('button', { name: 'Generate' }))
+    expect(await screen.findByText('the job vanished', {}, { timeout: 5000 })).toBeInTheDocument()
+  })
+
+  it('deletes a preset the user saved, and goes back to the best-quality one', async () => {
+    const mine = { name: 'web3k', label: 'Web 3k', builtin: false, stages: presets[0].stages }; const deleted: string[] = []
+    server.use(
+      http.get('/api/pipelines', () => HttpResponse.json([...presets, mine])),
+      http.delete('/api/pipeline', ({ request }) => { deleted.push(new URL(request.url).searchParams.get('name')!); return HttpResponse.json(presets) }),
+    )
+    open('#/p/demo/i/abcd1234~A_1'); await waitFor(() => expect(willMake()).toHaveTextContent('Will make'))
+    await userEvent.click(screen.getByText('Advanced')); expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull()      // nothing to delete on a built-in preset
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Pipeline' }), 'web3k')
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete “Web 3k”' }))
+    await waitFor(() => expect(deleted).toEqual(['web3k']))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Pipeline' })).toHaveValue('best'))
   })
 })

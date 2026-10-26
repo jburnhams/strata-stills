@@ -62,3 +62,35 @@ def test_a_device_look_table_is_used_only_with_a_matched_tone():
     spec = dict(hue=24, data=hue_table(10.0, 0.9).ravel().tolist()); tags = dict(LookTable=spec); own = [0.0, 0.0, 1.0, 1.0]
     assert D.tone_parts(own, tags)[1] is None and D.tone_parts(None, tags)[1] is None
     c, (lut, tab) = D.tone_parts(dict(curve=own), tags); assert lut is None and tab.shape == (24, len(D.LOOK_CHROMA), 2) and D.tone_parts(dict(curve=own), {})[1] is None
+
+
+def fake_rawpy(monkeypatch, fmt, data=None, fail=False):
+    import contextlib, enum, sys, types
+    class TF(enum.Enum): JPEG = 1; BITMAP = 2; OTHER = 3
+    mod = types.ModuleType('rawpy'); mod.ThumbFormat = TF
+    class R:
+        def extract_thumb(self):
+            if fail: raise RuntimeError('no thumbnail')
+            return types.SimpleNamespace(format=getattr(TF, fmt), data=data)
+    mod.imread = lambda path: contextlib.nullcontext(R()); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+
+
+def test_the_embedded_jpeg_is_decoded_to_rgb_and_a_bitmap_thumbnail_is_passed_through(monkeypatch):
+    import cv2
+    bgr = np.zeros((6, 8, 3), np.uint8); bgr[..., 2] = 255                                               # red, as OpenCV stores it
+    ok, buf = cv2.imencode('.png', bgr); fake_rawpy(monkeypatch, 'JPEG', buf.tobytes())                  # imdecode reads any format; PNG keeps the colour exact
+    rgb = T.embedded_jpeg('x.arw'); assert rgb.shape == (6, 8, 3) and rgb[0, 0].tolist() == [255, 0, 0]
+    bm = np.full((4, 5, 3), 7, np.uint8); fake_rawpy(monkeypatch, 'BITMAP', bm); assert (T.embedded_jpeg('x.arw') == 7).all()
+
+
+def test_an_undecodable_unknown_or_missing_thumbnail_is_none(monkeypatch):
+    fake_rawpy(monkeypatch, 'JPEG', b'not an image'); assert T.embedded_jpeg('x.arw') is None
+    fake_rawpy(monkeypatch, 'OTHER', b''); assert T.embedded_jpeg('x.arw') is None
+    fake_rawpy(monkeypatch, 'JPEG', fail=True); assert T.embedded_jpeg('x.arw') is None
+
+
+def test_a_picture_is_cropped_to_the_centre_to_match_an_aspect_ratio():
+    img = np.arange(10 * 20).reshape(10, 20)
+    assert T._crop_to_aspect(img, 2.0) is img and T._crop_to_aspect(img, 2.005) is img                    # already that shape (within 1 %)
+    wide = T._crop_to_aspect(img, 1.0); assert wide.shape == (10, 10) and wide[0, 0] == img[0, 5]         # too wide: sides trimmed equally
+    tall = T._crop_to_aspect(img.T, 1.0); assert tall.shape == (10, 10) and tall[0, 0] == img.T[5, 0]     # too tall: top and bottom trimmed equally
