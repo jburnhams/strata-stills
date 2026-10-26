@@ -3,7 +3,7 @@
 #   scripts/setup_env.sh [--no-torch] [--with-vision] [--report]
 # --report: at the end, build the visual report on the candidate photos (scripts/build_report.py into out/report/; skipped when there is no candidates/ folder)
 # Environment variables: VENV (default .venv), PYTHON (default python3)
-# torch: scripts/setup_torch.py picks the build for the machine (CUDA = cu128|cu126|cpu in the environment overrides it).
+# torch: scripts/setup_torch.py picks the build for the machine (CUDA = cu128|cu126|rocm64|cpu in the environment overrides it).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${VENV:-$ROOT/.venv}"; PYTHON="${PYTHON:-python3}"
@@ -17,7 +17,7 @@ say "virtual environment: $VENV"
 say "requirements"
 "$VENV/bin/pip" install -r "$ROOT/requirements.txt"
 if [ "$TORCH" = 1 ]; then
-  say "torch (the newest build the hardware can run: scripts/setup_torch.py looks at the NVIDIA card, installs, repairs a clashing cuDNN and probes it; CUDA, Metal, or the CPU build)"
+  say "torch (the newest build the hardware can run: scripts/setup_torch.py looks at the NVIDIA card or the AMD GPU, installs, repairs a clashing cuDNN and probes it; CUDA, ROCm, Metal, or the CPU build)"
   "$VENV/bin/python" "$ROOT/scripts/setup_torch.py" --python "$VENV/bin/python" ${CUDA:+--cuda "$CUDA"}
   say "learned denoise (Real-ESRGAN weights, 9 MB, into models/): spandrel without its dependencies, so that it cannot replace the torch just installed"
   "$VENV/bin/pip" install einops safetensors && "$VENV/bin/pip" install --no-deps spandrel==0.4.2

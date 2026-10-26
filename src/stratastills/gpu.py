@@ -1,6 +1,6 @@
 """The pixel pipeline on the GPU (PyTorch): the same recipes as develop.py and detail.py, written for large tensors, so a 48 MP raw develops in seconds instead of minutes.
 
-Devices, in the order tried: NVIDIA CUDA, Apple silicon MPS (Metal), and otherwise NOTHING: with neither, `available()` is False and the callers use the CPU code (NumPy and OpenCV in develop.py and detail.py), which is the REFERENCE every function here is tested against (tests/unit/test_gpu.py). The tests also run these torch
+Devices, in the order tried: NVIDIA CUDA or AMD ROCm (both are torch's 'cuda' device; see amd_env for the override a Radeon 780M needs), Apple silicon MPS (Metal), and otherwise NOTHING: with neither, `available()` is False and the callers use the CPU code (NumPy and OpenCV in develop.py and detail.py), which is the REFERENCE every function here is tested against (tests/unit/test_gpu.py). The tests also run these torch
 functions on the torch CPU device (`use('cpu')`), so a machine with no GPU still checks them. STRATASTILLS_DEVICE=cuda|mps|cpu forces a device (cpu = torch on the CPU, for tests); STRATASTILLS_GPU=0 switches the GPU path off.
 Conventions: a picture is a float32 tensor (3, H, W) on the device (channels first, so a filter is a convolution over planes), one plane is (H, W); values as in the CPU code. Borders reflect without repeating the edge pixel (OpenCV's default, torch 'reflect').
 Memory: a 48 MP plane is 193 MB and a picture 580 MB; the functions keep a handful alive at a time and the long per-pixel table lookups are chunked, so the whole development stays under about 6 GB (a 12 GB card, or an M4's unified memory, is plenty).
@@ -15,9 +15,27 @@ _cubic_ok = None
 LUMA = (0.2126, 0.7152, 0.0722)
 
 
+# gfx_target_version (as in /sys/class/kfd) -> HSA_OVERRIDE_GFX_VERSION: ROCm ships kernels for gfx1100 but not gfx1101-1103 (the Ryzen 7840HS's Radeon 780M is gfx1103), where every kernel
+# fails with 'invalid device function' until the chip is presented as gfx1100. Tried on the 780M (matmul 3.2 TFLOPS fp32, 5.0 fp16). Same table in scripts/setup_torch.py.
+AMD_OVERRIDE = {110001: '11.0.0', 110002: '11.0.0', 110003: '11.0.0'}
+
+
+def amd_env(root='/sys/class/kfd/kfd/topology/nodes'):
+    """{'HSA_OVERRIDE_GFX_VERSION': ...} when an AMD GPU here needs it and the user has not set it, else {}."""
+    if 'HSA_OVERRIDE_GFX_VERSION' in os.environ: return {}
+    import glob
+    for f in sorted(glob.glob(os.path.join(root, '*', 'properties'))):
+        try: props = dict(l.split(None, 1) for l in open(f).read().splitlines() if ' ' in l)
+        except OSError: continue
+        v = int(props.get('gfx_target_version', '0').strip() or 0)
+        if props.get('vendor_id', '').strip() == '4098' and v in AMD_OVERRIDE: return {'HSA_OVERRIDE_GFX_VERSION': AMD_OVERRIDE[v]}
+    return {}
+
+
 def torch_():
     global _torch
     if _torch is None:
+        os.environ.update(amd_env())                  # before torch loads: the ROCm runtime reads it at start
         import torch
         _torch = torch; _cudnn_probe(torch)
     return _torch
