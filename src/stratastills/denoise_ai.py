@@ -91,7 +91,9 @@ def denoise(rgb, model=DEFAULT, strength=DEFAULT_STRENGTH, tile=None, overlap=No
         except Exception as e:                                                                        # the card (shared with the desktop) cannot hold a tile this size: half the side, and again
             from stratastills import gpu
             if not gpu.is_oom(e) or tile <= 256: raise
-            gpu.free(); tile //= 2
+            try: gpu.free()
+            except RuntimeError: pass                                                                      # no device to free (the model ran on the CPU)
+            tile //= 2
     return np.clip(out / np.maximum(wsum, 1e-6), 0, 1)
 
 
