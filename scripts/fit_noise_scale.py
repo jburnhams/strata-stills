@@ -6,12 +6,17 @@ sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(o
 import compare_detail as CD
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('candidates'); ap.add_argument('--ext', default='.ARW'); ap.add_argument('--scales', type=float, nargs='+', default=[1, 2, 4, 8, 16, 32]); ap.add_argument('--target', type=float, default=1.0); ap.add_argument('--bundle'); ap.add_argument('--size', type=int, default=3000); ap.add_argument('--bands', nargs='*', default=['0-100000']); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument('folder'); ap.add_argument('candidates'); ap.add_argument('--ext', default='.ARW'); ap.add_argument('--scales', type=float, nargs='+', default=[1, 2, 4, 8, 16, 32]); ap.add_argument('--target', type=float, default=1.0); ap.add_argument('--bundle'); ap.add_argument('--size', type=int, default=3000); ap.add_argument('--bands', nargs='*', default=['0-100000']); ap.add_argument('--per-band', type=int, default=0, help='use at most this many pictures per ISO band, evenly spread (0: all); a fit over a big set takes hours'); a = ap.parse_args()
     tmp = tempfile.mkdtemp(); os.environ['STRATASTILLS_PROJECTS'] = os.path.join(tmp, 'projects'); os.environ['STRATASTILLS_HOME'] = os.path.join(tmp, 'home')
     from stratastills import projects as P, pipeline as PL, inputs
     pid = P.create('fit', [os.path.abspath(a.folder)])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path']); items = {i['stem']: i for i in P.source_items(pid, sid)}; sel = [c['stem'] for c in json.load(open(a.candidates)) if c['stem'] in items]
     ref = {s: CD.load(next(iter(glob.glob(os.path.join(a.folder, s + '.[jJ][pP][gG]')))), a.size) for s in sel}; masks = {s: CD.masks(ref[s]) for s in sel}; cam = {s: CD.measure(ref[s], *masks[s])['noise'] for s in sel}
     name = None; res = {}; isos = {s: inputs._iso(os.path.join(a.folder, s + a.ext)) or 0 for s in sel}; bands = [tuple(int(x) for x in b.split('-')) for b in a.bands]; band_of = {s: next((i for i, (lo, hi) in enumerate(bands) if lo <= isos[s] <= hi), None) for s in sel}
+    if a.per_band:
+        keep = set()
+        for bi in set(band_of.values()) - {None}:
+            m = [s for s in sel if band_of[s] == bi]; keep |= set(m[int(i * len(m) / a.per_band)] for i in range(min(a.per_band, len(m))))
+        sel = [s for s in sel if s in keep or band_of[s] is None]
     for idx, k in enumerate(a.scales):
         ratios = collections.defaultdict(list)
         for s in sel:
@@ -27,8 +32,9 @@ if __name__ == '__main__':
         print('scale %5.1f: ' % k + '  '.join('ISO %d-%d: %.2f (%d)' % (*bands[bi], res[bi][-1][1], res[bi][-1][2]) for bi in sorted(res)) + '   [our flat-area noise / that of the camera JPEG, median (pictures)]', flush=True)
     table = []
     for bi in sorted(res):
+        if res[bi][0][2] < 3: print('ISO %d-%d: %d picture(s), too few: left out' % (*bands[bi], res[bi][0][2])); continue
         ks = np.array([r[0] for r in res[bi]]); rs = np.array([r[1] for r in res[bi]]); b, a0 = np.polyfit(np.log(ks), np.log(rs), 1)                                   # the ratio falls with the scale as a power law: a line through all the points in log-log (single pictures are noisy, the line is not)
-        best = float(np.clip(np.exp((np.log(a.target) - a0) / b), ks.min() / 4, ks.max() * 4)) if b < -0.02 else float(ks[np.argmin(np.abs(rs - a.target))])
+        best = float(np.clip(np.exp((np.log(a.target) - a0) / b), ks.min(), ks.max()))                                                                          # never beyond the scales tried: a ratio that flattens out (a floor the profile does not set) would be extrapolated to absurd values if b < -0.02 else float(ks[np.argmin(np.abs(rs - a.target))])
         iso = float(np.exp(np.mean(np.log([max(isos[s], 50) for s in sel if band_of[s] == bi])))); table.append([round(iso), round(best, 1)]); print('ISO %d-%d (geometric mean %d, %d pictures): scale %.1f for a ratio of %.2f' % (*bands[bi], iso, len(res[bi]) and res[bi][0][2], best, a.target))
     best = table if len(table) > 1 else table[0][1]
     if a.bundle and name:

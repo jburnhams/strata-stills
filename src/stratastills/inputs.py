@@ -10,6 +10,7 @@ import numpy as np
 PROFILES = {
     ('dji', 'fc8482'): dict(label='DJI Mini 4 Pro', bundle='dji_fc8482_profile.json'),                                          # taken from its raw DNGs
     ('sony', 'ilce-7c'): dict(label='Sony A7C', bundle='sony_ilce7c_profile.json'),                                             # RawTherapee's public-domain DCP (Adobe DNG Converter) + darktable's noise fits: scripts/build_profile_bundle.py
+    ('sony', 'nex-5n'): dict(label='Sony NEX-5N', bundle='sony_nex5n_profile.json'),
 }
 _cache = {}
 

@@ -101,3 +101,9 @@ def test_noise_scale_can_be_a_table_over_the_iso():
     assert inputs.noise_scale(8.0, 400) == 8.0 and inputs.noise_scale(None, 400) is None
     t = [[100, 4.0], [400, 16.0], [1600, 64.0]]
     assert inputs.noise_scale(t, 100) == pytest.approx(4.0) and inputs.noise_scale(t, 200) == pytest.approx(8.0) and inputs.noise_scale(t, 6400) == pytest.approx(64.0) and inputs.noise_scale(t, 50) == pytest.approx(4.0) and inputs.noise_scale(t, None) == pytest.approx(16.0)
+
+
+def test_the_nex5n_profile_carries_what_add_device_fits():
+    p = inputs.profile('SONY', 'NEX-5N'); b = inputs._bundle(p['bundle'])
+    assert p['label'] == 'Sony NEX-5N' and {'ColorMatrix1', 'NoiseTable', 'ProfileToneCurve', 'LookTable', 'NoiseScale'} <= set(b)
+    assert all(1 <= s <= 32 for _, s in b['NoiseScale'])                                                                                      # inside the scales the fit tried
