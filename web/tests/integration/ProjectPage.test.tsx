@@ -27,7 +27,7 @@ describe('ProjectPage', () => {
   it('adds a source folder', async () => {
     let requestMade = false
     server.use(http.post('/api/project/sources', async ({ request }) => {
-        const body = await request.json()
+        const body = await request.json() as any
         if (body.path === 'new_folder') { requestMade = true }
         return HttpResponse.json([{ id: 'y', path: 'new_folder', reachable: true, stills: 1, panos: 0, videos: 0 }])
     }))
