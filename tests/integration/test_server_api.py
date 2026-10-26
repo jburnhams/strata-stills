@@ -36,3 +36,65 @@ def test_a_rule_makes_every_picture_of_the_source(client, project):
     assert client.put('/api/project/rules', params=dict(id=pid), json=dict(rules=[dict(source=sid, pipeline='web')])).json()['pending'] == 3
     assert client.post('/api/project/apply', params=dict(id=pid)).json()['state'] in ('running', 'done'); j = wait(client, '/api/project/apply', id=pid)
     assert j['state'] == 'done' and j['done'] == 3 and j['failed'] == [] and client.get('/api/project/rules', params=dict(id=pid)).json()['pending'] == 0
+
+
+def test_server_api_errors_and_settings(client, project):
+    pid, sid = project
+    # Test PUT /api/settings with relative path
+    assert client.put('/api/settings', json={'projects_dir': 'relative'}).status_code == 400
+
+    # Test GET /api/project/detail with non-existent variant
+    items = client.get('/api/project/items', params=dict(id=pid, source=sid)).json()
+    item_id = items[0]['id']
+    assert client.get('/api/project/detail', params=dict(id=pid, item=item_id, variant='fake')).status_code == 400
+
+    # Test GET /api/project/generated/file with missing variant
+    assert client.get('/api/project/generated/file', params=dict(id=pid, item=item_id, variant='gen-fake')).status_code == 404
+
+    # Test PUT /api/project/primary with missing variant
+    assert client.put('/api/project/primary', params=dict(id=pid, item=item_id), json={'variant': 'fake'}).status_code == 400
+
+def test_server_api_job_conflicts_and_cancel(client, project):
+    pid, sid = project
+    items = client.get('/api/project/items', params=dict(id=pid, source=sid)).json()
+    iid = items[0]['id']
+    q = dict(id=pid, item=iid)
+    body = dict(options=dict(size='native', sharpen=False, quality=88))
+
+    # Start generation
+    j = client.post('/api/project/generate', params=q, json=body).json()
+    assert j['state'] in ('running', 'done')
+
+    # Try again while running, if not finished yet, will get 409
+    try:
+        if j['state'] == 'running':
+            res = client.post('/api/project/generate', params=q, json=body)
+            assert res.status_code == 409
+    finally:
+        wait(client, '/api/project/generate', **q)
+
+    # Start apply rules
+    client.put('/api/project/rules', params=dict(id=pid), json=dict(rules=[dict(source=sid, pipeline='web')]))
+    j2 = client.post('/api/project/apply', params=dict(id=pid)).json()
+
+    if j2['state'] == 'running':
+        # Post apply rules while running -> 409
+        res = client.post('/api/project/apply', params=dict(id=pid))
+        assert res.status_code == 409
+
+    # Stop apply
+    stop_res = client.delete('/api/project/apply', params=dict(id=pid)).json()
+    assert stop_res['stop'] is True or stop_res['state'] == 'idle'
+    wait(client, '/api/project/apply', id=pid)
+
+def test_server_api_pipelines(client):
+    presets = client.get('/api/pipelines').json()
+    initial_count = len(presets)
+
+    # Create custom pipeline
+    res = client.put('/api/pipeline', params=dict(name='my_custom'), json={'label': 'My Custom', 'stages': [{'stage': 'develop'}, {'stage': 'encode'}]})
+    assert len(res.json()) == initial_count + 1
+
+    # Delete custom pipeline
+    res = client.delete('/api/pipeline', params=dict(name='my_custom'))
+    assert len(res.json()) == initial_count
