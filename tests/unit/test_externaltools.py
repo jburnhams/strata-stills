@@ -1,5 +1,7 @@
 """externaltools.py: finding darktable and RawTherapee (on the PATH, then where installers put them) and RawTherapee's profile folder."""
-import os, pytest
+import os, sys
+
+import pytest
 
 from stratastills import externaltools as E
 
@@ -33,5 +35,5 @@ def test_missing_lists_what_is_not_installed_and_a_missing_profile_folder(monkey
 def test_require_stops_with_what_to_install(monkeypatch):
     monkeypatch.setattr(E, 'missing', lambda: ['darktable'])
     with pytest.raises(SystemExit) as e: E.require()
-    assert 'missing: darktable' in str(e.value) and 'pacman' in str(e.value)
+    assert 'missing: darktable' in str(e.value) and E.HINT.get(sys.platform if sys.platform in E.HINT else 'linux') in str(e.value)        # the install hint of this platform (pacman, brew or winget)
     monkeypatch.setattr(E, 'missing', lambda: []); E.require()
