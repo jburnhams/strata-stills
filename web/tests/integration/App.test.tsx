@@ -26,4 +26,24 @@ describe('App navigation', () => {
     // Item page
     expect(await screen.findByText('★ primary')).toBeInTheDocument()
   })
+
+  it('links to the visual report only when the server has one', async () => {
+    open('#/')
+    await screen.findByText('Demo')
+    expect(screen.queryByRole('link', { name: 'Visual report' })).toBeNull()
+  })
+
+  it('shows the visual report link when there is a report', async () => {
+    server.use(http.get('/api/report', () => HttpResponse.json({ available: true, built: 1 })))
+    open('#/')
+    const link = await screen.findByRole('link', { name: 'Visual report' })
+    expect(link.getAttribute('href')).toContain('report/')
+  })
+
+  it('shows no report link when the report request fails', async () => {
+    server.use(http.get('/api/report', () => new HttpResponse(null, { status: 500 })))
+    open('#/')
+    await screen.findByText('Demo')
+    expect(screen.queryByRole('link', { name: 'Visual report' })).toBeNull()
+  })
 })

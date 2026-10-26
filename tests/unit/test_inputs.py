@@ -109,6 +109,12 @@ def test_the_nex5n_profile_carries_what_add_device_fits():
     assert all(1 <= s <= 32 for _, s in b['NoiseScale'])                                                                                      # inside the scales the fit tried
 
 
+def test_the_eos60d_and_ilce5100_profiles():
+    b = inputs._bundle(inputs.profile('Canon', 'Canon EOS 60D')['bundle'] if inputs.profile('Canon', 'Canon EOS 60D') else inputs.profile('Canon', 'EOS 60D')['bundle'])
+    assert {'ColorMatrix1', 'NoiseTable', 'ProfileToneCurve', 'LookTable', 'NoiseScale'} <= set(b)
+    b = inputs._bundle(inputs.profile('SONY', 'ILCE-5100')['bundle']); assert {'ColorMatrix1', 'NoiseTable'} <= set(b)                       # only 4 raws of it exist: matrices and noise table, no fitted tone or look
+
+
 def test_the_other_raw_programs_are_found_or_named_as_missing(monkeypatch, tmp_path):
     import pytest
     from stratastills import externaltools as ET
