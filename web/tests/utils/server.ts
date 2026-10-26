@@ -13,6 +13,7 @@ export const items: Item[] = [
 
 // Every endpoint the app calls has a handler here; one without a handler fails the test (setup.ts: onUnhandledFrame 'error').
 export const handlers = [
+  http.get('/api/report', () => HttpResponse.json({ available: false, built: null })),
   http.get('/api/settings', () => HttpResponse.json({ projects_dir: 'C:\\projects' })),
   http.get('/api/projects', () => HttpResponse.json([project])),
   http.post('/api/projects', async ({ request }) => { const b = await request.json() as { name: string }; return HttpResponse.json({ ...project, id: b.name.toLowerCase(), name: b.name }) }),

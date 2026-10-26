@@ -50,4 +50,10 @@ def source_roots():
     return [os.path.normpath(os.path.expanduser(x)) for x in r if isinstance(x, str) and x.strip()]
 
 
+def report_dir():
+    """Where scripts/build_report.py writes the visual report (`out/report` of the repository), which the server shows at /report/: the STRATASTILLS_REPORT environment variable or `report_dir` of the settings file move it."""
+    p = os.environ.get('STRATASTILLS_REPORT') or load().get('report_dir') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'out', 'report')
+    return os.path.abspath(os.path.expanduser(p))
+
+
 def all_settings(): return dict(projects_dir=projects_dir(), source_roots=source_roots())

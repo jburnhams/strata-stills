@@ -2,13 +2,13 @@
 
     ./stratastills serve [--host 127.0.0.1] [--port 8361]
 
-API (JSON): GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
+API (JSON): GET /api/report (is there a visual report) and GET /report/ (the report's own pages, from settings.report_dir()); GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
 GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 import os, threading
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -66,6 +66,22 @@ def create_app():
     def index():
         built = os.path.join(STATIC, 'index.html')          # the React app when it has been built (cd web; npm run build), else the plain stand-in page
         return open(built if os.path.exists(built) else LANDING, encoding='utf8').read()
+
+    @app.get('/api/report')
+    def report_info():
+        f = os.path.join(settings.report_dir(), 'index.html')                  # the visual report (scripts/build_report.py): static files, looked up per request so one built after the server started shows up
+        return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None)
+
+    @app.get('/report')
+    def report_slash(): return RedirectResponse('/report/')
+
+    @app.get('/report/{path:path}')
+    def report_file(path: str = ''):
+        root = os.path.realpath(settings.report_dir()); f = os.path.realpath(os.path.join(root, path or 'index.html'))
+        if os.path.isdir(f): f = os.path.join(f, 'index.html')
+        if os.path.commonpath([root, f]) != root or not os.path.isfile(f):
+            raise HTTPException(404, 'no report here: build it with scripts/build_report.py (see the README), or set STRATASTILLS_REPORT to its folder')
+        return FileResponse(f, headers={'Cache-Control': 'no-cache'})
 
     @app.get('/api/settings')
     def get_settings(): return settings.all_settings()

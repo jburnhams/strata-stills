@@ -22,4 +22,4 @@ out/
 projects/
 
 # real photos for working on the candidate sets (scripts/copy_candidates.py): never committed
-/candidates/
+/candidates

@@ -10,6 +10,10 @@ py -3.13 -m venv .venv && .venv\Scripts\pip install -r requirements.txt   # once
 ./stratastills scan "\\Server\Drone\20250402 - Hazelmere" --info            # the shots in a folder: raw/JPEG pairs, panoramas, videos, gimbal pitch
 ```
 
+## The visual report in the browser
+
+`./stratastills serve --host 0.0.0.0` (the default 127.0.0.1 is this machine only) serves the app on port 8361 and, once `scripts/build_report.py` has written `out/report/`, the report at `/report/` (a "Visual report" link shows in the app's header; `STRATASTILLS_REPORT` or `report_dir` in the settings file point it elsewhere). From another machine open `http://<this machine>:8361/report/`. The server has no login: use it on a trusted network only.
+
 ## Speed
 
 A 48 MP raw is developed, levelled, resized, sharpened and written in about 15 s on an NVIDIA RTX 3060 (about 95 s on the CPU). The pixel work runs on the GPU when there is one: NVIDIA CUDA or Apple silicon (MPS); with neither it runs on the CPU, with the same result (the CPU code is the reference the GPU code is tested against). Install PyTorch for your machine (`pip install torch`; on Windows or Linux with an NVIDIA card use `--index-url https://download.pytorch.org/whl/cu128`). `./stratastills doctor` shows which is in use.

@@ -47,3 +47,11 @@ def test_sources_items_primary_and_image(client, tmp_path):
 def test_settings_roundtrip(client, tmp_path):
     assert client.put('/api/settings', json=dict(projects_dir='relative')).status_code == 400
     assert client.get('/api/settings').json()['projects_dir'] == str(tmp_path / 'projects')
+
+
+def test_the_visual_report_is_served_from_its_folder(client, tmp_path, monkeypatch):
+    rep = tmp_path / 'rep'; (rep / 'assets').mkdir(parents=True); (rep / 'index.html').write_text('<h1>report</h1>'); (rep / 'assets' / 'a.jpg').write_bytes(b'jpg'); (tmp_path / 'secret.txt').write_text('no')
+    monkeypatch.setenv('STRATASTILLS_REPORT', str(tmp_path / 'none')); assert client.get('/api/report').json() == dict(available=False, built=None) and client.get('/report/').status_code == 404
+    monkeypatch.setenv('STRATASTILLS_REPORT', str(rep)); assert client.get('/api/report').json()['available'] is True
+    assert client.get('/report/').text == '<h1>report</h1>' and client.get('/report/assets/a.jpg').content == b'jpg' and client.get('/report', follow_redirects=False).status_code in (302, 307)
+    assert client.get('/report/../secret.txt').status_code == 404 and client.get('/report/%2e%2e/secret.txt').status_code == 404
