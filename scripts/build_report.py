@@ -189,7 +189,7 @@ table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-ali
 
 def build(a):
     ET.require()                                                                                  # no report without the other raw programs: a report that quietly shows only the camera and ours is worse than none
-    out = os.path.abspath(a.out); assets = os.path.join(out, 'assets'); shutil.rmtree(out, ignore_errors=True); os.makedirs(assets); say = lambda m: print(m, flush=True)
+    final = os.path.abspath(a.out); out = final + '.building'; assets = os.path.join(out, 'assets'); shutil.rmtree(out, ignore_errors=True); os.makedirs(assets); say = lambda m: print(m, flush=True)     # built beside and swapped in at the end: the server keeps showing the last report meanwhile
     work = tempfile.mkdtemp(prefix='report-', dir=os.path.dirname(out)); sections = []; legend = {}; nav = []; total_pics = 0; perf = []
     try:
         for setname in a.set:
@@ -252,7 +252,7 @@ def build(a):
 <label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{''.join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{perf_html(perf)}{''.join(sections)}</main><script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');t.previousElementSibling.querySelector('.ovimg').src=b.dataset.src}});const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f()</script>"""
     open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(page)
     size = sum(os.path.getsize(os.path.join(assets, f)) for f in os.listdir(assets)) + os.path.getsize(os.path.join(out, 'index.html'))
-    say(f'report: {os.path.join(out, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
+    shutil.rmtree(final, ignore_errors=True); os.rename(out, final); say(f'report: {os.path.join(final, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
 
 
 def timing_html(timing, ext):
