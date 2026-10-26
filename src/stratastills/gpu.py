@@ -24,7 +24,7 @@ def torch_():
 
 
 def _cudnn_probe(torch):
-    """Where cuDNN has no engine for a plain convolution (found on a Pascal card, GTX 1050, with the cuDNN 9.10 that ships with torch 2.9 cu126: even a 1x9 float32 kernel fails), turn cuDNN off for the process: PyTorch's own kernels do the same convolutions with the same result, and every pixel and model step here is a convolution."""
+    """Where cuDNN has no engine for a plain convolution, turn cuDNN off for the process: PyTorch's own kernels do the same convolutions (3 to 4 times slower, with a buffer of kernel-size times the input: `conv` works in strips for that), where cuDNN would fail the first one it is asked for. Seen on a GTX 1050 (Pascal) with the cuDNN 9.24 of CUDA 13 sitting in the folder of torch 2.9 cu126's own cuDNN 9.10 (pip puts both packages in nvidia/cudnn/): even a 1x9 float32 kernel failed. With the right cuDNN (scripts/setup_torch.py repairs that) Pascal works. `stratastills doctor` says when this switch had to be thrown."""
     if not torch.cuda.is_available() or not torch.backends.cudnn.enabled: return
     try:
         for dt in (torch.float32, torch.float16): torch.nn.functional.conv2d(torch.zeros(1, 1, 16, 16, device='cuda', dtype=dt), torch.ones(1, 1, 1, 9, device='cuda', dtype=dt))

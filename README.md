@@ -16,7 +16,7 @@ py -3.13 -m venv .venv && .venv\Scripts\pip install -r requirements.txt   # once
 
 ## Speed
 
-A 48 MP raw is developed, levelled, resized, sharpened and written in about 15 s on an NVIDIA RTX 3060 (about 95 s on the CPU). The pixel work runs on the GPU when there is one: NVIDIA CUDA or Apple silicon (MPS); with neither it runs on the CPU, with the same result (the CPU code is the reference the GPU code is tested against). Install PyTorch for your machine (`pip install torch`; on Windows or Linux with an NVIDIA card use `--index-url https://download.pytorch.org/whl/cu128`). `./stratastills doctor` shows which is in use.
+A 48 MP raw is developed, levelled, resized, sharpened and written in about 15 s on an NVIDIA RTX 3060 (about 95 s on the CPU). The pixel work runs on the GPU when there is one: NVIDIA CUDA or Apple silicon (MPS); with neither it runs on the CPU, with the same result (the CPU code is the reference the GPU code is tested against). Install PyTorch with `python scripts/setup_torch.py` (it looks at the NVIDIA card, installs the newest torch the card can run - an older card such as a GTX 10xx needs torch 2.9 with CUDA 12.6, an RTX 50 needs CUDA 12.8 - repairs a clashing cuDNN and checks that it works; `setup_env` runs it). `./stratastills doctor` shows which is in use.
 
 ## Documentation
 
