@@ -60,10 +60,10 @@ def test_add_and_remove_sources_errors(tmp_path, monkeypatch):
 
 def test_resolve_unc_paths(monkeypatch):
     # Mock settings.source_roots to return a specific root
-    monkeypatch.setattr(settings, 'source_roots', lambda: ['/home/foo/raw'])
+    monkeypatch.setattr(settings, 'source_roots', lambda: [os.path.normcase(os.path.normpath('/home/foo/raw'))])
 
     # Simulate a path that was stored relative to the root on Linux
-    assert projects._rel_of('/home/foo/raw/shoot') == 'shoot'
+    assert projects._rel_of(os.path.join('/home/foo/raw', 'shoot')) == 'shoot'
 
     # Simulate a UNC path that represents the root itself
     assert projects._rel_of('\\\\Server\\raw') is None
@@ -72,8 +72,9 @@ def test_resolve_unc_paths(monkeypatch):
     assert projects._rel_of('\\\\Server\\raw\\shoot') == 'shoot'
 
     # Ensure resolve works with both
-    monkeypatch.setattr(os.path, 'isdir', lambda p: True if p == '/home/foo/raw/shoot' else os.path.isdir(p))
-    assert projects.resolve({'path': '\\\\Server\\raw\\shoot', 'rel': 'shoot'}) == '/home/foo/raw/shoot'
+    orig_isdir = os.path.isdir
+    monkeypatch.setattr(os.path, 'isdir', lambda p: True if p == os.path.join('/home/foo/raw', 'shoot') else orig_isdir(p))
+    assert projects.resolve({'path': '\\\\Server\\raw\\shoot', 'rel': 'shoot'}) == os.path.join('/home/foo/raw', 'shoot')
     assert projects.resolve({'path': '/unknown/path'}) == '/unknown/path'
 
 def test_shots_ignores_offline_drives(tmp_path, monkeypatch):
