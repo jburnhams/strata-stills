@@ -225,3 +225,11 @@ def test_a_dng_with_an_orientation_is_turned_upright_and_its_opcodes_are_turned_
     assert D.gain_map(body)[0][:, :, 0].shape == (3, 4) and D.gain_map(body, 6)[0][:, :, 0].shape == (4, 3) and np.array_equal(D.gain_map(body, 6)[0][:, :, 0], np.rot90(m.astype(np.float32), -1)) and np.array_equal(D.gain_map(body, 3)[0][:, :, 0], np.rot90(m.astype(np.float32), 2))
     wp = struct.pack('>I', 1) + struct.pack('>6d', 1, 0, 0, 0, 0, 0) + struct.pack('>2d', 0.25, 0.4)
     assert D.warp_params(wp)[1] == (0.25, 0.4) and np.allclose(D.warp_params(wp, 6)[1], (0.6, 0.25)) and np.allclose(D.warp_params(wp, 5)[1], (0.4, 0.75)) and np.allclose(D.warp_params(wp, 3)[1], (0.75, 0.6))
+
+
+def test_match_from_decode_uses_the_card_and_gives_no_tone_without_a_preview(monkeypatch):
+    pytest.importorskip('torch'); from stratastills import gpu, tonematch
+    if not gpu.available(): pytest.skip('needs a device (a card, or the torch CPU device forced)')
+    monkeypatch.setattr(D, 'read_dng_tags', lambda path, lens: {}); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None)
+    u16 = (np.random.default_rng(0).random((64, 48, 3)) * 65535).astype(np.uint16); an = {}
+    assert D._match_from_decode('x.dng', u16, 'auto', an) is None and an['tone'] is None
