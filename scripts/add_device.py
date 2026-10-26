@@ -31,7 +31,10 @@ def step_bundle(a, path):
     if a.noise: b['NoiseTable'] = B.noise_table(a.noise, a.model)
     else: print('no --noise given: the noise profile stays the generic one')
     json.dump(b, open(path, 'w'), separators=(',', ':')); print('wrote', path)
-    code = os.path.join(SRC, 'inputs.py'); s = open(code).read(); key = f"('{a.make.lower()}', '{a.model.lower()}')"
+    sys.path.insert(0, os.path.join(SRC, '..')); from stratastills import develop, inputs
+    t = develop.read_dng_tags(sorted(glob.glob(os.path.join(a.folder, '*' + a.ext)))[0]); mk, md = inputs._text(t.get('Make')), inputs._text(t.get('Model'))            # the lookup key is what the pipeline reads from the file (Canon says 'Canon EOS 60D', not 'EOS 60D')
+    if (mk, md) != (a.make.lower(), a.model.lower()): print(f'note: the files say make {mk!r}, model {md!r}: the PROFILES key uses those')
+    code = os.path.join(SRC, 'inputs.py'); s = open(code).read(); key = f"('{mk}', '{md}')"
     if key not in s:
         line = f"    {key}: dict(label={a.label!r}, bundle={os.path.basename(path)!r}),\n"; s = s.replace('\n}\n_cache', '\n' + line.rstrip('\n') + '\n}\n_cache', 1); open(code, 'w').write(s); print('added to inputs.PROFILES:', key)
 
