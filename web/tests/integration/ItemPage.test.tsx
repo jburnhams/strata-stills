@@ -36,6 +36,8 @@ describe('ItemPage', () => {
   })
 
   it('navigates with keyboard arrows', async () => {
+    // Start on A_2
+    window.location.hash = '#/p/demo/i/abcd1234~A_2'
     render(<ItemPage project="demo" source="abcd1234" item="abcd1234~A_2" />)
     await screen.findByText('abcd1234~A_2')
     const originalHash = window.location.hash
