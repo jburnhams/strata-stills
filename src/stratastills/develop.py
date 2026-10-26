@@ -550,11 +550,32 @@ def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=
     u16 = _raw_u16(path, half); limit = 1 if smaller else gpu.max_pixels()                                                    # smaller: after an out-of-memory, always in tiles, of half the planned side
     with gpu.slot():
         if limit and u16.shape[0] * u16.shape[1] > limit:
-            if tone == 'match': tone = _match_on_cpu(path, ev, recover, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover        # a picture too big for the card is developed in tiles: its curve the slow way
+            if tone == 'match': tone = _match_from_decode(path, u16, lens, analysis); ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover        # a picture too big for the card is developed in tiles: its curve from a half-size copy of the decode, on the card
             try: return gpu_tiled.develop_tiled(path, u16, ev, 'auto' if denoise == 'classical' else denoise, recover, highlight_contrast, analysis, tone=tone, lens=lens, tile=max(256, gpu.tile_size() // 2) if smaller else None)
             except gpu_tiled.Unsupported:
                 k = ((gpu.max_pixels() or u16.shape[0] * u16.shape[1] // 2) / (u16.shape[0] * u16.shape[1])) ** 0.5; u16 = cv2.resize(u16, (int(u16.shape[1] * k) // 2 * 2, int(u16.shape[0] * k) // 2 * 2), interpolation=cv2.INTER_AREA)
         return _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis, tone, lens)
+
+
+def _match_from_decode(path, u16, lens, analysis):
+    """The matched tone for a picture too big to hold on the card: the decode shrunk to half size (area average, on the CPU: it is a quarter of the pixels), then the same steps as the whole-picture route on the card (lens opcodes, camera colour), then _match_on_device. Instead of a second development on the CPU (7 s on a 48 MP raw)."""
+    tags = read_dng_tags(path, lens); small = cv2.resize(u16, (u16.shape[1] // 4 * 2, u16.shape[0] // 4 * 2), interpolation=cv2.INTER_AREA); img = _opcodes_gpu(gpu.to_gpu_u16(small), tags)[0]; img = gpu_colour(img, tags)
+    be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
+    tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be); del img; gpu.free()
+    if analysis is not None: analysis['tone'] = tone
+    return tone
+
+
+def _opcodes_gpu(img, tags):
+    """(img, gain field or None) after the lens-shading gain map and the rectilinear warp of the file's opcodes."""
+    field = None
+    if 'OpcodeList3' in tags:
+        for oid, p in parse_opcodes(tags['OpcodeList3']):
+            if oid == 9:
+                m, plane, planes, _box, _sp, _org = gain_map(p, tags.get('Flip', 0)); img, field = gpu.apply_gain_map(img, m, plane, planes)
+            elif oid == 1:
+                coef, centre = warp_params(p, tags.get('Flip', 0)); img = gpu.warp_rectilinear(img, coef, centre)
+    return img, field
 
 
 def _match_on_device(path, img):
@@ -594,16 +615,10 @@ def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=N
 
 def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_contrast, analysis=None, tone=None, lens='auto'):
     """`develop` on the GPU: the same recipe step for step (see gpu.py for the functions and tests/unit/test_gpu.py for the proof they agree with the CPU ones); the picture stays on the card until the finished float32 array comes back."""
-    t = gpu.torch_(); tags = read_dng_tags(path, lens); img = gpu.to_gpu_u16(u16); field = None
+    t = gpu.torch_(); tags = read_dng_tags(path, lens); img = gpu.to_gpu_u16(u16)
     if analysis is not None:                                                                                      # analysis_luma from this decode: nothing done that changes sharpness, exposed so the median is 0.18, gamma-encoded
         y = gpu.luma(img); med = max(gpu._median(y[::8, ::8]), 1e-5); analysis['luma'] = gpu.to_numpy(gpu.srgb_oetf(y * (0.18 / med))); del y
-    if 'OpcodeList3' in tags:
-        for oid, p in parse_opcodes(tags['OpcodeList3']):
-            if oid == 9:
-                m, plane, planes, _box, _sp, _org = gain_map(p, tags.get('Flip', 0)); img, field = gpu.apply_gain_map(img, m, plane, planes)
-            elif oid == 1:
-                coef, centre = warp_params(p, tags.get('Flip', 0)); img = gpu.warp_rectilinear(img, coef, centre)
-    img = gpu_colour(img, tags)
+    img, field = _opcodes_gpu(img, tags); img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     if tone == 'match':                                                                                                     # the tone of the camera's own JPEG, found from this very picture: shrunk on the card, fitted on the CPU (a few ms), no second development
         tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be)
