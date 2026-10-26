@@ -5,7 +5,7 @@ functions on the torch CPU device (`use('cpu')`), so a machine with no GPU still
 Conventions: a picture is a float32 tensor (3, H, W) on the device (channels first, so a filter is a convolution over planes), one plane is (H, W); values as in the CPU code. Borders reflect without repeating the edge pixel (OpenCV's default, torch 'reflect').
 Memory: a 48 MP plane is 193 MB and a picture 580 MB; the functions keep a handful alive at a time and the long per-pixel table lookups are chunked, so the whole development stays under about 6 GB (a 12 GB card, or an M4's unified memory, is plenty).
 Operations a backend lacks are probed once (`cubic_ok`) and have a fallback, so Apple's Metal backend, which has had gaps in torch, degrades to slower rather than failing. Only float32 is used (MPS has no float64)."""
-import contextlib, math, os, threading
+import contextlib, math, os, sys, threading
 
 import numpy as np
 
@@ -57,6 +57,16 @@ def dev():
         except Exception: _device = False
     if _device is False: raise RuntimeError('no GPU device')
     return _device
+
+
+def allocations():
+    """How many buffers have been allocated on the card so far (CUDA; 0 before it is used), for telling whether a stretch of work used the GPU: the number goes up when it did. None where the backend cannot say (MPS)."""
+    t = sys.modules.get('torch')
+    if t is None: return 0
+    try:
+        if _device is not False and _device is not None and _device.type == 'mps': return None
+        return int(t.cuda.memory_stats().get('allocation.all.allocated', 0)) if t.cuda.is_available() and t.cuda.is_initialized() else 0
+    except Exception: return None
 
 
 def available():

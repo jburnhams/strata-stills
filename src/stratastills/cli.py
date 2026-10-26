@@ -26,6 +26,8 @@ def doctor(args):
     except ImportError: have_net = False
     if denoise_ai.available() and have_net: print('  ok       learned denoise (Real-ESRGAN weights, spandrel)')
     else: print(f'  missing  learned denoise ({"weights" if have_net else "spandrel"}): high-ISO pictures get the classical clean-up only; scripts/setup_env installs it, or pip install spandrel==0.4.2 einops && python -c "from stratastills import denoise_ai; denoise_ai.fetch()"')
+    from stratastills import externaltools
+    gone = externaltools.missing(); print('  ok       darktable and RawTherapee (for the comparison report and scripts/render_external.py)' if not gone else f'  missing  {", ".join(gone)}: needed for the comparison report and scripts/render_external.py (they stop without them); {externaltools.HINT.get(sys.platform if sys.platform in externaltools.HINT else "linux")}')
     return 0 if ok else 1
 
 

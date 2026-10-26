@@ -5,7 +5,8 @@ How the crops are chosen: every program's picture is brought to the size of ours
 import argparse, collections, glob, html, json, os, shutil, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import compare_detail as CD
+import compare_detail as CD, render_external as RE
+from stratastills import externaltools as ET
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 RAW_EXTS = ('.arw', '.cr2', '.cr3', '.nef', '.dng', '.rw2', '.orf', '.raf', '.pef', '.srw')
@@ -180,15 +181,16 @@ def metric_table(ims, names):
     return f'<table class=t><tr><th></th>{head}</tr>{body}</table>'
 
 
-CSS = """.sw{display:block;margin:8px 0}body.pubonly .pic:not(.pub),body.pubonly nav a:not(.pub){display:none}body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#16181c;color:#d8dbe0}header{padding:18px 28px;background:#0e0f12}h1{margin:0 0 4px;font-size:22px}h2{font-size:18px;margin:34px 0 4px}h3{font-size:15px;margin:22px 0 6px}main{max-width:1500px;margin:0 auto;padding:0 28px 60px}a{color:#8ab4ff}nav a{margin-right:12px}
+CSS = """.tabs{margin:6px 0}.tabs button{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;margin-right:4px;cursor:pointer}.tabs button.on{background:#3b6fd8;border-color:#3b6fd8;color:#fff}.sw{display:block;margin:8px 0}body.pubonly .pic:not(.pub),body.pubonly nav a:not(.pub){display:none}body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#16181c;color:#d8dbe0}header{padding:18px 28px;background:#0e0f12}h1{margin:0 0 4px;font-size:22px}h2{font-size:18px;margin:34px 0 4px}h3{font-size:15px;margin:22px 0 6px}main{max-width:1500px;margin:0 auto;padding:0 28px 60px}a{color:#8ab4ff}nav a{margin-right:12px}
 .pic{border-top:1px solid #333;margin-top:30px}.why{color:#9aa}.ov{position:relative;display:inline-block;line-height:0}.ov img{max-width:100%;height:auto}.box{position:absolute;border:2px solid #ffd54a;box-shadow:0 0 0 1px #000;color:#ffd54a;font:bold 13px sans-serif;line-height:1}.box b{position:absolute;left:0;top:-16px;background:#000;padding:1px 4px}
 .crop{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin:10px 0}.sheet{display:grid;gap:4px}.sheet div{background-repeat:no-repeat;position:relative}.sheet span{position:absolute;left:0;top:0;right:0;background:#000b;color:#fff;font:12px sans-serif;padding:2px 6px}
 table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-align:left;border-bottom:1px solid #2a2d33}.t td{text-align:right;font-variant-numeric:tabular-nums}.m{color:#9aa;font-size:12px}details{margin:8px 0}summary{cursor:pointer;color:#8ab4ff}ul{margin:6px 0 6px 18px;padding:0}.note{max-width:1000px;color:#aab}"""
 
 
 def build(a):
+    ET.require()                                                                                  # no report without the other raw programs: a report that quietly shows only the camera and ours is worse than none
     out = os.path.abspath(a.out); assets = os.path.join(out, 'assets'); shutil.rmtree(out, ignore_errors=True); os.makedirs(assets); say = lambda m: print(m, flush=True)
-    work = tempfile.mkdtemp(prefix='report-', dir=os.path.dirname(out)); sections = []; legend = {}; nav = []; total_pics = 0
+    work = tempfile.mkdtemp(prefix='report-', dir=os.path.dirname(out)); sections = []; legend = {}; nav = []; total_pics = 0; perf = []
     try:
         for setname in a.set:
             cfg = SETS[setname]; folder = os.path.join(ROOT, 'candidates', setname); cj = os.path.join(ROOT, 'docs', f'{setname}_candidates.json')
@@ -200,6 +202,8 @@ def build(a):
             groups = choose(pool, shots, feats, lens_n, dev_n); stems = [s for ss in groups.values() for s in ss]
             if not a.public_only and not a.stems and not a.all:                                     # the public pictures cover every lens and device by themselves (so that the switch leaves a whole report), the rest of the pool adds its own picks
                 more = choose([s for s in pool if s in public], shots, feats, lens_n, dev_n); stems += [s for ss in more.values() for s in ss if s not in stems]; stems.sort(key=pool.index)
+            raws = {st: (files[st], shots[st][4] or 0) for st in stems}; RE.render_missing('darktable', setname, raws, say=say); RE.render_missing('rawtherapee', setname, raws, 'auto-matched', say=say)       # whatever of the other programs' renders is missing is made now (a failure stops the report)
+            ext_times = {'darktable': RE.timings(setname, 'darktable'), 'RawTherapee': RE.timings(setname, 'rawtherapee', 'auto-matched')}
             say(f'{cfg["label"]}: {len(stems)} pictures ({"; ".join(f"{g[1]}: {len(ss)}" for g, ss in groups.items())})')
             for stem, o in run_ours(folder, stems, a.quality, work, say):
                 fin = read(o['file'])
@@ -209,6 +213,7 @@ def build(a):
                 for d, nm in OTHERS:
                     im = read(os.path.join(ROOT, 'candidates', 'renders', cfg['prefix'] + d, stem + '.jpg'), size)
                     if im is not None: methods.append((nm, im))
+                    elif d in ('darktable', 'rawtherapee-auto-matched'): sys.exit(f'no {nm} render of {stem}')
                 k = 1500 / max(W, H); small = lambda im: cv2.resize(im, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA); gfin = cv2.cvtColor(small(fin), cv2.COLOR_BGR2GRAY).astype(np.float32); aligned = []
                 g8 = lambda im: cv2.cvtColor(small(im), cv2.COLOR_BGR2GRAY)
                 for nm, im in methods:                                                       # the other programs' framing differs from ours: one similarity transform for the whole picture, then a translation for each crop (below)
@@ -220,6 +225,8 @@ def build(a):
                 stage_ims = [(nm, np.load(o['stages'][s])[..., ::-1]) for s, nm in STAGE_NAMES[:-1] if s in o['stages']]
                 panels = [(nm, im) for nm, im in aligned] + [(STAGE_NAMES[-1][1], fin)] + stage_ims
                 ov = cv2.resize(fin, (OVERVIEW, round(OVERVIEW * H / W)), interpolation=cv2.INTER_AREA); cv2.imwrite(os.path.join(assets, f'{stem}-overview.jpg'), ov, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
+                tabs = [('Ours (final)', f'{stem}-overview.jpg')]                                         # the same overview of every program's final picture (registered to ours: the boxes fit all of them), to switch between
+                for i, (nm, im) in enumerate(aligned): fn = f'{stem}-overview-{i}.jpg'; cv2.imwrite(os.path.join(assets, fn), cv2.resize(im, (OVERVIEW, round(OVERVIEW * H / W)), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); tabs.insert(i, (nm, fn))
                 blocks = []
                 for n, (cx, cy, kind) in enumerate(sel, 1):
                     x0, y0 = int(round(cx / k)), int(round(cy / k)); x0 = min(max(0, x0), W - WIN[0]); y0 = min(max(0, y0), H - WIN[1]); tiles = []
@@ -235,27 +242,51 @@ def build(a):
                     blocks.append(dict(n=n, kind=kind, x=x0 / W, y=y0 / H, w=WIN[0] / W, h=WIN[1] / H, sheet=name, sheet_size=(cols * pw, rows * ph), names=[nm for nm, _ in panels], cols=cols, pw=pw, ph=ph))
                 metrics = metric_table([im for _, im in aligned] + [fin], [nm for nm, _ in aligned] + ['Ours (final)'])
                 legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm, _ in aligned}); total_pics += 1
-                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); sections.append(render_picture(cfg, stem, whys.get(stem, ''), W, H, o['rec'], blocks, metrics, kind, stem in public)); nav.append((stem, f'{sh[1]} {stem}', stem in public))
+                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); tm = o['rec'].get('timing', []); perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()})); sections.append(render_picture(cfg, stem, whys.get(stem, ''), W, H, o['rec'], blocks, metrics, kind, stem in public, timing_html(tm, perf[-1]['ext']), tabs)); nav.append((stem, f'{sh[1]} {stem}', stem in public))
                 for f in o['stages'].values(): os.remove(f)
     finally: shutil.rmtree(work, ignore_errors=True)
     if not sections: say('nothing to report on (no candidate photos)'); return 1
     leg = ''.join(f'<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>' for k, v in legend.items())
     page = f"""<!doctype html><meta charset=utf-8><title>stratastills: candidate photos compared</title><style>{CSS}</style><header><h1>Candidate photos: our pipeline against the camera and other raw tools</h1>
 <div class=note>Generated {time.strftime('%Y-%m-%d %H:%M')} by scripts/build_report.py. Each crop is a place where the programs disagree most, marked on the overview of the picture; the panels show the same place in every program and in ours at each stage. Crops are shown at {ZOOM}x of the final picture (the stages before the resize hold more pixels, so they look finer: the field of view is the same). Ours was made with the 'best' preset at JPEG quality {a.quality} (the quality of the comparison runs).</div>
-<label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{''.join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{''.join(sections)}</main><script>const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f()</script>"""
+<label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{''.join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{perf_html(perf)}{''.join(sections)}</main><script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');t.previousElementSibling.querySelector('.ovimg').src=b.dataset.src}});const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f()</script>"""
     open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(page)
     size = sum(os.path.getsize(os.path.join(assets, f)) for f in os.listdir(assets)) + os.path.getsize(os.path.join(out, 'index.html'))
     say(f'report: {os.path.join(out, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
 
 
-def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind, public=True):
+def timing_html(timing, ext):
+    """How long each program took on this picture on this machine, and which of our stages used the GPU."""
+    if not timing: return ''
+    tot = sum(t['seconds'] for t in timing); known = [t for t in timing if t['gpu'] is not None]; g = sum(1 for t in known if t['gpu'])
+    stages = ', '.join(f"{t['stage']} {t['seconds']:.1f} s {'GPU' if t['gpu'] else 'CPU' if t['gpu'] is False else '?'}" for t in timing)
+    others = ''.join(f"; {k} {v:.1f} s" for k, v in ext.items() if v is not None)
+    return f"<p class=m><b>Time on this machine:</b> ours {tot:.1f} s ({stages}); the GPU was used in {g} of {len(known)} stages{others}</p>"
+
+
+def perf_html(perf):
+    """The summary table of the times: per set the median seconds of ours and of the other programs, and per stage of ours where the time goes and how often the GPU took part."""
+    if not any(p['timing'] for p in perf): return ''
+    med = lambda v: float(np.median(v)) if v else float('nan'); rows = ''
+    for sn in dict.fromkeys(p['set'] for p in perf):
+        ps = [p for p in perf if p['set'] == sn and p['timing']]
+        rows += f"<tr><th>{html.escape(sn)} ({len(ps)})</th><td>{med([sum(t['seconds'] for t in p['timing']) for p in ps]):.1f}</td>" + ''.join(f"<td>{med([p['ext'][k] for p in ps if p['ext'].get(k) is not None]):.1f}</td>" for k in ('darktable', 'RawTherapee')) + '</tr>'
+    st = ''
+    for name in dict.fromkeys(t['stage'] for p in perf for t in p['timing']):
+        ts = [t for p in perf for t in p['timing'] if t['stage'] == name]; known = [t for t in ts if t['gpu'] is not None]
+        st += f"<tr><th>{html.escape(name)}</th><td>{med([t['seconds'] for t in ts]):.1f}</td><td>{sum(1 for t in known if t['gpu'])} of {len(known)}</td></tr>"
+    return f"<h2>Time per picture on this machine</h2><table class=t><tr><th></th><th>ours</th><th>darktable</th><th>RawTherapee</th></tr>{rows}</table><p class=m>Median seconds per picture, one at a time (the other programs' whole command line, start-up included).</p><table class=t><tr><th>our stage</th><th>median s</th><th>pictures where it used the GPU</th></tr>{st}</table>"
+
+
+def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind, public=True, timing='', tabs=()):
+    tabs_html = '<div class=tabs>' + ''.join('<button data-src="assets/%s"%s>%s</button>' % (fn, ' class=on' if fn.endswith('-overview.jpg') else '', html.escape(nm)) for nm, fn in tabs) + '</div>' if len(tabs) > 1 else ''
     boxes = ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks); crops = []
     for b in blocks:
         tiles = ''.join(f'<div style="width:{b["pw"]}px;height:{b["ph"]}px;background-image:url(assets/{b["sheet"]});background-position:-{(i % b["cols"]) * b["pw"]}px -{(i // b["cols"]) * b["ph"]}px"></div>' for i in range(len(b['names'])))
         mini = f'<div class=ov style="width:300px"><img src="assets/{stem}-overview.jpg" width=300><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div>'
         crops.append(f'<h3>Crop {b["n"]}: where the programs differ most in {html.escape(b["kind"])}</h3><div class=crop>{mini}<div class=sheet style="grid-template-columns:repeat({b["cols"]},{b["pw"]}px)">{tiles}</div></div>')
-    return f"""<section class="pic{' pub' if public else ''}" id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{' · ' + html.escape(why) if why else ''}</small></h2><div class=ov style="width:{OVERVIEW}px;max-width:100%"><img src="assets/{stem}-overview.jpg">{boxes}</div>
-<details open><summary>What ours did, and the settings of each stage</summary>{settings_html(rec)}</details><details><summary>Numbers (scripts/compare_detail.py, on this picture)</summary>{metrics}<p class=m>sharp: edge crispness; ring/halo: sharpening artefacts; noise/cnoise: luminance and colour noise in flat areas; detail: texture kept against the noise.</p></details>{''.join(crops)}</section>"""
+    return f"""<section class="pic{' pub' if public else ''}" id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{' · ' + html.escape(why) if why else ''}</small></h2><div class=ov style="width:{OVERVIEW}px;max-width:100%"><img class=ovimg src="assets/{stem}-overview.jpg">{boxes}</div>{tabs_html}
+{timing}<details open><summary>What ours did, and the settings of each stage</summary>{settings_html(rec)}</details><details><summary>Numbers (scripts/compare_detail.py, on this picture)</summary>{metrics}<p class=m>sharp: edge crispness; ring/halo: sharpening artefacts; noise/cnoise: luminance and colour noise in flat areas; detail: texture kept against the noise.</p></details>{''.join(crops)}</section>"""
 
 
 if __name__ == '__main__':

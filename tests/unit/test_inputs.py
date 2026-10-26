@@ -107,3 +107,13 @@ def test_the_nex5n_profile_carries_what_add_device_fits():
     p = inputs.profile('SONY', 'NEX-5N'); b = inputs._bundle(p['bundle'])
     assert p['label'] == 'Sony NEX-5N' and {'ColorMatrix1', 'NoiseTable', 'ProfileToneCurve', 'LookTable', 'NoiseScale'} <= set(b)
     assert all(1 <= s <= 32 for _, s in b['NoiseScale'])                                                                                      # inside the scales the fit tried
+
+
+def test_the_other_raw_programs_are_found_or_named_as_missing(monkeypatch, tmp_path):
+    import pytest
+    from stratastills import externaltools as ET
+    monkeypatch.setattr(ET.shutil, 'which', lambda n: None); monkeypatch.setattr(ET, 'EXTRA', {'darktable': [], 'rawtherapee': []})
+    assert ET.missing() == ['darktable', 'rawtherapee']
+    with pytest.raises(SystemExit) as e: ET.require()
+    assert 'darktable' in str(e.value) and 'install' in str(e.value).lower() or 'pacman' in str(e.value) or 'brew' in str(e.value) or 'winget' in str(e.value)
+    monkeypatch.setattr(ET.shutil, 'which', lambda n: str(tmp_path / n)); monkeypatch.setattr(ET, 'rt_profiles', lambda: str(tmp_path)); assert ET.missing() == [] and ET.require() is None

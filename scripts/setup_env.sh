@@ -40,6 +40,7 @@ fi
 
 # ---- optional: the visual report on the candidate photos ---------------------------------------------------------------------------
 if [ "$REPORT" = 1 ]; then
+  PYTHONPATH="$ROOT/src" "$VENV/bin/python" -c "from stratastills import externaltools as E; E.require()" || exit 1      # darktable and RawTherapee are needed: the report is a comparison with them
   if [ -d "$ROOT/candidates" ]; then PYTHONPATH="$ROOT/src" "$VENV/bin/python" "$ROOT/scripts/build_report.py" && echo "report: $ROOT/out/report/index.html"
   else echo "no candidates/ folder: report skipped (scripts/copy_candidates.py)"; fi
 fi
