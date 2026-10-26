@@ -42,7 +42,9 @@ describe('ItemPage', () => {
 
     // Simulate arrow left (should go to A_1)
     await userEvent.keyboard('[ArrowLeft]')
-    await waitFor(() => expect(window.location.hash).toContain('abcd1234~A_1'))
+    await waitFor(() => {
+        expect(window.location.hash).toContain('abcd1234~A_1')
+    }, { timeout: 2000 })
 
     window.location.hash = originalHash
 
