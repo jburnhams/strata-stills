@@ -43,6 +43,7 @@ def _fp16(dev):
     """Whether the network runs in half precision: on a CUDA card with fast half arithmetic (compute capability 7 and up). A Pascal card such as the GTX 10xx runs half at a fraction of its float32 speed (measured on a GTX 1050: 1.39 s per 512 px tile against 1.09 s in float32)."""
     if dev.type != 'cuda': return False
     import torch
+    if torch.version.hip: return False        # AMD (ROCm): a half-precision convolution through MIOpen aborts the process (HSA_STATUS_ERROR_INVALID_ISA on a Radeon 780M run as gfx1100, tried 2026-10-26), and fp32 with MIOpen (4.1 TFLOPS on a 64-channel 3x3 layer) beats fp16 without it (2x slower)
     try: return torch.cuda.get_device_capability(dev)[0] >= 7
     except Exception: return True
 

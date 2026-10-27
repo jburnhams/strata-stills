@@ -123,3 +123,23 @@ def test_the_other_raw_programs_are_found_or_named_as_missing(monkeypatch, tmp_p
     with pytest.raises(SystemExit) as e: ET.require()
     assert 'darktable' in str(e.value) and 'install' in str(e.value).lower() or 'pacman' in str(e.value) or 'brew' in str(e.value) or 'winget' in str(e.value)
     monkeypatch.setattr(ET.shutil, 'which', lambda n: str(tmp_path / n)); monkeypatch.setattr(ET, 'rt_profiles', lambda: str(tmp_path)); assert ET.missing() == [] and ET.require() is None
+
+
+def test_a_raw_libraw_cannot_open_or_with_no_usable_white_balance_is_left_as_it_is(monkeypatch):
+    import contextlib, sys, types
+    mod = types.ModuleType('rawpy')
+    def broken(path): raise OSError('LibRaw cannot open it')
+    mod.imread = broken; monkeypatch.setitem(sys.modules, 'rawpy', mod)
+    assert inputs.synthesize_tags('x.arw', dict(Make='M')) == dict(Make='M')
+    fake_raw(monkeypatch, wb=(0.0, 1024.0, 1900.0, 1024.0)); assert inputs.synthesize_tags('x.arw', dict(Make='M')) == dict(Make='M')   # a zero channel: nothing to compute a white balance from
+
+
+def test_the_iso_and_the_mosaic_check_are_none_and_false_for_files_that_are_not_tiff_like(tmp_path):
+    p = tmp_path / 'junk.arw'; p.write_bytes(b'not a raw'); assert inputs._iso(str(p)) is None and inputs._has_mosaic(str(p)) is False
+    assert inputs._iso(str(tmp_path / 'missing.dng')) is None
+    assert inputs.describe(str(p)) == dict(kind='raw', make=None, model=None, profile=None)               # unreadable tags: still a raw, of no known make
+
+
+def test_a_plain_rgb_tiff_has_no_mosaic(tmp_path):
+    import tifffile
+    p = str(tmp_path / 'rgb.tif'); tifffile.imwrite(p, np.zeros((8, 8, 3), np.uint8)); assert inputs._has_mosaic(p) is False

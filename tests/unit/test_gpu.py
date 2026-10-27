@@ -318,3 +318,11 @@ def test_conv_in_strips_is_the_same_as_one_convolution(monkeypatch):
     monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 1000)                                                                          # strips of 8 rows
     for shape in ((3, 3), (1, 9), (9, 1)):
         k = t.from_numpy(rng.random((1, 1) + shape, dtype=np.float32)).to(gpu.dev()); assert float((gpu.conv(y, k) - t.nn.functional.conv2d(y, k)).abs().max()) < 1e-4
+
+
+def test_a_radeon_780m_gets_the_gfx1100_override_before_torch_loads_unless_the_user_set_one(tmp_path, monkeypatch):
+    node = tmp_path / '1'; node.mkdir(); (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110003\n')
+    monkeypatch.delenv('HSA_OVERRIDE_GFX_VERSION', raising=False)
+    assert gpu.amd_env(str(tmp_path)) == {'HSA_OVERRIDE_GFX_VERSION': '11.0.0'} and gpu.amd_env(str(tmp_path / 'none')) == {}
+    (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110000\n'); assert gpu.amd_env(str(tmp_path)) == {}              # gfx1100 has kernels of its own
+    (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110003\n'); monkeypatch.setenv('HSA_OVERRIDE_GFX_VERSION', '10.3.0'); assert gpu.amd_env(str(tmp_path)) == {}
