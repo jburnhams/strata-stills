@@ -35,6 +35,7 @@ Not gated. `pytest tests/integration -n auto --cov --cov-fail-under=0 --cov-repo
 | `server/app.py` | `test_server_api.py`: browse, generate, download, a rule, pipeline and setting updates, API edge cases |
 | `projects.py` | `test_projects.py`: UNC path handling, source folder management, missing/invalid project IDs, depth limit |
 | `ingest.py` | `test_ingest.py`: folder scanning, finding and grouping items, handling derived files and panos |
+| `export.py`, `fullres.py` | `test_export.py`: sizing, cache reading/writing, writing JPEGs and TIFFs with EXIF, background full resolution image rendering |
 
 ## Known issues
 
