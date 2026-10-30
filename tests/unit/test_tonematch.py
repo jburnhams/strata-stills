@@ -104,3 +104,9 @@ def test_a_preview_with_a_step_in_its_tone_gives_a_smooth_curve_with_no_flat_run
 
 def test_isotonic_pools_a_dip_instead_of_holding_the_peak():
     assert np.allclose(T._isotonic([0.1, 0.5, 0.3, 0.6]), [0.1, 0.4, 0.4, 0.6])
+
+
+def test_the_curve_reaches_white_where_the_preview_is_white_and_at_the_raws_clip():
+    x = np.sort(RNG.random(20000) ** 4 * 0.05).astype(np.float32); y = D.srgb_eotf(np.clip(x / 0.05, 0, 1) * 0.6)    # a night scene: the fitted pixels end at 0.6 of white
+    kx, ky = T.fit(x, y, white=0.2); assert ky[-1] == 1.0 and np.interp(0.25, kx, ky) > 0.9                             # the lamps, white in the preview from 0.2 up, are white here too
+    kx, ky = T.fit(x, y); assert ky[-1] == 1.0

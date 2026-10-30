@@ -10,6 +10,8 @@ GRID = 65                                      # knots of the fitted curve, even
 SMOOTH = 1.5                                   # of the curve on that grid, in knots
 SLOPE_MIN, SLOPE_MAX = 0.1, 3.0                # of the curve in display-encoded terms (1 = a plain sRGB encoding): flatter posterises, steeper amplifies noise and banding
 MIN_PIXELS = 2000
+MIN_CLIPPED = 20                               # pixels of the preview at white for its level to count
+WHITE_PCT = 10                                 # percentile of our luminance over those pixels taken as the level where the preview turns white
 MIN_AGREEMENT = 0.9                            # rank correlation of the two lumas below this: not the same picture (or not the same way up): no curve
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
 MIN_PREVIEW = 19200                            # pixels; smaller previews (128x96 ones) are too coarse to match
@@ -71,18 +73,19 @@ def _isotonic(y):
     return np.repeat(v, n)
 
 
-def fit(x, y, bins=BINS):
+def fit(x, y, bins=BINS, white=None):
     """Knots of the curve that takes values with the distribution of `x` (linear luminance) to that of `y` (the preview's, linear), as a smooth rising curve.
-    The medians of `x` and of the display-encoded `y` in `bins` slices of equal count of the pixels sorted by `x` are made to rise (isotonic), with (0, 0) and (1, top) added; that curve is then laid on a regular grid of the display-encoded input, smoothed there and its slope held between SLOPE_MIN and SLOPE_MAX. Followed slice by slice, a small preview gives a curve that is flat over some inputs and steep over the next, and that posterises smooth gradients (fur, sky) into bands."""
+    The medians of `x` and of the display-encoded `y` in `bins` slices of equal count of the pixels sorted by `x` are made to rise (isotonic), with (0, 0), (`white`, 1) when the preview is white from some level on, and (1, 1) added; that curve is then laid on a regular grid of the display-encoded input, smoothed there and its slope held between SLOPE_MIN and SLOPE_MAX. Followed slice by slice, a small preview gives a curve that is flat over some inputs and steep over the next, and that posterises smooth gradients (fur, sky) into bands."""
     o = np.argsort(x); x, y = x[o], y[o]; cut = np.linspace(0, len(x), bins + 1).astype(int)
     kx = np.array([np.median(x[a:b]) for a, b in zip(cut[:-1], cut[1:])]); ky = np.array([np.median(y[a:b]) for a, b in zip(cut[:-1], cut[1:])])
     keep = np.concatenate([[True], np.diff(kx) > 1e-6]); kx, ky = kx[keep], _isotonic(_enc(ky[keep]))
-    top = min(1.0, ky[-1] + (1.0 - kx[-1]) * (ky[-1] - ky[-2]) / max(kx[-1] - kx[-2], 1e-6)) if len(kx) > 1 else 1.0
-    kx, ky = np.concatenate([[0.0], kx, [1.0]]), np.concatenate([[0.0], ky, [max(top, ky[-1])]])
+    if white is not None and kx[-1] < white < 1.0: kx, ky = np.concatenate([[0.0], kx, [white, 1.0]]), np.concatenate([[0.0], ky, [1.0, 1.0]])
+    else: kx, ky = np.concatenate([[0.0], kx, [1.0]]), np.concatenate([[0.0], ky, [1.0]])                                   # what the raw clips is white
     gx = np.linspace(0, 1, GRID); gy = np.interp(_dec(gx), kx, ky); r = int(np.ceil(3 * SMOOTH)); k = np.exp(-0.5 * (np.arange(-r, r + 1) / SMOOTH) ** 2); k /= k.sum()
     gy = np.convolve(np.pad(gy, r, mode='reflect', reflect_type='odd'), k, mode='valid')                                       # odd reflection keeps the ends where they are
     d = np.clip(np.diff(gy), SLOPE_MIN / (GRID - 1), SLOPE_MAX / (GRID - 1)); c = np.concatenate([[0.0], np.cumsum(d)]); inside = (gx >= _enc(kx[1])) & (gx <= _enc(kx[-2]))
-    gy = np.clip(c + (np.mean(gy[inside] - c[inside]) if inside.any() else 0.0), 0, 1); gy[0] = 0.0                            # where a slope was held the rest moves by the least it must, over the range the picture covers
+    gy = np.clip(c + (np.mean(gy[inside] - c[inside]) if inside.any() else 0.0), 0, 1); gy[0] = 0.0
+    top = _enc(kx[-2]); gy = np.clip(gy + (1.0 - gy[-1]) * np.clip((gx - top) / max(1.0 - top, 1e-6), 0, 1), 0, 1)                           # what the offset left short of white at the top is made up above the picture's range                            # where a slope was held the rest moves by the least it must, over the range the picture covers
     return _dec(gx), gy
 
 
@@ -95,7 +98,8 @@ def match_curve(linear, jpeg):
     if al is None: return None
     A, J = al; a = A @ LUMA; b = develop.srgb_eotf(J) @ LUMA; ok = (a > 1e-4) & (b > 3e-4) & (b < 0.97) & (A.max(axis=2) < 0.97)
     if ok.sum() < MIN_PIXELS: return None
-    kx, ky = fit(a[ok], b[ok]); curve = [round(float(v), 5) for p in zip(kx, ky) for v in p]
+    clip = (b >= 0.97) & (a > 1e-4); white = float(np.percentile(a[clip], WHITE_PCT)) if clip.sum() >= MIN_CLIPPED else None   # where the preview is white: the curve must reach white there too (a night scene's lamps are clipped in the preview and left out of the fit; without this the curve stopped at 0.63 and every lamp came out grey)
+    kx, ky = fit(a[ok], b[ok], white=white); curve = [round(float(v), 5) for p in zip(kx, ky) for v in p]
     ours = develop.finish(A, develop.tone_lut(curve)); yo = ours @ LUMA; yj = J @ LUMA; co = np.linalg.norm(ours - yo[..., None], axis=2); cj = np.linalg.norm(J - yj[..., None], axis=2)
     xs, ss = [0.0], [1.0]
     for lo in np.linspace(0, 1, CHROMA_BINS + 1)[:-1]:
