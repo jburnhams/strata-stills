@@ -6,6 +6,9 @@ import cv2, numpy as np
 PROXY = 384                                    # long side of the pictures compared: area-averaged, so sharpness, noise and lens geometry do not count
 BINS = 48
 CHROMA_BINS = 12
+GRID = 65                                      # knots of the fitted curve, evenly over the display-encoded input
+SMOOTH = 1.5                                   # of the curve on that grid, in knots
+SLOPE_MIN, SLOPE_MAX = 0.1, 3.0                # of the curve in display-encoded terms (1 = a plain sRGB encoding): flatter posterises, steeper amplifies noise and banding
 MIN_PIXELS = 2000
 MIN_AGREEMENT = 0.9                            # rank correlation of the two lumas below this: not the same picture (or not the same way up): no curve
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
@@ -51,14 +54,36 @@ def align(linear, jpeg):
     return None if best is None or best[0] < MIN_AGREEMENT else best[1:]
 
 
+def _enc(v):
+    return np.where(v <= 0.0031308, 12.92 * v, 1.055 * np.maximum(v, 1e-9) ** (1 / 2.4) - 0.055)
+
+
+def _dec(v):
+    return np.where(v <= 0.04045, v / 12.92, ((np.maximum(v, 0) + 0.055) / 1.055) ** 2.4)
+
+
+def _isotonic(y):
+    """The rising sequence nearest to `y` (least squares): pool adjacent violators. Unlike a running maximum, one high slice does not hold every slice after it flat."""
+    v, n = [], []
+    for yi in y:
+        v.append(float(yi)); n.append(1)
+        while len(v) > 1 and v[-2] > v[-1]: s = n[-2] + n[-1]; v[-2] = (v[-2] * n[-2] + v[-1] * n[-1]) / s; n[-2] = s; v.pop(); n.pop()
+    return np.repeat(v, n)
+
+
 def fit(x, y, bins=BINS):
-    """Knots of the curve that takes values with the distribution of `x` (linear luminance) to that of `y` (the preview's, linear): the medians of `x` and of the display-encoded `y` in `bins` slices of equal count of the pixels sorted by `x`; forced to rise, with (0, 0) and (1, top) added."""
+    """Knots of the curve that takes values with the distribution of `x` (linear luminance) to that of `y` (the preview's, linear), as a smooth rising curve.
+    The medians of `x` and of the display-encoded `y` in `bins` slices of equal count of the pixels sorted by `x` are made to rise (isotonic), with (0, 0) and (1, top) added; that curve is then laid on a regular grid of the display-encoded input, smoothed there and its slope held between SLOPE_MIN and SLOPE_MAX. Followed slice by slice, a small preview gives a curve that is flat over some inputs and steep over the next, and that posterises smooth gradients (fur, sky) into bands."""
     o = np.argsort(x); x, y = x[o], y[o]; cut = np.linspace(0, len(x), bins + 1).astype(int)
     kx = np.array([np.median(x[a:b]) for a, b in zip(cut[:-1], cut[1:])]); ky = np.array([np.median(y[a:b]) for a, b in zip(cut[:-1], cut[1:])])
-    ky = np.where(ky <= 0.0031308, 12.92 * ky, 1.055 * np.maximum(ky, 1e-6) ** (1 / 2.4) - 0.055); ky = np.maximum.accumulate(ky)
-    keep = np.concatenate([[True], np.diff(kx) > 1e-6]); kx, ky = kx[keep], ky[keep]
+    keep = np.concatenate([[True], np.diff(kx) > 1e-6]); kx, ky = kx[keep], _isotonic(_enc(ky[keep]))
     top = min(1.0, ky[-1] + (1.0 - kx[-1]) * (ky[-1] - ky[-2]) / max(kx[-1] - kx[-2], 1e-6)) if len(kx) > 1 else 1.0
-    return np.concatenate([[0.0], kx, [1.0]]), np.concatenate([[0.0], ky, [max(top, ky[-1])]])
+    kx, ky = np.concatenate([[0.0], kx, [1.0]]), np.concatenate([[0.0], ky, [max(top, ky[-1])]])
+    gx = np.linspace(0, 1, GRID); gy = np.interp(_dec(gx), kx, ky); r = int(np.ceil(3 * SMOOTH)); k = np.exp(-0.5 * (np.arange(-r, r + 1) / SMOOTH) ** 2); k /= k.sum()
+    gy = np.convolve(np.pad(gy, r, mode='reflect', reflect_type='odd'), k, mode='valid')                                       # odd reflection keeps the ends where they are
+    d = np.clip(np.diff(gy), SLOPE_MIN / (GRID - 1), SLOPE_MAX / (GRID - 1)); c = np.concatenate([[0.0], np.cumsum(d)]); inside = (gx >= _enc(kx[1])) & (gx <= _enc(kx[-2]))
+    gy = np.clip(c + (np.mean(gy[inside] - c[inside]) if inside.any() else 0.0), 0, 1); gy[0] = 0.0                            # where a slope was held the rest moves by the least it must, over the range the picture covers
+    return _dec(gx), gy
 
 
 def match_curve(linear, jpeg):
@@ -77,6 +102,7 @@ def match_curve(linear, jpeg):
         m = ok & (yo >= lo) & (yo < lo + 1 / CHROMA_BINS) & (co > 0.01)
         if m.sum() >= 200: xs.append(lo + 0.5 / CHROMA_BINS); ss.append(float(np.clip(np.median(cj[m]) / np.median(co[m]), 0.2, 1.5)))
     xs.append(1.0); ss.append(ss[-1]); ss[0] = ss[1] if len(ss) > 2 else 1.0
+    if len(ss) > 3: ss[1:] = list(np.convolve(np.pad(ss[1:], 1, mode='edge'), [0.25, 0.5, 0.25], mode='valid')); ss[0] = ss[1]                                    # neighbouring slices of lightness must not differ much in colour: a jump becomes a band of colour across a smooth gradient
     return dict(curve=curve, chroma=[round(float(v), 4) for p in zip(xs, ss) for v in p])
 
 
