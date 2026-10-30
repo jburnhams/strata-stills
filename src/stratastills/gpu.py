@@ -481,9 +481,10 @@ def clean_colour(rgb, sig8, desat_from=0.86):
     from stratastills import develop
     t = torch_(); y = luma(rgb); cb, cr = rgb[2] - y, rgb[0] - y; sg = sig8 / 255.0
     w = [((sg * 255 - lo) / (hi - lo)).clamp_(0, 1) for lo, hi in ((2.0, 6.0), (5.0, 11.0))]; out = []
-    for c in (cb, cr):
-        f = guided(c, y, 2, 4e-4) * (1 - w[0]) + (guided(c, y, 6, 1.5e-3) * (1 - w[1]) + guided(c, y, 14, 4e-3) * w[1]) * w[0]
-        out.append(t.sign(f) * (f.abs() - 0.3 * sg * ((1 - w[0]) + w[0] * ((1 - w[1]) * develop.CORE_WIDE[0] + w[1] * develop.CORE_WIDE[1]))).clamp_(min=0))
+    c1s = [guided(c, y, 2, 4e-4) for c in (cb, cr)]; k = smoothstep((t.hypot(*c1s) / sg.clamp(min=1e-6) - develop.STRONG_COLOUR[0]) / (develop.STRONG_COLOUR[1] - develop.STRONG_COLOUR[0])); w[0] = w[0] * (1 - k)
+    for c, c1 in zip((cb, cr), c1s):
+        f = c1 * (1 - w[0]) + (guided(c, y, 6, 1.5e-3) * (1 - w[1]) + guided(c, y, 14, 4e-3) * w[1]) * w[0]
+        out.append(t.sign(f) * (f.abs() - 0.3 * sg * ((1 - w[0]) + w[0] * ((1 - w[1]) * develop.CORE_WIDE[0] + w[1] * develop.CORE_WIDE[1])) * (1 - k)).clamp_(min=0))
     roll = 1.0 - ((y - desat_from) / (1.0 - desat_from)).clamp_(0, 1) ** 2 * 0.9
     r = y + out[1] * roll; b = y + out[0] * roll; g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
     return t.stack([r, g, b]).clamp_(0, 1)

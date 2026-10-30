@@ -240,3 +240,9 @@ def test_the_colour_clean_up_keeps_real_colour_where_the_noise_is_high():
     noisy = np.clip(base + rng.normal(0, 0.03, base.shape), 0, 1).astype(np.float32); sig8 = np.full((h, w), 12.0, np.float32)                                      # noise of a night picture: the widest filter runs
     y = lambda im: im @ np.array([0.2126, 0.7152, 0.0722], np.float32); cb = lambda im: float(np.mean(im[..., 2] - y(im)))
     assert cb(D.clean_colour(noisy, sig8)) > 0.95 * cb(base)                                                                                                      # with the raw-noise threshold as the coring it lost about a tenth
+
+
+def test_a_small_strongly_coloured_light_keeps_its_colour_through_the_clean_up_of_a_noisy_picture():
+    h, w = 64, 64; img = np.full((h, w, 3), 0.15, np.float32); yy, xx = np.mgrid[:h, :w]; lamp = (yy - 32) ** 2 + (xx - 32) ** 2 <= 9; img[lamp] = (0.9, 0.35, 0.3)      # a red lamp of 7 px on a dark sky
+    out = D.clean_colour(img, np.full((h, w), 12.0, np.float32)); y = lambda v: v @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    assert (out[32, 32, 0] - y(out[32, 32])) > 0.9 * (img[32, 32, 0] - y(img[32, 32]))                                                                              # the 14 px filter took about half of it into the sky
