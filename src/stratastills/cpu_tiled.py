@@ -77,7 +77,7 @@ def develop_tiled(path, u16, ev, denoise, recover, highlight_contrast, analysis=
         sig8 = D.noise_map8(img, npf, gain=field) if npf is not None else None; res = D.limit_chroma(D.chroma_scale(D.finish(img, lut), chroma), None if chroma is None else 0.0); del img
         if classical:
             res = D.clean_colour(res, sig8)
-            if denoise == 'auto': res = D.core_luma(res, sig8)
+            if denoise == 'auto': res = D.drop_dark_specks(D.core_luma(res, sig8), sig8)
         if highlight_contrast > 0: res = D.highlight_detail(res, highlight_contrast)
         out[y0:y1, x0:x1] = res[y0 - ry0:y1 - ry0, x0 - rx0:x1 - rx0]; del res, sig8
     return out

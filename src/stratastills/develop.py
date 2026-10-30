@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 13
+VERSION = 14
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -299,6 +299,18 @@ def clean_colour(rgb, sig8, desat_from=0.86):
     return np.clip(np.dstack([r, g, b]), 0, 1).astype(np.float32)
 
 
+SPECK_K = 4.0                  # drop_dark_specks: a pixel this many times the local mean departure from the 3x3 median darker than that median is a speck (the noise map gives the RAW noise, about 20 levels at ISO 12800, while what the clean-up leaves is a few: the threshold has to follow what is left) ...
+SPECK_SPAN = 4.0               # px over which that mean is taken
+SPECK_FROM = 4.0               # ... where the noise map is at least this (8-bit levels): only noisy pictures; a low-ISO picture's isolated dark pixels are detail (a bird, a rivet)
+
+
+def drop_dark_specks(rgb, sig8):
+    """Isolated dark pixels left by the clean-up of a very noisy picture (the deepest troughs of the noise outlast the coring and stand out on a smooth sky: ISO 12800 at dusk) are lifted to the median of their 3x3 neighbourhood, the change added equally to the three channels so the colour stays. Only dark ones: an isolated bright pixel at night is usually a real light."""
+    y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); d = cv2.medianBlur(y, 3) - y; n = cv2.GaussianBlur(np.abs(d), (0, 0), SPECK_SPAN)
+    lift = np.where((d > SPECK_K * n) & (sig8 >= SPECK_FROM), d, 0.0).astype(np.float32)
+    return np.clip(rgb + lift[..., None], 0, 1)
+
+
 def highlight_detail(rgb, amount=1.0, lo=0.62, hi=0.92):
     """More contrast in the bright areas, without changing how bright they are: the luminance is split into a smooth edge-preserving base (guided filter) and the detail on top of it, at two scales (about 2 and 8 px); where the base is bright (from `lo`, fully by `hi`) the detail is multiplied by up to 1 + `amount`, and the base is put back unchanged.
     The white level of a wall stays where it is; the window frames, mouldings, brick lines and render texture inside it stand out more. A pixel that would pass white is held at white."""
@@ -531,6 +543,7 @@ def develop(path, half=False, ev='auto', denoise='auto', recover=0.35, model=Non
     if classical:
         out = clean_colour(out, sig8)
         if denoise in ('auto', 'ai', 'classical'): out = core_luma(out, sig8)                                                        # grain first, so the contrast boost below acts on cleaned detail
+        if denoise in ('auto', 'ai', 'classical'): out = drop_dark_specks(out, sig8)
     if highlight_contrast > 0: out = highlight_detail(out, highlight_contrast)
     ai = sig8 is not None and (denoise == 'ai' or (denoise == 'auto' and _auto_ai(blind, lambda: blind_noise(out))))
     model = model or denoise_ai.DEFAULT; strength = denoise_ai.DEFAULT_STRENGTH if strength is None else strength
@@ -611,7 +624,7 @@ def gpu_tail(img, lut_t, npf, field, sc, denoise, highlight_contrast, chroma_t=N
     if extras is not None: extras['sig8'] = sig8; extras['blind'] = gpu.blind_noise(out) if npf is not None else 0.0
     if classical:
         out = gpu.clean_colour(out, sig8)
-        if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE)
+        if denoise == 'auto': out = gpu.core_luma(out, sig8, BAND_CORE); out = gpu.drop_dark_specks(out, sig8)
     if highlight_contrast > 0: out = gpu.highlight_detail(out, highlight_contrast)
     return out
 

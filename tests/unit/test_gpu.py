@@ -335,3 +335,11 @@ def test_a_radeon_780m_gets_the_gfx1100_override_before_torch_loads_unless_the_u
     assert gpu.amd_env(str(tmp_path)) == {'HSA_OVERRIDE_GFX_VERSION': '11.0.0'} and gpu.amd_env(str(tmp_path / 'none')) == {}
     (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110000\n'); assert gpu.amd_env(str(tmp_path)) == {}              # gfx1100 has kernels of its own
     (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110003\n'); monkeypatch.setenv('HSA_OVERRIDE_GFX_VERSION', '10.3.0'); assert gpu.amd_env(str(tmp_path)) == {}
+
+
+def test_dark_specks_are_dropped_alike_on_the_card_and_only_where_the_picture_is_noisy():
+    from stratastills import develop
+    rng = np.random.default_rng(9); img = np.dstack([np.full((H, W), 0.5)] * 3).astype(np.float32) + rng.normal(0, 0.005, (H, W, 3)).astype(np.float32); img[10, 10] -= 0.3; img[30, 40] += 0.3
+    noisy, quiet = np.full((H, W), 8.0, np.float32), np.full((H, W), 1.0, np.float32)
+    a = develop.drop_dark_specks(img, noisy); b = c(gpu.drop_dark_specks(g(img), g(noisy))); assert np.abs(a - b).max() < 1e-4
+    assert abs(a[10, 10, 0] - 0.5) < 0.03 and a[30, 40, 0] > 0.75 and np.array_equal(develop.drop_dark_specks(img, quiet), np.clip(img, 0, 1))      # the dark speck lifted, the bright one kept, nothing done to a quiet picture

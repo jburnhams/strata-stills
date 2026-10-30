@@ -489,6 +489,22 @@ def clean_colour(rgb, sig8, desat_from=0.86):
     return t.stack([r, g, b]).clamp_(0, 1)
 
 
+def median3(y, rows=1024):
+    """The 3x3 median of a plane (H, W), edges replicated as cv2.medianBlur does, in strips of rows (the 9 shifted copies of a 24 MP plane would not fit a small card)."""
+    t = torch_(); F = t.nn.functional; h, w = y.shape; out = t.empty_like(y)
+    for r0 in range(0, h, rows):
+        r1 = min(h, r0 + rows); a = F.pad(y[max(0, r0 - 1):min(h, r1 + 1)][None, None], (1, 1, 1 if r0 == 0 else 0, 1 if r1 == h else 0), mode='replicate')[0, 0]
+        out[r0:r1] = t.stack([a[i:i + r1 - r0, j:j + w] for i in range(3) for j in range(3)]).median(dim=0).values
+    return out
+
+
+def drop_dark_specks(rgb, sig8):
+    """develop.drop_dark_specks on a (3, H, W) picture."""
+    from stratastills import develop
+    y = luma(rgb); d = median3(y) - y; n = gaussian(d.abs(), develop.SPECK_SPAN); lift = d * ((d > develop.SPECK_K * n) & (sig8 >= develop.SPECK_FROM)); del d, n
+    return (rgb + lift[None]).clamp_(0, 1)
+
+
 def core_luma(rgb, sig8, band_core, k=1.0):
     """develop.core_luma: the luminance grain cored band by band, thresholds following the noise map and the local brightness."""
     t = torch_(); y = luma(rgb); n = sig8 / 255.0; b = gaussian(y, 8.0); n = n * (0.7 + 0.4 * smoothstep((b - 0.55) / 0.30)); del b
