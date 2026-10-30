@@ -233,6 +233,15 @@ def test_the_sharpening_activity_mask_matches_and_spares_the_flat_areas():
     a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK); b = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF), mask=detail.SHARPEN_MASK)); assert np.abs(a - b).max() < 3e-3
 
 
+def test_the_soft_limit_and_no_limit_of_the_sharpening_match():
+    from stratastills import detail
+    img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gg = gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 3.0, detail.ROLLOFF); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=3.0)
+    for overshoot, knee in ((0.0, 0.03), (None, 0.0)):
+        a = detail.sharpen(img, gain, overshoot=overshoot, knee=knee); b = c(gpu.sharpen(g(img), gg, overshoot=overshoot, knee=knee)); assert np.abs(a - b).max() < 3e-3
+    hard, soft = detail.sharpen(img, gain, overshoot=0.0), detail.sharpen(img, gain, overshoot=0.0, knee=0.03)
+    assert np.abs(soft - hard).max() <= 0.03 + 1e-4 and len(np.unique(np.round(soft[..., 0], 4))) > len(np.unique(np.round(hard[..., 0], 4)))   # never more than the knee beyond the range, and fewer pixels pinned to one value
+
+
 def test_blind_noise_finds_the_noise_of_a_picture_on_the_cpu_and_the_card():
     rng = np.random.default_rng(2); base = np.dstack([cv2.GaussianBlur(rng.random((H, W)).astype(np.float32), (0, 0), 12)] * 3) * 0.5 + 0.25
     for sigma in (0.5, 2.0, 5.0):

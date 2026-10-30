@@ -528,15 +528,22 @@ def activity(y, mask):
     return gaussian(((t.hypot(gx, gy) - mask[0]) / (mask[1] - mask[0])).clamp(0, 1)[None], 1.5)[0]
 
 
-def sharpen_delta(rgb, gain, overshoot=0.05, mask=None):
+def sharpen_delta(rgb, gain, overshoot=0.05, mask=None, knee=0.0):
     """The change detail.sharpen makes to the luminance, (H, W), for a (3, H, W) picture and a half-spectrum gain: the luminance (BT.601 weights, as there) is filtered by FFT and the change held within the local range of the original plus `overshoot`. Each intermediate is freed as soon as it is not needed (the peak is about 5 planes: 21 MP in 0.45 GB, where holding them all took 1.3 GB and ran a 2 GB card out of memory)."""
     t = torch_(); F = t.nn.functional; h, w = rgb.shape[1:]; y = rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114
     f = t.fft.rfft2(y); f *= gain; d = t.fft.irfft2(f, s=(h, w)); del f; d -= y; d *= activity(y, mask); d += y                          # d is now the filtered, masked luminance
+    if overshoot is None: d -= y; return d
     pad = lambda a: F.pad(a[None, None], (2, 2, 2, 2), mode='replicate')
-    d = t.minimum(d, F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot); d = t.maximum(d, -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot); d -= y
+    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot
+    if knee: e = (d - hi).clamp_(min=0); d = t.minimum(d, hi) + knee * t.tanh(e / knee); del e
+    else: d = t.minimum(d, hi)
+    del hi; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot
+    if knee: e = (lo - d).clamp_(min=0); d = t.maximum(d, lo) - knee * t.tanh(e / knee); del e
+    else: d = t.maximum(d, lo)
+    del lo; d -= y
     return d
 
 
-def sharpen(rgb, gain, overshoot=0.05, mask=None):
+def sharpen(rgb, gain, overshoot=0.05, mask=None, knee=0.0):
     """detail.sharpen on a (3, H, W) picture with a half-spectrum gain: the change of `sharpen_delta` added equally to the three channels."""
-    return (rgb + sharpen_delta(rgb, gain, overshoot, mask)[None]).clamp_(0, 1)
+    return (rgb + sharpen_delta(rgb, gain, overshoot, mask, knee)[None]).clamp_(0, 1)
