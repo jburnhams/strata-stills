@@ -233,3 +233,10 @@ def test_match_from_decode_uses_the_card_and_gives_no_tone_without_a_preview(mon
     monkeypatch.setattr(D, 'read_dng_tags', lambda path, lens: {}); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None)
     u16 = (np.random.default_rng(0).random((64, 48, 3)) * 65535).astype(np.uint16); an = {}
     assert D._match_from_decode('x.dng', u16, 'auto', an) is None and an['tone'] is None
+
+
+def test_the_colour_clean_up_keeps_real_colour_where_the_noise_is_high():
+    rng = np.random.default_rng(7); h, w = 64, 64; base = np.dstack([np.full((h, w), 0.30), np.full((h, w), 0.25), np.full((h, w), 0.40)]).astype(np.float32)      # a dusk sky: a faint, even blue
+    noisy = np.clip(base + rng.normal(0, 0.03, base.shape), 0, 1).astype(np.float32); sig8 = np.full((h, w), 12.0, np.float32)                                      # noise of a night picture: the widest filter runs
+    y = lambda im: im @ np.array([0.2126, 0.7152, 0.0722], np.float32); cb = lambda im: float(np.mean(im[..., 2] - y(im)))
+    assert cb(D.clean_colour(noisy, sig8)) > 0.95 * cb(base)                                                                                                      # with the raw-noise threshold as the coring it lost about a tenth

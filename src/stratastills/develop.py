@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 12
+VERSION = 13
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -279,10 +279,13 @@ def _guided(p, guide, r, eps):
     return mean(a) * guide + mean(b)
 
 
+CORE_WIDE = (0.4, 0.15)        # the colour coring threshold where the middle (6 px) and the widest (14 px) filter are used, as a part of the 2 px one's: those filters average far more of the noise away, and a threshold kept at a third of the raw noise took real colour with it (ISO 12800 night sky: median colour 13.9 -> 10.2 against the camera's 14.6)
+
+
 def clean_colour(rgb, sig8, desat_from=0.86):
     """What the camera's own JPEG does and a raw development must do by hand: keep colour noise, colour fringes and clipped-highlight colour out of the picture.
     The picture is split into luminance Y and two colour differences (B-Y, R-Y). The colour differences are smoothed by a guided filter that follows the edges of Y (so real colour edges stay where the luminance edge is and nothing bleeds), at a radius that grows with the noise there
-    (`sig8`, per pixel, 8-bit grey levels: 2 px when it is low, up to 14 px where it is high: the dark, shading-lifted corners), then cored (the threshold is a third of the raw noise: the filter has already averaged most of it away): colour weaker than that goes to grey, so dark roof tiles are grey as they are, not speckled in every colour.
+    (`sig8`, per pixel, 8-bit grey levels: 2 px when it is low, up to 14 px where it is high: the dark, shading-lifted corners), then cored (the threshold is a third of the raw noise, less where the wider filters run: CORE_WIDE): colour weaker than that goes to grey, so dark roof tiles are grey as they are, not speckled in every colour.
     Near white the colour is rolled off (from luminance `desat_from`), because a clipped channel there gives purple and blue fringes. Luminance is not touched here."""
     y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); cb, cr = rgb[..., 2] - y, rgb[..., 0] - y; sg = sig8 / 255.0
     w = [np.clip((sg * 255 - lo) / (hi - lo), 0, 1) for lo, hi in ((2.0, 6.0), (5.0, 11.0))]                  # how much of the middle and the widest filter to use
@@ -290,7 +293,7 @@ def clean_colour(rgb, sig8, desat_from=0.86):
     for c in (cb, cr):
         c1 = _guided(c, y, 2, 4e-4); c2 = _guided(c, y, 6, 1.5e-3); c3 = _guided(c, y, 14, 4e-3)
         f = c1 * (1 - w[0]) + (c2 * (1 - w[1]) + c3 * w[1]) * w[0]
-        tau = 0.3 * sg; out.append(np.sign(f) * np.maximum(np.abs(f) - tau, 0))
+        tau = 0.3 * sg * ((1 - w[0]) + w[0] * ((1 - w[1]) * CORE_WIDE[0] + w[1] * CORE_WIDE[1])); out.append(np.sign(f) * np.maximum(np.abs(f) - tau, 0))
     roll = 1.0 - np.clip((y - desat_from) / (1.0 - desat_from), 0, 1) ** 2 * 0.9
     cb, cr = out[0] * roll, out[1] * roll; r = y + cr; b = y + cb; g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
     return np.clip(np.dstack([r, g, b]), 0, 1).astype(np.float32)

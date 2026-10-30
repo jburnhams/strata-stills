@@ -11,6 +11,7 @@ SMOOTH = 1.5                                   # of the curve on that grid, in k
 SLOPE_MIN, SLOPE_MAX = 0.1, 3.0                # of the curve in display-encoded terms (1 = a plain sRGB encoding): flatter posterises, steeper amplifies noise and banding
 MIN_PIXELS = 2000
 MIN_CLIPPED = 20                               # pixels of the preview at white for its level to count
+END_KNOTS = 4                                  # knots of the fitted curve whose slope is carried on above the picture's range
 WHITE_PCT = 10                                 # percentile of our luminance over those pixels taken as the level where the preview turns white
 MIN_AGREEMENT = 0.9                            # rank correlation of the two lumas below this: not the same picture (or not the same way up): no curve
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
@@ -75,12 +76,14 @@ def _isotonic(y):
 
 def fit(x, y, bins=BINS, white=None):
     """Knots of the curve that takes values with the distribution of `x` (linear luminance) to that of `y` (the preview's, linear), as a smooth rising curve.
-    The medians of `x` and of the display-encoded `y` in `bins` slices of equal count of the pixels sorted by `x` are made to rise (isotonic), with (0, 0), (`white`, 1) when the preview is white from some level on, and (1, 1) added; that curve is then laid on a regular grid of the display-encoded input, smoothed there and its slope held between SLOPE_MIN and SLOPE_MAX. Followed slice by slice, a small preview gives a curve that is flat over some inputs and steep over the next, and that posterises smooth gradients (fur, sky) into bands."""
+    The medians of `x` and of the display-encoded `y` in `bins` slices of equal count of the pixels sorted by `x` are made to rise (isotonic), with (0, 0) and (1, 1) added and, above the fitted pixels, the slope of their last END_KNOTS knots carried on up to white (sooner where the preview is white from `white` on); that curve is then laid on a regular grid of the display-encoded input, smoothed there and its slope held between SLOPE_MIN and SLOPE_MAX. Followed slice by slice, a small preview gives a curve that is flat over some inputs and steep over the next, and that posterises smooth gradients (fur, sky) into bands."""
     o = np.argsort(x); x, y = x[o], y[o]; cut = np.linspace(0, len(x), bins + 1).astype(int)
     kx = np.array([np.median(x[a:b]) for a, b in zip(cut[:-1], cut[1:])]); ky = np.array([np.median(y[a:b]) for a, b in zip(cut[:-1], cut[1:])])
     keep = np.concatenate([[True], np.diff(kx) > 1e-6]); kx, ky = kx[keep], _isotonic(_enc(ky[keep]))
-    if white is not None and kx[-1] < white < 1.0: kx, ky = np.concatenate([[0.0], kx, [white, 1.0]]), np.concatenate([[0.0], ky, [1.0, 1.0]])
-    else: kx, ky = np.concatenate([[0.0], kx, [1.0]]), np.concatenate([[0.0], ky, [1.0]])                                   # what the raw clips is white
+    ex, n = _enc(kx), min(END_KNOTS, len(kx) - 1); end = (ky[-1] - ky[-1 - n]) / max(ex[-1] - ex[-1 - n], 1e-6) if n > 0 else 1.0      # the slope the preview's tone has where the fitted pixels end
+    end = float(np.clip(end, (1.0 - ky[-1]) / max(1.0 - ex[-1], 1e-6), SLOPE_MAX)); reach = float(_dec(min(1.0, ex[-1] + (1.0 - ky[-1]) / max(end, 1e-6))))    # carried on at that slope to white: what is brighter than every fitted pixel (lamps, lit windows, a bright sky) keeps its contrast instead of being squeezed into the last few levels
+    if white is not None and kx[-1] < white: reach = min(reach, white)
+    kx, ky = (np.concatenate([[0.0], kx, [reach, 1.0]]), np.concatenate([[0.0], ky, [1.0, 1.0]])) if kx[-1] < reach < 1.0 else (np.concatenate([[0.0], kx, [1.0]]), np.concatenate([[0.0], ky, [1.0]]))
     gx = np.linspace(0, 1, GRID); gy = np.interp(_dec(gx), kx, ky); r = int(np.ceil(3 * SMOOTH)); k = np.exp(-0.5 * (np.arange(-r, r + 1) / SMOOTH) ** 2); k /= k.sum()
     gy = np.convolve(np.pad(gy, r, mode='reflect', reflect_type='odd'), k, mode='valid')                                       # odd reflection keeps the ends where they are
     d = np.clip(np.diff(gy), SLOPE_MIN / (GRID - 1), SLOPE_MAX / (GRID - 1)); c = np.concatenate([[0.0], np.cumsum(d)]); inside = (gx >= _enc(kx[1])) & (gx <= _enc(kx[-2]))
