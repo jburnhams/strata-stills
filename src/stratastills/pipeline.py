@@ -20,7 +20,7 @@ import cv2, numpy as np
 from stratastills import detail, develop, export as X, gpu, images, inputs, jpeg_quality, lensfundb, match, preview, projects as P, settings, sizeplan, tonematch, transforms
 
 DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
-SHARPEN_AMOUNT = 3.0            # chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
+SHARPEN_AMOUNT = 2.0            # 2026-10-30: 3.0 -> 2.0 with detail.KNEE 0.03 in place of the hard clamp (amount 3 went far past the measured blur and the clamp cut it back, so thin lines came out as flat stepped bands and low-contrast fur as flat cells; docs/progress.md). Earlier: chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
 ORDER = ('develop', 'level', 'resize', 'sharpen', 'encode')
 LABELS = dict(develop='Develop', level='Level', resize='Size', sharpen='Sharpen', encode='Encode')
 
@@ -106,7 +106,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=6, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=7, encode=2)[stage]
 
 
 class State:

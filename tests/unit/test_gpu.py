@@ -233,6 +233,15 @@ def test_the_sharpening_activity_mask_matches_and_spares_the_flat_areas():
     a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK); b = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF), mask=detail.SHARPEN_MASK)); assert np.abs(a - b).max() < 3e-3
 
 
+def test_the_soft_limit_and_no_limit_of_the_sharpening_match():
+    from stratastills import detail
+    img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gg = gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 3.0, detail.ROLLOFF); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=3.0)
+    for overshoot, knee in ((0.0, 0.03), (None, 0.0)):
+        a = detail.sharpen(img, gain, overshoot=overshoot, knee=knee); b = c(gpu.sharpen(g(img), gg, overshoot=overshoot, knee=knee)); assert np.abs(a - b).max() < 3e-3
+    hard, soft = detail.sharpen(img, gain, overshoot=0.0), detail.sharpen(img, gain, overshoot=0.0, knee=0.03)
+    assert np.abs(soft - hard).max() <= 0.03 + 1e-4 and len(np.unique(np.round(soft[..., 0], 4))) > len(np.unique(np.round(hard[..., 0], 4)))   # never more than the knee beyond the range, and fewer pixels pinned to one value
+
+
 def test_blind_noise_finds_the_noise_of_a_picture_on_the_cpu_and_the_card():
     rng = np.random.default_rng(2); base = np.dstack([cv2.GaussianBlur(rng.random((H, W)).astype(np.float32), (0, 0), 12)] * 3) * 0.5 + 0.25
     for sigma in (0.5, 2.0, 5.0):
@@ -326,3 +335,11 @@ def test_a_radeon_780m_gets_the_gfx1100_override_before_torch_loads_unless_the_u
     assert gpu.amd_env(str(tmp_path)) == {'HSA_OVERRIDE_GFX_VERSION': '11.0.0'} and gpu.amd_env(str(tmp_path / 'none')) == {}
     (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110000\n'); assert gpu.amd_env(str(tmp_path)) == {}              # gfx1100 has kernels of its own
     (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110003\n'); monkeypatch.setenv('HSA_OVERRIDE_GFX_VERSION', '10.3.0'); assert gpu.amd_env(str(tmp_path)) == {}
+
+
+def test_dark_specks_are_dropped_alike_on_the_card_and_only_where_the_picture_is_noisy():
+    from stratastills import develop
+    rng = np.random.default_rng(9); img = np.dstack([np.full((H, W), 0.5)] * 3).astype(np.float32) + rng.normal(0, 0.005, (H, W, 3)).astype(np.float32); img[10, 10] -= 0.3; img[30, 40] += 0.3
+    noisy, quiet = np.full((H, W), 8.0, np.float32), np.full((H, W), 1.0, np.float32)
+    a = develop.drop_dark_specks(img, noisy); b = c(gpu.drop_dark_specks(g(img), g(noisy))); assert np.abs(a - b).max() < 1e-4
+    assert abs(a[10, 10, 0] - 0.5) < 0.03 and a[30, 40, 0] > 0.75 and np.array_equal(develop.drop_dark_specks(img, quiet), np.clip(img, 0, 1))      # the dark speck lifted, the bright one kept, nothing done to a quiet picture

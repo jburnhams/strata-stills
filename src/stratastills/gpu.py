@@ -478,14 +478,32 @@ def noise_map8(img, noise_profile, blur=8.0, gain=None):
 
 def clean_colour(rgb, sig8, desat_from=0.86):
     """develop.clean_colour on a (3, H, W) picture with the noise map `sig8` (H, W)."""
+    from stratastills import develop
     t = torch_(); y = luma(rgb); cb, cr = rgb[2] - y, rgb[0] - y; sg = sig8 / 255.0
     w = [((sg * 255 - lo) / (hi - lo)).clamp_(0, 1) for lo, hi in ((2.0, 6.0), (5.0, 11.0))]; out = []
-    for c in (cb, cr):
-        f = guided(c, y, 2, 4e-4) * (1 - w[0]) + (guided(c, y, 6, 1.5e-3) * (1 - w[1]) + guided(c, y, 14, 4e-3) * w[1]) * w[0]
-        out.append(t.sign(f) * (f.abs() - 0.3 * sg).clamp_(min=0))
+    c1s = [guided(c, y, 2, 4e-4) for c in (cb, cr)]; k = smoothstep((t.hypot(*c1s) / sg.clamp(min=1e-6) - develop.STRONG_COLOUR[0]) / (develop.STRONG_COLOUR[1] - develop.STRONG_COLOUR[0])); w[0] = w[0] * (1 - k)
+    for c, c1 in zip((cb, cr), c1s):
+        f = c1 * (1 - w[0]) + (guided(c, y, 6, 1.5e-3) * (1 - w[1]) + guided(c, y, 14, 4e-3) * w[1]) * w[0]
+        out.append(t.sign(f) * (f.abs() - 0.3 * sg * ((1 - w[0]) + w[0] * ((1 - w[1]) * develop.CORE_WIDE[0] + w[1] * develop.CORE_WIDE[1])) * (1 - k)).clamp_(min=0))
     roll = 1.0 - ((y - desat_from) / (1.0 - desat_from)).clamp_(0, 1) ** 2 * 0.9
     r = y + out[1] * roll; b = y + out[0] * roll; g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
     return t.stack([r, g, b]).clamp_(0, 1)
+
+
+def median3(y, rows=1024):
+    """The 3x3 median of a plane (H, W), edges replicated as cv2.medianBlur does, in strips of rows (the 9 shifted copies of a 24 MP plane would not fit a small card)."""
+    t = torch_(); F = t.nn.functional; h, w = y.shape; out = t.empty_like(y)
+    for r0 in range(0, h, rows):
+        r1 = min(h, r0 + rows); a = F.pad(y[max(0, r0 - 1):min(h, r1 + 1)][None, None], (1, 1, 1 if r0 == 0 else 0, 1 if r1 == h else 0), mode='replicate')[0, 0]
+        out[r0:r1] = t.stack([a[i:i + r1 - r0, j:j + w] for i in range(3) for j in range(3)]).median(dim=0).values
+    return out
+
+
+def drop_dark_specks(rgb, sig8):
+    """develop.drop_dark_specks on a (3, H, W) picture."""
+    from stratastills import develop
+    y = luma(rgb); d = median3(y) - y; n = gaussian(d.abs(), develop.SPECK_SPAN); lift = d * ((d > develop.SPECK_K * n) & (sig8 >= develop.SPECK_FROM)); del d, n
+    return (rgb + lift[None]).clamp_(0, 1)
 
 
 def core_luma(rgb, sig8, band_core, k=1.0):
@@ -527,15 +545,22 @@ def activity(y, mask):
     return gaussian(((t.hypot(gx, gy) - mask[0]) / (mask[1] - mask[0])).clamp(0, 1)[None], 1.5)[0]
 
 
-def sharpen_delta(rgb, gain, overshoot=0.05, mask=None):
+def sharpen_delta(rgb, gain, overshoot=0.05, mask=None, knee=0.0):
     """The change detail.sharpen makes to the luminance, (H, W), for a (3, H, W) picture and a half-spectrum gain: the luminance (BT.601 weights, as there) is filtered by FFT and the change held within the local range of the original plus `overshoot`. Each intermediate is freed as soon as it is not needed (the peak is about 5 planes: 21 MP in 0.45 GB, where holding them all took 1.3 GB and ran a 2 GB card out of memory)."""
     t = torch_(); F = t.nn.functional; h, w = rgb.shape[1:]; y = rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114
     f = t.fft.rfft2(y); f *= gain; d = t.fft.irfft2(f, s=(h, w)); del f; d -= y; d *= activity(y, mask); d += y                          # d is now the filtered, masked luminance
+    if overshoot is None: d -= y; return d
     pad = lambda a: F.pad(a[None, None], (2, 2, 2, 2), mode='replicate')
-    d = t.minimum(d, F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot); d = t.maximum(d, -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot); d -= y
+    hi = F.max_pool2d(pad(y), 5, stride=1)[0, 0] + overshoot
+    if knee: e = (d - hi).clamp_(min=0); d = t.minimum(d, hi) + knee * t.tanh(e / knee); del e
+    else: d = t.minimum(d, hi)
+    del hi; lo = -F.max_pool2d(pad(-y), 5, stride=1)[0, 0] - overshoot
+    if knee: e = (lo - d).clamp_(min=0); d = t.maximum(d, lo) - knee * t.tanh(e / knee); del e
+    else: d = t.maximum(d, lo)
+    del lo; d -= y
     return d
 
 
-def sharpen(rgb, gain, overshoot=0.05, mask=None):
+def sharpen(rgb, gain, overshoot=0.05, mask=None, knee=0.0):
     """detail.sharpen on a (3, H, W) picture with a half-spectrum gain: the change of `sharpen_delta` added equally to the three channels."""
-    return (rgb + sharpen_delta(rgb, gain, overshoot, mask)[None]).clamp_(0, 1)
+    return (rgb + sharpen_delta(rgb, gain, overshoot, mask, knee)[None]).clamp_(0, 1)

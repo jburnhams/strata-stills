@@ -94,3 +94,19 @@ def test_a_picture_is_cropped_to_the_centre_to_match_an_aspect_ratio():
     assert T._crop_to_aspect(img, 2.0) is img and T._crop_to_aspect(img, 2.005) is img                    # already that shape (within 1 %)
     wide = T._crop_to_aspect(img, 1.0); assert wide.shape == (10, 10) and wide[0, 0] == img[0, 5]         # too wide: sides trimmed equally
     tall = T._crop_to_aspect(img.T, 1.0); assert tall.shape == (10, 10) and tall[0, 0] == img.T[5, 0]     # too tall: top and bottom trimmed equally
+
+
+def test_a_preview_with_a_step_in_its_tone_gives_a_smooth_curve_with_no_flat_run():
+    x = np.sort(RNG.random(20000) ** 3).astype(np.float32); y = D.srgb_eotf(np.where(x < 0.08, 0.2 + x * 4, 0.62 + (x - 0.08) * 0.5).clip(0, 1) + RNG.normal(0, 0.01, x.size))   # a jump of the preview's tone at 0.08 (the posterising case), with noise
+    kx, ky = T.fit(x, np.clip(y, 0, 1)); ex = T._enc(kx); s = (np.diff(ky) / np.diff(ex))[1:][ky[2:] < 1]                                                     # the first step (the preview's black) and the clipped top are the picture's, not the fit's
+    assert kx[0] == 0 and ky[0] == 0 and (np.diff(kx) > 0).all() and (np.diff(ky) >= 0).all() and s.min() >= T.SLOPE_MIN - 1e-6 and s.max() <= T.SLOPE_MAX + 1e-6
+
+
+def test_isotonic_pools_a_dip_instead_of_holding_the_peak():
+    assert np.allclose(T._isotonic([0.1, 0.5, 0.3, 0.6]), [0.1, 0.4, 0.4, 0.6])
+
+
+def test_the_curve_reaches_white_where_the_preview_is_white_and_at_the_raws_clip():
+    x = np.sort(RNG.random(20000) ** 4 * 0.05).astype(np.float32); y = D.srgb_eotf(np.clip(x / 0.05, 0, 1) * 0.6)    # a night scene: the fitted pixels end at 0.6 of white
+    kx, ky = T.fit(x, y, white=0.2); assert ky[-1] == 1.0 and np.interp(0.25, kx, ky) > 0.9                             # the lamps, white in the preview from 0.2 up, are white here too
+    kx, ky = T.fit(x, y); assert ky[-1] == 1.0
