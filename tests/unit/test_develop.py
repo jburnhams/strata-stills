@@ -236,7 +236,7 @@ def test_match_from_decode_uses_the_card_and_gives_no_tone_without_a_preview(mon
 
 
 def test_the_colour_clean_up_keeps_real_colour_where_the_noise_is_high():
-    rng = np.random.default_rng(7); h, w = 64, 64; base = np.dstack([np.full((h, w), 0.30), np.full((h, w), 0.25), np.full((h, w), 0.40)]).astype(np.float32)      # a dusk sky: a faint, even blue
+    rng = np.random.default_rng(7); h, w = 64, 64; base = np.dstack([np.full((h, w), 0.30), np.full((h, w), 0.28), np.full((h, w), 0.34)]).astype(np.float32)      # a dusk sky: a faint, even blue (fainter than the noise is strong: the wide filters run)
     noisy = np.clip(base + rng.normal(0, 0.03, base.shape), 0, 1).astype(np.float32); sig8 = np.full((h, w), 12.0, np.float32)                                      # noise of a night picture: the widest filter runs
     y = lambda im: im @ np.array([0.2126, 0.7152, 0.0722], np.float32); cb = lambda im: float(np.mean(im[..., 2] - y(im)))
     assert cb(D.clean_colour(noisy, sig8)) > 0.95 * cb(base)                                                                                                      # with the raw-noise threshold as the coring it lost about a tenth
@@ -246,3 +246,20 @@ def test_a_small_strongly_coloured_light_keeps_its_colour_through_the_clean_up_o
     h, w = 64, 64; img = np.full((h, w, 3), 0.15, np.float32); yy, xx = np.mgrid[:h, :w]; lamp = (yy - 32) ** 2 + (xx - 32) ** 2 <= 9; img[lamp] = (0.9, 0.35, 0.3)      # a red lamp of 7 px on a dark sky
     out = D.clean_colour(img, np.full((h, w), 12.0, np.float32)); y = lambda v: v @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     assert (out[32, 32, 0] - y(out[32, 32])) > 0.9 * (img[32, 32, 0] - y(img[32, 32]))                                                                              # the 14 px filter took about half of it into the sky
+
+
+def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_their_colour(monkeypatch):
+    import contextlib, sys, types
+    from types import SimpleNamespace as NS
+    rng = np.random.default_rng(4); h, w = 64, 96; true = np.zeros((h, w, 3)); true[:, : w // 2] = (40, 400, 20); true[:, w // 2:] = (8000, 12000, 9000)          # a deep shadow (blue barely above black) beside a bright area for the fit
+    noise = rng.normal(0, 150, (h, w, 3)); gain = np.array([1.5, 1.0, 2.7])
+    def decode(ub, half):                                                                           # LibRaw's mapping: user_black -> 0 and the clip -> 65535, everything under 0 clipped
+        k = (16383 - 512) / (16383 - ub); v = ((true + noise) * k + (512 - ub) * 65535 / (16383 - ub) * gain); v = v[::2, ::2] if half else v
+        return np.clip(v, 0, 65535).astype(np.uint16)
+    class R:
+        sizes = NS(iwidth=w, iheight=h, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=0); black_level_per_channel = [512] * 4
+        def postprocess(self, half_size=False, user_black=512, **kw): return decode(user_black, half_size)
+    mod = types.ModuleType('rawpy'); mod.imread = lambda p: contextlib.nullcontext(R()); mod.ColorSpace = NS(raw=0); mod.DemosaicAlgorithm = NS(DHT=0); mod.HighlightMode = NS(Blend=0); monkeypatch.setitem(sys.modules, 'rawpy', mod)
+    shadow = lambda a: a[:, : w // 2 - 4].reshape(-1, 3).astype(float).mean(0)
+    kept = shadow(D._raw_u16('x.arw', False)); monkeypatch.setattr(D, 'PEDESTAL', 0); clipped = shadow(D._raw_u16('x.arw', False))
+    assert abs(kept[2] - 20) < 15 and clipped[2] > 50                                                                      # blue: its true mean is 20; clipping the noise at black put it near 60
