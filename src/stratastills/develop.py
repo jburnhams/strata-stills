@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 16
+VERSION = 17
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -602,9 +602,9 @@ def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=
 
 def _match_from_decode(path, u16, lens, analysis):
     """The matched tone for a picture too big to hold on the card: the decode shrunk to half size (area average, on the CPU: it is a quarter of the pixels), then the same steps as the whole-picture route on the card (lens opcodes, camera colour), then _match_on_device. Instead of a second development on the CPU (7 s on a 48 MP raw)."""
-    tags = read_dng_tags(path, lens); small = cv2.resize(u16, (u16.shape[1] // 4 * 2, u16.shape[0] // 4 * 2), interpolation=cv2.INTER_AREA); img = _opcodes_gpu(gpu.to_gpu_u16(small), tags)[0]; img = gpu_colour(img, tags)
+    tags = read_dng_tags(path, lens); small = cv2.resize(u16, (u16.shape[1] // 4 * 2, u16.shape[0] // 4 * 2), interpolation=cv2.INTER_AREA); img, field = _opcodes_gpu(gpu.to_gpu_u16(small), tags); img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be); del img; gpu.free()
+    tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be, field); del img; gpu.free()
     if analysis is not None: analysis['tone'] = tone
     return tone
 
@@ -621,13 +621,13 @@ def _opcodes_gpu(img, tags):
     return img, field
 
 
-def _match_on_device(path, img):
+def _match_on_device(path, img, field=None):
     """tonematch.match_curve for the linear picture `img` (3, H, W) on the device: shrunk there to the size the match works at, and fitted against the JPEG inside the raw (None: no usable preview, or it is not this picture)."""
     from stratastills import tonematch
     j = tonematch.embedded_jpeg(path)
     if j is None: return None
     t = gpu.torch_(); h, w = img.shape[1:]; s = tonematch.PROXY / max(h, w); size = (max(int(h * s), 8), max(int(w * s), 8))
-    small = gpu.to_numpy(t.stack([gpu.resize_area(c, size) for c in img])); return tonematch.match_curve(np.ascontiguousarray(small), j)                 # to_numpy gives (H, W, 3)
+    small = gpu.to_numpy(t.stack([gpu.resize_area(c, size) for c in img])); f = gpu.to_numpy(gpu.resize_area(field, size)) if field is not None else None; return tonematch.match_curve(np.ascontiguousarray(small), j, f)                 # to_numpy gives (H, W, 3)
 
 
 def gpu_colour(img, tags):
@@ -664,7 +664,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
     img, field = _opcodes_gpu(img, tags); img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     if tone == 'match':                                                                                                     # the tone of the camera's own JPEG, found from this very picture: shrunk on the card, fitted on the CPU (a few ms), no second development
-        tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be)
+        tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be, field)
         if analysis is not None: analysis['tone'] = tone
         ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover
     img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None; chroma_t = gpu.look_to(chroma, img.device)
