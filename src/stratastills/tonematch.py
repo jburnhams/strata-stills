@@ -44,16 +44,23 @@ def _rank_corr(a, b):
     ra, rb = np.argsort(np.argsort(a)).astype(np.float32), np.argsort(np.argsort(b)).astype(np.float32); return float(np.corrcoef(ra, rb)[0, 1])
 
 
-def align(linear, jpeg):
-    """(the developed picture, the preview's encoded RGB 0..1) at the same small size and the same way up, or None. The preview may be rotated against the developed raw (EXIF orientation) and may differ in the edges it shows, so it is turned the way that agrees best (by the rank correlation of the luminances) and cropped to the aspect of the raw."""
+def align(linear, jpeg, field=None):
+    """(the developed picture, the preview's encoded RGB 0..1) at the same small size and the same way up, or None. The preview may be rotated against the developed raw (EXIF orientation) and may differ in the edges it shows, so it is turned the way that agrees best (by the rank correlation of the luminances) and cropped to the aspect of the raw.
+    `field`: the lens-shading gain the picture got (H, W), or None. Only when the picture as corrected does not agree with the preview is it tried again with that gain taken back out: a 16 mm on the NEX-5N lifts its corners 1-2 stops, the camera's preview leaves them dark, and the agreement fell from 0.98 to 0.81, under MIN_AGREEMENT, so the picture got no matched tone at all and the fixed lightness rule lifted a dark room into a green glow. Not always: where both agree, matching the picture as corrected keeps the camera's overall brightness (matching with the gain taken out made the A7C set 4 lightness units brighter than its JPEGs, the corrected corners lifting the whole picture)."""
     from stratastills import develop
-    h, w = linear.shape[:2]; best = None
-    for k in (0, 1, 2, 3):
-        j = np.rot90(jpeg, k); jh, jw = j.shape[:2]
-        if abs((jw / jh) / (w / h) - 1) > 0.15: continue                                 # the aspect must be about that of the raw, whatever the crop of the preview
-        j = _crop_to_aspect(np.ascontiguousarray(j), w / h); s = PROXY / max(w, h); size = (max(int(w * s), 8), max(int(h * s), 8))
-        a = _proxy(linear, size); b = _proxy(j.astype(np.float32) / 255.0, size); c = _rank_corr((a @ LUMA).ravel()[::7], (develop.srgb_eotf(b) @ LUMA).ravel()[::7])
-        if best is None or c > best[0]: best = (c, a, b)
+    h, w = linear.shape[:2]; s = PROXY / max(w, h); size = (max(int(w * s), 8), max(int(h * s), 8)); a0 = _proxy(linear, size)
+    def best_of(a):
+        best = None
+        for k in (0, 1, 2, 3):
+            j = np.rot90(jpeg, k); jh, jw = j.shape[:2]
+            if abs((jw / jh) / (w / h) - 1) > 0.15: continue                             # the aspect must be about that of the raw, whatever the crop of the preview
+            j = _crop_to_aspect(np.ascontiguousarray(j), w / h); b = _proxy(j.astype(np.float32) / 255.0, size); c = _rank_corr((a @ LUMA).ravel()[::7], (develop.srgb_eotf(b) @ LUMA).ravel()[::7])
+            if best is None or c > best[0]: best = (c, a, b)
+        return best
+    best = best_of(a0)
+    if field is not None and (best is None or best[0] < MIN_AGREEMENT):
+        alt = best_of(a0 / np.maximum(_proxy(np.asarray(field, np.float32), size), 1e-3)[..., None])
+        if alt is not None and (best is None or alt[0] > best[0]): best = alt
     return None if best is None or best[0] < MIN_AGREEMENT else best[1:]
 
 
@@ -92,12 +99,12 @@ def fit(x, y, bins=BINS, white=None):
     return _dec(gx), gy
 
 
-def match_curve(linear, jpeg):
+def match_curve(linear, jpeg, field=None):
     """What matches the developed `linear` picture (float32 (H, W, 3), no tone curve applied) to the camera `jpeg` (uint8 RGB): {'curve': flat pairs (linear luminance, display-encoded output), 'chroma': flat pairs (display luminance, scale of the colour)}, or None.
     The curve is the luminance match. The colour of a curve applied to each channel is not the camera's (a strong shadow lift makes shadows far more colourful than Sony's DRO does), so the chroma scale is measured too: in slices of display luminance, the colour of the preview over the colour of our picture after the curve."""
     from stratastills import develop
     if jpeg is None or jpeg.shape[0] * jpeg.shape[1] < MIN_PREVIEW: return None
-    al = align(linear, jpeg)
+    al = align(linear, jpeg, field)
     if al is None: return None
     A, J = al; a = A @ LUMA; b = develop.srgb_eotf(J) @ LUMA; ok = (a > 1e-4) & (b > 3e-4) & (b < 0.97) & (A.max(axis=2) < 0.97)
     if ok.sum() < MIN_PIXELS: return None
@@ -118,4 +125,4 @@ def curve_for(path, recover=0.35, lens='auto'):
     from stratastills import develop
     j = embedded_jpeg(path)
     if j is None: return None
-    return match_curve(develop.develop_parts(path, half=True, ev=0.0, recover=recover, lens=lens)['linear'], j)
+    P = develop.develop_parts(path, half=True, ev=0.0, recover=recover, lens=lens); return match_curve(P['linear'], j, P['gain'])

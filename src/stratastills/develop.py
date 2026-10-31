@@ -15,7 +15,7 @@ import cv2, numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 15
+VERSION = 17
 D65 = np.array([0.95047, 1.0, 1.08883]); D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560], [0.0556434, -0.2040259, 1.0572252]])
 BRADFORD = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
@@ -290,12 +290,12 @@ def clean_colour(rgb, sig8, desat_from=0.86):
     Near white the colour is rolled off (from luminance `desat_from`), because a clipped channel there gives purple and blue fringes. Luminance is not touched here."""
     y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32); cb, cr = rgb[..., 2] - y, rgb[..., 0] - y; sg = sig8 / 255.0
     w = [np.clip((sg * 255 - lo) / (hi - lo), 0, 1) for lo, hi in ((2.0, 6.0), (5.0, 11.0))]                  # how much of the middle and the widest filter to use
-    c1s = [_guided(c, y, 2, 4e-4) for c in (cb, cr)]; k = np.clip((np.hypot(*c1s) / np.maximum(sg, 1e-6) - STRONG_COLOUR[0]) / (STRONG_COLOUR[1] - STRONG_COLOUR[0]), 0, 1); k = k * k * (3 - 2 * k); w[0] = w[0] * (1 - k)     # colour far stronger than the noise is real (a red lamp, a lit sign): the wide filters would spread it into the dark around it, and coring it only takes colour away
+    c1s = [_guided(c, y, 2, 4e-4) for c in (cb, cr)]; k = np.clip((np.hypot(*c1s) / np.maximum(sg, 1e-6) - STRONG_COLOUR[0]) / (STRONG_COLOUR[1] - STRONG_COLOUR[0]), 0, 1); k = k * k * (3 - 2 * k) * w[0]; w[0] = w[0] - k     # colour far stronger than the noise is real (a red lamp, a lit sign): where the wide filters would run they would spread it into the dark around it, so it keeps to the 2 px one (still cored: without the coring a clean drone picture's colour came out 12 % stronger than the camera's)
     out = []
     for c, c1 in zip((cb, cr), c1s):
         c2 = _guided(c, y, 6, 1.5e-3); c3 = _guided(c, y, 14, 4e-3)
         f = c1 * (1 - w[0]) + (c2 * (1 - w[1]) + c3 * w[1]) * w[0]
-        tau = 0.3 * sg * ((1 - w[0]) + w[0] * ((1 - w[1]) * CORE_WIDE[0] + w[1] * CORE_WIDE[1])) * (1 - k); out.append(np.sign(f) * np.maximum(np.abs(f) - tau, 0))
+        tau = 0.3 * sg * ((1 - w[0]) + w[0] * ((1 - w[1]) * CORE_WIDE[0] + w[1] * CORE_WIDE[1])); out.append(np.sign(f) * np.maximum(np.abs(f) - tau, 0))
     roll = 1.0 - np.clip((y - desat_from) / (1.0 - desat_from), 0, 1) ** 2 * 0.9
     cb, cr = out[0] * roll, out[1] * roll; r = y + cr; b = y + cb; g = (y - 0.2126 * r - 0.0722 * b) / 0.7152
     return np.clip(np.dstack([r, g, b]), 0, 1).astype(np.float32)
@@ -457,13 +457,38 @@ def _has_opcodes(path):
     except Exception: return False
 
 
+PEDESTAL = 256                 # raw units kept below black at the decode (_unbiased_dark); 0: LibRaw's own decode, the noise below black clipped to 0
+UNDER_BLACK = 0.003            # the share of photosites under black from which _unbiased_dark is used
+DARK_BLUR = 1.5                # px: the deepest shadows are averaged over this before the clip
+
+
+def _unbiased_dark(path, r, kw, user_black):
+    """LibRaw's decode with the noise below black kept until it has been averaged. LibRaw clips everything under black to 0 at once, so in the deepest shadows the noise can only push a channel up, and most where the white-balance gain is largest (blue and red under a warm light): the dark corners, lifted again by the lens-shading gain, came out magenta (NEX-5N, 16 mm, a dark bedroom: blue over green 0.45 in the corners, 0.24 unclipped).
+    The raw is decoded with black lowered by PEDESTAL; LibRaw then maps user_black to 0 and the clip to 65535, so each channel is k * (the usual value) + o, with k and o fitted on the mid-tones of two half-size decodes (k = (white - black) / (white - user_black), o the pedestal times that channel's scale: exactly a straight line). The pedestal is taken off in float (values below 0 stay), where the local mean is under about 2 noise sigmas the pixel is replaced by its mean over DARK_BLUR px (unbiased, because taken before the clip), and only then is the picture clipped at 0. What clipped (65535) stays at the clip."""
+    import rawpy
+    def half_decode(ub=None):
+        with rawpy.imread(path) as q: return q.postprocess(**dict(kw, half_size=True, **({'user_black': ub} if ub is not None else {}))).astype(np.float32)
+    b = r.postprocess(**dict(kw, user_black=user_black)).astype(np.float32); ah, bh = half_decode(), half_decode(user_black); out = np.empty(b.shape, np.float32)
+    for c in range(3):
+        a64, b64 = ah[..., c].astype(np.float64), bh[..., c].astype(np.float64); m = (a64 > 2000) & (a64 < 60000); k = np.polyfit(a64[m], b64[m], 1)[0] if m.sum() > 200 else 1.0      # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
+        lo = (a64 > 1000) & (a64 < 20000); o = float(np.median(b64[lo] - k * a64[lo])) if lo.sum() > 200 else 0.0                                                          # the offset from the low mid-tones (well above the noise, so not clipped): the fit's intercept, extrapolated from the whole range, was tens of levels off and tinted the deepest shadows
+        v = np.where(b[..., c] >= 65535 - 0.5, 65535.0, (b[..., c] - o) / k); vs = cv2.GaussianBlur(v, (0, 0), DARK_BLUR)
+        neg = v[v < 0]; sig = max(float(np.sqrt(np.mean(neg.astype(np.float64) ** 2))), 1.0) if neg.size > 1000 else 1.0                                               # the noise near black, from the values under it (only noise takes a pixel below black): the darkest 5 % of a sunlit drone picture is shadow with texture, which counted as noise and was blurred away
+        w = np.clip((vs / sig - 1.0) / 2.0, 0, 1); w = w * w * (3 - 2 * w); out[..., c] = w * v + (1 - w) * vs
+    return np.clip(out + 0.5, 0, 65535).astype(np.uint16)
+
+
 def _raw_u16(path, half):
     """The demosaiced raw as LibRaw gives it: uint16 (H, W, 3), camera RGB, white-balanced, linear. A linear DNG (demosaiced RGB, which LibRaw refuses: Lightroom's merged panoramas) is read by lineardng.py into the same form."""
     import rawpy
     try:
         with rawpy.imread(path) as r:
             flip = r.sizes.flip                                                                                                                                                  # before postprocess: with user_flip=0 LibRaw overwrites it with 0
-            out = r.postprocess(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+            kw = dict(half_size=half, use_camera_wb=True, no_auto_bright=True, output_bps=16, gamma=(1, 1), output_color=rawpy.ColorSpace.raw, demosaic_algorithm=rawpy.DemosaicAlgorithm.DHT, highlight_mode=rawpy.HighlightMode.Blend, user_flip=0)
+            blacks = list(getattr(r, 'black_level_per_channel', None) or []); ped = PEDESTAL if PEDESTAL and blacks and len(set(blacks)) == 1 and blacks[0] >= PEDESTAL else 0
+            raw = getattr(r, 'raw_image_visible', None)
+            if ped and raw is not None and float((raw[::4, ::4] < blacks[0]).mean()) < UNDER_BLACK: ped = 0                                                           # a clean picture (few photosites under black) has no bias to remove: LibRaw's own decode, as the device profiles of clean pictures were fitted on (the pedestal route moved a sunlit drone picture's colour by 0.25 for nothing)
+            out = _unbiased_dark(path, r, kw, blacks[0] - ped) if ped else r.postprocess(**kw)
             z = r.sizes; k = 2 if half else 1
             if z.crop_width and (z.crop_width, z.crop_height) != (z.iwidth, z.iheight) and not (os.path.splitext(path)[1].lower() == '.dng' and _has_opcodes(path)):               # the maker's active area (Sony .ARW: 6024x4024 decoded, 6000x4000 picture) is cut here, for every raw alike; except a DNG that carries opcodes (lens, shading): they are in the sensor's geometry, so it keeps it
                 out = out[z.crop_top_margin // k: (z.crop_top_margin + z.crop_height) // k, z.crop_left_margin // k: (z.crop_left_margin + z.crop_width) // k]
@@ -577,9 +602,9 @@ def _develop_gpu(path, half, ev, denoise, recover, highlight_contrast, analysis=
 
 def _match_from_decode(path, u16, lens, analysis):
     """The matched tone for a picture too big to hold on the card: the decode shrunk to half size (area average, on the CPU: it is a quarter of the pixels), then the same steps as the whole-picture route on the card (lens opcodes, camera colour), then _match_on_device. Instead of a second development on the CPU (7 s on a 48 MP raw)."""
-    tags = read_dng_tags(path, lens); small = cv2.resize(u16, (u16.shape[1] // 4 * 2, u16.shape[0] // 4 * 2), interpolation=cv2.INTER_AREA); img = _opcodes_gpu(gpu.to_gpu_u16(small), tags)[0]; img = gpu_colour(img, tags)
+    tags = read_dng_tags(path, lens); small = cv2.resize(u16, (u16.shape[1] // 4 * 2, u16.shape[0] // 4 * 2), interpolation=cv2.INTER_AREA); img, field = _opcodes_gpu(gpu.to_gpu_u16(small), tags); img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
-    tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be); del img; gpu.free()
+    tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be, field); del img; gpu.free()
     if analysis is not None: analysis['tone'] = tone
     return tone
 
@@ -596,13 +621,13 @@ def _opcodes_gpu(img, tags):
     return img, field
 
 
-def _match_on_device(path, img):
+def _match_on_device(path, img, field=None):
     """tonematch.match_curve for the linear picture `img` (3, H, W) on the device: shrunk there to the size the match works at, and fitted against the JPEG inside the raw (None: no usable preview, or it is not this picture)."""
     from stratastills import tonematch
     j = tonematch.embedded_jpeg(path)
     if j is None: return None
     t = gpu.torch_(); h, w = img.shape[1:]; s = tonematch.PROXY / max(h, w); size = (max(int(h * s), 8), max(int(w * s), 8))
-    small = gpu.to_numpy(t.stack([gpu.resize_area(c, size) for c in img])); return tonematch.match_curve(np.ascontiguousarray(small), j)                 # to_numpy gives (H, W, 3)
+    small = gpu.to_numpy(t.stack([gpu.resize_area(c, size) for c in img])); f = gpu.to_numpy(gpu.resize_area(field, size)) if field is not None else None; return tonematch.match_curve(np.ascontiguousarray(small), j, f)                 # to_numpy gives (H, W, 3)
 
 
 def gpu_colour(img, tags):
@@ -639,7 +664,7 @@ def _develop_gpu_on_device(path, u16, half, ev, denoise, recover, highlight_cont
     img, field = _opcodes_gpu(img, tags); img = gpu_colour(img, tags)
     be = float(_rationals(tags['BaselineExposure'])[0]) if 'BaselineExposure' in tags else 0.0
     if tone == 'match':                                                                                                     # the tone of the camera's own JPEG, found from this very picture: shrunk on the card, fitted on the CPU (a few ms), no second development
-        tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be)
+        tone = _match_on_device(path, img.clamp(min=0) * 2.0 ** be, field)
         if analysis is not None: analysis['tone'] = tone
         ev = 'camera' if tone or ev == 'match' else ev; recover = (0.0 if tone else 0.35) if recover == 'auto' else recover
     img = gpu.local_tone(img.clamp(min=0) * 2.0 ** be, recover, HIGHLIGHTS); curve, chroma = tone_parts(tone, tags); lut = tone_lut(curve); lut_t = t.from_numpy(lut).to(img.device) if lut is not None else None; chroma_t = gpu.look_to(chroma, img.device)

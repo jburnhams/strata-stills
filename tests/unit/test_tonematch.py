@@ -110,3 +110,9 @@ def test_the_curve_reaches_white_where_the_preview_is_white_and_at_the_raws_clip
     x = np.sort(RNG.random(20000) ** 4 * 0.05).astype(np.float32); y = D.srgb_eotf(np.clip(x / 0.05, 0, 1) * 0.6)    # a night scene: the fitted pixels end at 0.6 of white
     kx, ky = T.fit(x, y, white=0.2); assert ky[-1] == 1.0 and np.interp(0.25, kx, ky) > 0.9                             # the lamps, white in the preview from 0.2 up, are white here too
     kx, ky = T.fit(x, y); assert ky[-1] == 1.0
+
+
+def test_a_picture_whose_corners_were_lifted_still_matches_a_preview_that_kept_them_dark():
+    lin, jpg = scene(); h, w = lin.shape[:2]; yy, xx = np.mgrid[:h, :w]; r2 = ((yy - h / 2) / (h / 2)) ** 2 + ((xx - w / 2) / (w / 2)) ** 2
+    field = (1 + 3.0 * r2).astype(np.float32); vign = np.clip(jpg.astype(np.float32) / field[..., None] ** 0.6, 0, 255).astype(np.uint8)      # the camera's preview: corners left dark
+    assert T.match_curve(lin * field[..., None], vign) is None and T.match_curve(lin * field[..., None], vign, field) is not None                  # without the field it does not agree with the preview; with it, it does
