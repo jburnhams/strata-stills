@@ -5,7 +5,7 @@
 API (JSON): GET /api/report (is there a visual report) and GET /report/ (the report's own pages, from settings.report_dir()); GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
 GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
-import os, threading
+import json, os, re, threading, time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -49,6 +49,13 @@ class RulesIn(BaseModel):
     rules: list[dict]
 
 
+class FlagIn(BaseModel):
+    flag: bool = True
+    reasons: list[str] = []
+    note: str = ''
+    status: str = 'open'                        # open | fixable | deferred | fixed
+
+
 class SettingsIn(BaseModel):
     projects_dir: str | None = None
 
@@ -72,6 +79,30 @@ def create_app():
         root = settings.report_dir(); f = os.path.join(root, 'index.html')     # the visual reports (scripts/build_report.py -> neutral/, scripts/build_lr_report.py -> auto/): static files, looked up per request so one built after the server started shows up
         peers = {d: os.path.exists(os.path.join(root, d, 'index.html')) for d in ('neutral', 'auto')}
         return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None, **peers)
+
+    FLAG_REPORTS = ('neutral', 'auto'); FLAG_PIC = re.compile(r'^[A-Za-z0-9_.\- ]{1,120}$'); flag_lock = threading.Lock()
+
+    def flag_file(report):
+        if report not in FLAG_REPORTS: raise HTTPException(404, 'no such report')
+        return os.path.join(settings.report_flags_dir(), f'{report}.json')
+
+    @app.get('/api/report-flags/{report}')
+    def get_flags(report: str):
+        f = flag_file(report)
+        try: return json.load(open(f, encoding='utf8'))
+        except (OSError, ValueError): return {}
+
+    @app.put('/api/report-flags/{report}/{pic}')
+    def put_flag(report: str, pic: str, body: FlagIn):
+        f = flag_file(report)
+        if not FLAG_PIC.match(pic): raise HTTPException(400, 'bad picture id')
+        with flag_lock:                                                                                 # the flags of a report are one small file: read, change one picture, write whole (through a temporary file)
+            try: cur = json.load(open(f, encoding='utf8'))
+            except (OSError, ValueError): cur = {}
+            if body.flag or body.reasons or body.note: now = time.strftime('%Y-%m-%dT%H:%M:%S'); cur[pic] = dict(flag=body.flag, reasons=body.reasons[:20], note=body.note[:2000], status=body.status if body.status in ('open', 'fixable', 'deferred', 'fixed') else 'open', at=now, first=cur.get(pic, {}).get('first', now))      # `at` is the last change, `first` when it was first flagged: to see which to revisit
+            else: cur.pop(pic, None)
+            os.makedirs(os.path.dirname(f), exist_ok=True); tmp = f + '.tmp'; json.dump(cur, open(tmp, 'w', encoding='utf8'), indent=1, sort_keys=True); os.replace(tmp, f)
+        return cur.get(pic, {})
 
     @app.get('/report')
     def report_slash(): return RedirectResponse('/report/')

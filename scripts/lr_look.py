@@ -11,7 +11,8 @@ TARGETS = D.FINAL_L + D.FINAL_C + [k for k, _ in SLIDERS]
 N_LOOK = len(D.FINAL_L) + len(D.FINAL_C)
 SLOPE = (0.25, 4.0)
 CHROMA_SCALE = (0.8, 1.4)
-CAST_MAX = 4.0
+CAST_MAX = 6.0
+CAST_TRUST = 0.6        # tried 0.6, 0.8, 1.0 on the 31 pictures: the mean cast error from the finals is lowest at 0.6 (3.52, 3.63, 3.74): the predicted cast is noisy, following it further adds error on the usual pictures
 COLOUR_TRUST = 0.6      # the model's colour change explains little of the spread (correlation about 0.55-0.8): go only part of the way, so that a wrong guess costs little at the extremes (indoor, tungsten, skin) where it shows
 SLIDER_TRUST = 0.7      # the sliders are only moderately predictable (R2 0.2-0.5): the prediction counts for 70 %, the person's typical value for the rest
 GUIDE_EPS = 0.01
@@ -110,10 +111,10 @@ def apply_look(bgr, pred, cam):
     x, y = curve_knots(np.array(src), np.array(dst)); L2 = np.interp(L, x, y).astype(np.float32)
     p = dict(zip(TARGETS, pred)); C = np.hypot(a, b); n_chroma, n_a, n_b = float(C.mean()), float(a.mean()), float(b.mean())                          # the change is measured from OUR neutral picture's own colour, not the camera's (they differ: the camera's JPEG is not our neutral)
     scale = float(np.clip(1 + COLOUR_TRUST * (p['C_mean'] / max(n_chroma, 0.5) - 1), *CHROMA_SCALE))
-    da, db = (float(np.clip(COLOUR_TRUST * (p['a_mean'] - n_a), -CAST_MAX, CAST_MAX)), float(np.clip(COLOUR_TRUST * (p['b_mean'] - n_b), -CAST_MAX, CAST_MAX)))
+    da, db = (float(np.clip(CAST_TRUST * (p['a_mean'] - n_a), -CAST_MAX, CAST_MAX)), float(np.clip(CAST_TRUST * (p['b_mean'] - n_b), -CAST_MAX, CAST_MAX)))
     hue = np.degrees(np.arctan2(b, a)) % 360; skin = np.exp(-0.5 * ((hue - 50) / 22) ** 2)                                                      # skin sits around hue 35-65 in CIELAB: its colour is the one that looks wrong first, so it is left nearer the neutral picture
     w = 1 / (1 + (C / 45) ** 2) * (1 - SKIN_HOLD * skin); s = 1 + (scale - 1) * w                                                             # a vibrance-like boost: strong colours (already saturated) and skin get less of it
-    wl = np.clip(L2 / 20.0, 0, 1) * (1 - SKIN_HOLD * skin)                                                                                  # no cast pushed into black, or into skin
+    wl = np.clip(L2 / 20.0, 0, 1)                                                                                                         # no cast pushed into black (and none withheld from skin: in warm indoor light the whole picture is skin-coloured, and holding the cast there left it red)
     a2, b2 = a * s + da * wl, b * s + db * wl; rot = skin_rotation(L2, a2, b2)
     if rot: c, sn = np.float32(np.cos(np.radians(rot))), np.float32(np.sin(np.radians(rot))); a2, b2 = a2 * c - b2 * sn, a2 * sn + b2 * c                          # the hue turned a little as a whole, like a white-balance nudge
     out = cv2.cvtColor(np.dstack([L2, a2, b2]), cv2.COLOR_LAB2BGR)

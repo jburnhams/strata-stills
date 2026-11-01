@@ -56,3 +56,12 @@ def test_the_visual_report_is_served_from_its_folder(client, tmp_path, monkeypat
     monkeypatch.setenv('STRATASTILLS_REPORT', str(rep)); j = client.get('/api/report').json(); assert j['available'] is True and j['auto'] is True and j['neutral'] is False
     assert client.get('/report/').text == '<h1>report</h1>' and client.get('/report/assets/a.jpg').content == b'jpg' and client.get('/report', follow_redirects=False).status_code in (302, 307)
     assert client.get('/report/../secret.txt').status_code == 404 and client.get('/report/%2e%2e/secret.txt').status_code == 404
+
+
+def test_report_flags_are_kept_per_report_and_picture(client, tmp_path, monkeypatch):
+    monkeypatch.setenv('STRATASTILLS_REPORT_FLAGS', str(tmp_path / 'flags'))
+    assert client.get('/api/report-flags/auto').json() == {} and client.get('/api/report-flags/other').status_code == 404
+    r = client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(flag=True, reasons=['too red / warm'], note='skin ok, room red', status='deferred')); assert r.status_code == 200 and r.json()['status'] == 'deferred'
+    assert client.get('/api/report-flags/auto').json()['2023-12-16_DSC05595']['reasons'] == ['too red / warm'] and client.get('/api/report-flags/neutral').json() == {}
+    assert client.put('/api/report-flags/auto/..%2Fx', json=dict(flag=True)).status_code in (400, 404, 405)
+    client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(flag=False)); assert client.get('/api/report-flags/auto').json() == {}
