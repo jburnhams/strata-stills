@@ -64,7 +64,9 @@ def fit_batch(cam, fin, steps=400, lr=0.05):
     bl = lambda x: torch.nn.functional.conv2d(torch.nn.functional.pad(x, (2,) * 4, mode='replicate'), K, groups=3); tgt = bl(fin)
     for i in range(steps):
         for g in opt.param_groups: g['lr'] = lr * (0.1 + 0.9 * (1 - i / steps))
-        opt.zero_grad(); loss = torch.nn.functional.smooth_l1_loss(bl(transform(cam, p)), tgt, beta=2.0); loss.backward(); opt.step()
+        opt.zero_grad(); nl = len(L_KNOTS) - 1; nc = len(C_KNOTS); gl = torch.cat([p[:, nl:nl + nc], p[:, nl + nc:nl + 2 * nc]], 1)
+        prior = 0.05 * ((p[:, nl + 1:nl + nc] - p[:, nl:nl + nc - 1]) ** 2).mean() + 0.05 * ((p[:, nl + nc + 1:nl + 2 * nc] - p[:, nl + nc:nl + 2 * nc - 1]) ** 2).mean() + 0.01 * (gl ** 2).mean()          # gains vary smoothly with chroma and stay near 1 where the pictures say little
+        loss = torch.nn.functional.smooth_l1_loss(bl(transform(cam, p)), tgt, beta=2.0) + prior; loss.backward(); opt.step()
     return p.detach()
 
 

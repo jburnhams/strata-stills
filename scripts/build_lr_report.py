@@ -5,12 +5,12 @@ Needs candidates/personal/ (scripts/lr_dataset.py pairs, catalogue, features).""
 import argparse, hashlib, html, json, os, shutil, subprocess, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import build_report as BR, lr_dataset as D, lr_look as LK
+import build_report as BR, lr_dataset as D, lr_look as LK, lr_tmodel as TM
 
 ROOT = BR.ROOT
 LONG = 3000                    # every picture brought to the final's framing at this long side
 WIN = (200, 140); ZOOM = 2; OVERVIEW = 1100; JPEG_Q = 82
-NAMES = ['Camera', 'Neutral (ours)', 'Lightroom (yours)', 'Auto (ours)']
+NAMES = ['Camera', 'Neutral (ours)', 'Lightroom (yours)', 'Auto (ours)', 'Auto 2 (learned colour)']
 KEY_SETTINGS = ['ProcessVersion', 'CameraProfile', 'WhiteBalance', 'Temperature', 'Tint', 'Exposure2012', 'Contrast2012', 'Highlights2012', 'Shadows2012', 'Whites2012', 'Blacks2012', 'Texture', 'Clarity2012', 'Dehaze', 'Vibrance', 'Saturation', 'ToneCurveName2012', 'PostCropVignetteAmount', 'LensProfileEnable', 'HasCrop', 'CropAngle']
 CATEGORIES = [('usual', 'a usual picture', 0.4), ('dark_cam', 'dark in camera', 0.12), ('bright_cam', 'bright in camera', 0.12), ('kept_dark', 'you kept it darker than the camera suggests', 0.12), ('brightest', 'one of your brightest finals', 0.1), ('masks', 'you used masks or brushes', 0.07), ('extreme', 'a slider far from your usual', 0.07)]
 
@@ -108,6 +108,7 @@ def build(a):
     global SHOOTS
     rows, X, names, Y, idx, G = LK.load(); SHOOTS = G; test = np.array([LK.test_shoot(g) for g in G]); rng = np.random.default_rng(a.seed)
     say = lambda m: print(m, flush=True); say(f'{len(X)} pairs, {test.sum()} in {len(set(G[test]))} held-out shoots; training the look model on the other {(~test).sum()}')
+    tmodels = TM.train_cached(a.hard_weight)
     models = LK.train_cached(X[~test], Y[~test]); P = LK.predict(models, X[test]); cam = X[test][:, [names.index(f'L_p{p}') for p in D.PCTS]]
     held = dict(model=np.abs(P[:, :9] - Y[test][:, :9]).mean(0), camera=np.abs(cam - Y[test][:, :9]).mean(0), avg=np.abs(np.median(Y[~test][:, :9], 0) - Y[test][:, :9]).mean(0))
     if a.stems: want = set(a.stems.split(',')); chosen = [i for i in range(len(idx)) if test[i] and os.path.splitext(os.path.basename(rows[idx[i]]['raw']))[0] in want]; why = {i: 'asked for' for i in chosen}
@@ -126,7 +127,7 @@ def build(a):
             o = ex.get(raw, {}).get('Orientation', 1); nim, nrec = dev[raw]
             cam_a, how_c = to_final(camera, row, o, fin); neu_a, how_n = to_final(D.unorient(nim, o), row, o, fin)          # our output is turned the way up already: back to the sensor's frame for Lightroom's crop
             pred = LK.predict(models, X[i:i + 1])[0]; auto, did = LK.apply_look(neu_a, pred, dict(zip(names, X[i])))
-            ims = [cam_a, neu_a, fin, auto]; err = errors([cam_a, neu_a, auto], fin); summary.append((why[i], err))
+            auto2, _ = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i:i + 1])[0]); ims = [cam_a, neu_a, fin, auto, auto2]; err = errors([cam_a, neu_a, auto, auto2], fin); summary.append((why[i], err))
             maps = [('auto against yours', tone_map(fin, auto)), ('neutral against yours', tone_map(fin, neu_a)), ('camera against yours', tone_map(fin, cam_a))]
             kk = 1000 / max(W, H); small = lambda m: cv2.resize(m, (round(W * kk), round(H * kk)), interpolation=cv2.INTER_AREA)
             sel = windows([(kind, small(m)) for kind, m in maps], (round(WIN[0] * kk), round(WIN[1] * kk)), a.crops)
@@ -149,7 +150,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     tabs_html = '<div class=tabs>' + ''.join(f'<button data-src="assets/{fn}"{" class=on" if j == 2 else ""}>{html.escape(nm)}</button>' for j, (nm, fn) in enumerate(tabs)) + '</div>'
     boxes = ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks)
     crops = ''.join(f'<h3>Crop {b["n"]}: where {html.escape(b["kind"])} differ most</h3><div class=crop><div class=ov style="width:260px"><img src="assets/{tabs[2][1]}" width=260><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div><img src="assets/{b["sheet"]}" width={b["pw"] * 4 // 2} style="max-width:100%"></div>' for b in blocks)
-    errs = '<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>' + ''.join(f'<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3]], err)) + '</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>'
+    errs = '<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>' + ''.join(f'<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], err)) + '</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>'
     key = {k: row.get(k, '') for k in KEY_SETTINGS if k in row}; rest = {k: v for k, v in sorted(row.items()) if k not in key and k not in ('final', 'raw')}
     look = '<table class=t><tr><th></th>' + ''.join(f'<th>{t}</th>' for t in LK.TARGETS) + '</tr>' + ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in vals) + '</tr>' for nm, vals in (('predicted', pred), ('your final', actual))) + '</table>'
     did_html = table({'tone curve on L (from, to)': ' '.join(f'{x:g}->{y:g}' for x, y in did['curve']), 'neutral lightness percentiles': did['source_L'], 'chroma scale': did['chroma_scale'], 'local sliders used': did['sliders'], 'colour cast moved (a, b)': did['cast'], 'camera aligned': how[0], 'neutral aligned': how[1]})
@@ -166,17 +167,17 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
 
 def page(sections, nav, summary, held, n_shoots, n_pics):
     med = lambda v: float(np.mean(v)) if v else float('nan')
-    rows = ''.join(f'<tr><th>{html.escape(lab)} ({sum(1 for w, _ in summary if w == lab)})</th>' + ''.join(f'<td>{med([e[j][0] for w, e in summary if w == lab]):.1f} / {med([e[j][1] for w, e in summary if w == lab]):.1f}</td>' for j in range(3)) + '</tr>' for _, lab, _ in CATEGORIES if any(w == lab for w, _ in summary))
-    rows += '<tr><th>all shown</th>' + ''.join(f'<td>{med([e[j][0] for _, e in summary]):.1f} / {med([e[j][1] for _, e in summary]):.1f}</td>' for j in range(3)) + '</tr>'
+    rows = ''.join(f'<tr><th>{html.escape(lab)} ({sum(1 for w, _ in summary if w == lab)})</th>' + ''.join(f'<td>{med([e[j][0] for w, e in summary if w == lab]):.1f} / {med([e[j][1] for w, e in summary if w == lab]):.1f}</td>' for j in range(4)) + '</tr>' for _, lab, _ in CATEGORIES if any(w == lab for w, _ in summary))
+    rows += '<tr><th>all shown</th>' + ''.join(f'<td>{med([e[j][0] for _, e in summary]):.1f} / {med([e[j][1] for _, e in summary]):.1f}</td>' for j in range(4)) + '</tr>'
     hrows = ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in held[k]) + '</tr>' for k, nm in (('camera', 'camera picture as it is'), ('avg', 'your average final'), ('model', 'auto (predicted)')))
     return f"""<!doctype html><meta charset=utf-8><title>stratastills: auto-process</title><style>{BR.CSS}</style><header><h1>Auto-process: camera, neutral, your Lightroom final and auto</h1>
 <div class=note>PRIVATE: your own pictures. Generated {time.strftime('%Y-%m-%d %H:%M')} by scripts/build_lr_report.py, on pictures from shoots the look model was not trained on. Every picture is shown on the crop of your final, at {LONG} px on the long side: <b>Camera</b> (the camera's JPEG beside the raw, else the preview inside the raw: smaller, so softer), <b>Neutral</b> (our 'best' pipeline, not levelled), <b>Lightroom</b> (your export), <b>Auto</b> (our neutral bent to the look the model predicts you would have given it: version 1, one global tone curve, colour strength and cast; no local Highlights/Shadows yet). Crops are taken where auto, neutral and the camera differ most from yours. <a href="../neutral/">Neutral report</a> · <a href="../">All reports</a></div>
 {BR.flag_header('auto')}<nav>{''.join(f'<a href="#{s}">{html.escape(t)}</a>' for s, t in nav)}</nav></header><main>
-<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>
+<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th><th>Auto 2 (learned colour)</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>
 <h3>All {n_pics} pictures of the {n_shoots} held-out shoots (the model's prediction only, no pictures made)</h3><table class=t><tr><th>error of the final's lightness at</th>{''.join(f'<th>p{p}</th>' for p in D.PCTS)}</tr>{hrows}</table>
 {''.join(sections)}</main>{BR.flag_script('auto')}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');b.closest('section').querySelector('.ovimg').src=b.dataset.src}})</script>"""
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--rebuild', action='store_true', help='make the neutral pictures again, ignoring the cache in out/cache/'); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'auto')); ap.add_argument('--n', type=int, default=30); ap.add_argument('--stems'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--crops', type=int, default=3)
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--hard-weight', type=float, default=3.0); ap.add_argument('--rebuild', action='store_true', help='make the neutral pictures again, ignoring the cache in out/cache/'); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'auto')); ap.add_argument('--n', type=int, default=30); ap.add_argument('--stems'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--crops', type=int, default=3)
     sys.exit(build(ap.parse_args()))

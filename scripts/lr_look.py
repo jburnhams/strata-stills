@@ -113,13 +113,18 @@ def skin_rotation(L, a, b):
     return float(np.clip(0.6 * (SKIN_HUE - np.median(h[m])), 0, SKIN_TURN))                                                              # one-sided: only skin redder than the person's reddest finals is turned; the finals' own spread is wide (10th-90th percentile 53.5-70.8, and a fixed target made the 65-degree pictures redder)
 
 
-def apply_look(bgr, pred, cam):
+def apply_look(bgr, pred, cam, colour=None):
     """`bgr` (uint8, our neutral picture) bent to the predicted look `pred` (a row of TARGETS) -> (uint8 picture, what was done). Lightness: the curve through the predicted percentiles. Colour: only the CHANGE the model predicts from OUR neutral picture (`cam`, the camera features, is no longer used for it: the neutral picture is not the camera JPEG), taken only part of the way (COLOUR_TRUST) and kept off skin and strong colours (a vibrance-like weight), because the final's mean colour is mostly the scene's (a crowd in red is not a red cast): chroma scaled by predicted / camera mean chroma, the cast moved by predicted - camera mean a/b."""
     lab = _lab(bgr); L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     L = vignette(local_tone(L, slider(pred, 'Shadows2012'), slider(pred, 'Highlights2012')), slider(pred, 'PostCropVignetteAmount'))                      # the vignette goes in before the percentiles are fitted: the finals' percentiles already include theirs, and the curve then makes up the global darkening it costs
     src = [float(np.percentile(L, p)) for p in D.PCTS]; dst = list(pred[:len(D.PCTS)])
     x, y = curve_knots(np.array(src), np.array(dst)); L2 = np.interp(L, x, y).astype(np.float32)
     L2 = clarity(L2, slider(pred, 'Clarity2012'))
+    if colour is not None:                                                                                                                          # colour from the learned transform (scripts/lr_fit.py, predicted by scripts/lr_tmodel.py): its chroma gains by chroma (skin and the rest), cast and hue turn, with the lightness left to the steps above
+        import lr_fit as FIT, torch
+        p = torch.from_numpy(np.asarray(colour, np.float32).copy())[None]; p[:, :len(FIT.L_KNOTS) - 1] = FIT.init_params(1, 'cpu')[:, :len(FIT.L_KNOTS) - 1]
+        with torch.no_grad(): out_lab = FIT.transform(torch.from_numpy(np.dstack([L2, a, b]).astype(np.float32)).permute(2, 0, 1)[None], p)[0].permute(1, 2, 0).numpy()
+        return np.clip(cv2.cvtColor(out_lab, cv2.COLOR_LAB2BGR) * 255 + 0.5, 0, 255).astype(np.uint8), dict(curve=[(round(float(i), 1), round(float(j), 1)) for i, j in zip(x, y)], chroma_scale='learned', cast=tuple(round(float(v), 2) for v in (colour[-3] * 5, colour[-2] * 5)), sliders={}, source_L=[round(v, 1) for v in src])
     p = dict(zip(TARGETS, pred)); C = np.hypot(a, b); n_chroma, n_a, n_b = float(C.mean()), float(a.mean()), float(b.mean())                          # the change is measured from OUR neutral picture's own colour, not the camera's (they differ: the camera's JPEG is not our neutral)
     scale = float(np.clip(1 + COLOUR_TRUST * (p['C_mean'] / max(n_chroma, 0.5) - 1), *CHROMA_SCALE))
     da, db = (float(np.clip(CAST_TRUST * (p['a_mean'] - n_a), -CAST_MAX, CAST_MAX)), float(np.clip(CAST_TRUST * (p['b_mean'] - n_b), -CAST_MAX, CAST_MAX)))
@@ -137,6 +142,13 @@ def load():
     rows = D.load_catalogue(); X, names, F, C, idx = D.load_features(); G = np.array([os.path.dirname(rows[i]['final']) for i in idx])
     f = os.path.join(D.OUT, 'meta.npz')
     if os.path.exists(f): z = np.load(f); X = np.hstack([X, z['M'][idx]]); names = names + ['meta:' + str(n) for n in z['names']]                  # the rest of the raw's metadata (scripts/lr_dataset.py meta): camera, lens, modes, the as-shot white balance, the time of day and year, ...
+    f = os.path.join(D.OUT, 'clip.npz')
+    if os.path.exists(f) and not os.environ.get('STRATASTILLS_NO_CLIP'):
+        z = np.load(f); pos = {int(i): k for k, i in enumerate(z['idx'])}; M = np.full((len(idx), 32 + z['labels'].shape[1]), np.nan, np.float32)
+        for r, i in enumerate(idx):
+            k = pos.get(int(i))
+            if k is not None: M[r] = np.concatenate([z['pca'][k], z['labels'][k]])
+        X = np.hstack([X, M]); names = names + ['clip:' + str(n) for n in z['pca_names']] + ['clip:' + str(n) for n in z['label_names']]                    # what CLIP sees in the preview (scripts/lr_clip.py): scene labels and the principal components of the embedding
     S = np.array([[D.num(rows[i].get(k), d) for k, d in SLIDERS] for i in idx]); S = np.where(np.isnan(S), [d for _, d in SLIDERS], S)          # a setting the file does not have is the typical one
     return rows, X, names, np.hstack([F, C, S]), idx, G
 
