@@ -196,7 +196,29 @@ def meta(a):
     np.savez(os.path.join(OUT, 'meta.npz'), M=np.stack(mats, 1), names=np.array(names)); print(f'{len(names)} metadata columns:', ', '.join(names), flush=True)
 
 
+THUMB = 128
+
+
+def thumbs(a):
+    """OUT/thumbs/t*.npz: for every catalogue row the camera's preview (cut to Lightroom's crop, turned the way up) and the person's final, both squeezed to THUMB x THUMB (uint8 BGR), in batches of BATCH rows: the pair data for fitting what the person does to a picture (scripts/lr_fit.py) and for image features. `idx` says which catalogue row each is, `ok` which rows had both pictures."""
+    rows = load_catalogue(); d = os.path.join(OUT, 'thumbs'); os.makedirs(d, exist_ok=True)
+    for k in range(0, len(rows), BATCH):
+        dst = os.path.join(d, f't{k // BATCH:03d}.npz')
+        if os.path.exists(dst): continue
+        batch = rows[k:k + BATCH]; tmp = tempfile.mkdtemp(dir=d); lst = os.path.join(tmp, 'list.txt'); open(lst, 'w').write('\n'.join(r['raw'] for r in batch))
+        subprocess.run(['exiftool', '-q', '-b', '-PreviewImage', '-w', f'{tmp}/%:1d_%f.jpg', '-@', lst], capture_output=True)
+        ex = {x['SourceFile']: x for x in json.loads(subprocess.run(['exiftool', '-q', '-json', '-n', '-Orientation', '-@', lst], capture_output=True, text=True).stdout or '[]')}
+        with ThreadPoolExecutor(8) as pool: fins = list(pool.map(lambda r: cv2.imread(r['final'], cv2.IMREAD_REDUCED_COLOR_4), batch))
+        C, F, keep = [], [], []
+        for i, (r, fin) in enumerate(zip(batch, fins)):
+            p = f'{tmp}{os.path.dirname(r["raw"])}/_{os.path.splitext(os.path.basename(r["raw"]))[0]}.jpg'; e = ex.get(r['raw']); im = cv2.imread(p) if os.path.exists(p) else None
+            if im is None or e is None or fin is None: continue
+            cam = orient(lr_crop(im, r), e.get('Orientation')); sq = lambda x: cv2.resize(x, (THUMB, THUMB), interpolation=cv2.INTER_AREA)
+            C.append(sq(cam)); F.append(sq(fin)); keep.append(k + i)
+        np.savez(dst, cam=np.array(C, np.uint8), fin=np.array(F, np.uint8), idx=np.array(keep)); shutil.rmtree(tmp); print(f'thumbs batch {k // BATCH}: {len(keep)}/{len(batch)}', flush=True)
+
+
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['pairs', 'catalogue', 'features', 'meta'])
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['pairs', 'catalogue', 'features', 'meta', 'thumbs'])
     ap.add_argument('--finals', default=os.path.expanduser('~/personal/Backup/Photos')); ap.add_argument('--raws', default=os.path.expanduser('~/raw'))
-    a = ap.parse_args(); os.makedirs(OUT, exist_ok=True); {'pairs': pairs, 'catalogue': catalogue, 'features': features, 'meta': meta}[a.step](a)
+    a = ap.parse_args(); os.makedirs(OUT, exist_ok=True); {'pairs': pairs, 'catalogue': catalogue, 'features': features, 'meta': meta, 'thumbs': thumbs}[a.step](a)

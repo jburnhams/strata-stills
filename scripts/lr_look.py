@@ -13,7 +13,7 @@ SLOPE = (0.25, 4.0)
 CHROMA_SCALE = (0.8, 2.0)
 CAST_MAX = 6.0
 CAST_TRUST = 0.6        # tried 0.6, 0.8, 1.0 on the 31 pictures: the mean cast error from the finals is lowest at 0.6 (3.52, 3.63, 3.74): the predicted cast is noisy, following it further adds error on the usual pictures
-COLOUR_TRUST = 1.0      # the saturation follows the predicted chroma (correlation 0.79 with the finals'): at 0.6 with the skin and vibrance weights the report came out 22 % less colourful than the person's finals (median C_mean ratio 0.79), and the person rated it 'too flat / dull'; 1.0 with a wider clip gives 0.9
+COLOUR_TRUST = 1.15     # the saturation follows the predicted chroma (correlation 0.79 with the finals'): at 0.6 with the skin and vibrance weights the report came out 22 % less colourful than the person's finals (median C_mean ratio 0.79), and the person rated it 'too flat / dull'; 1.0 with a wider clip gives 0.9
 SLIDER_TRUST = 0.7      # the sliders are only moderately predictable (R2 0.2-0.5): the prediction counts for 70 %, the person's typical value for the rest
 CLARITY_GAIN = 1.0
 VIBRANCE_GAIN = 1.0
@@ -24,7 +24,7 @@ VIGNETTE_GAIN = 1.0
 SKIN_HUE = 54.0        # CIELAB hue (degrees) of skin-like pixels below which the picture is turned (the 10th percentile of the person's finals' medians over pictures: 53.5; their median 59.7)
 SKIN_TURN = 4.0
 VIB_KNEE = 55.0         # chroma at which the colour boost has fallen to half (vibrance-like: already strong colours get less)
-SKIN_HOLD = 0.5         # share of the colour change withheld from skin tones
+SKIN_HOLD = 0.2         # share of the colour change withheld from skin tones
 
 
 def test_shoot(shoot, share=0.1):
