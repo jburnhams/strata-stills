@@ -108,7 +108,7 @@ def build(a):
     global SHOOTS
     rows, X, names, Y, idx, G = LK.load(); SHOOTS = G; test = np.array([LK.test_shoot(g) for g in G]); rng = np.random.default_rng(a.seed)
     say = lambda m: print(m, flush=True); say(f'{len(X)} pairs, {test.sum()} in {len(set(G[test]))} held-out shoots; training the look model on the other {(~test).sum()}')
-    models = LK.train(X[~test], Y[~test]); P = LK.predict(models, X[test]); cam = X[test][:, [names.index(f'L_p{p}') for p in D.PCTS]]
+    models = LK.train_cached(X[~test], Y[~test]); P = LK.predict(models, X[test]); cam = X[test][:, [names.index(f'L_p{p}') for p in D.PCTS]]
     held = dict(model=np.abs(P[:, :9] - Y[test][:, :9]).mean(0), camera=np.abs(cam - Y[test][:, :9]).mean(0), avg=np.abs(np.median(Y[~test][:, :9], 0) - Y[test][:, :9]).mean(0))
     if a.stems: want = set(a.stems.split(',')); chosen = [i for i in range(len(idx)) if test[i] and os.path.splitext(os.path.basename(rows[idx[i]]['raw']))[0] in want]; why = {i: 'asked for' for i in chosen}
     else: chosen, why = pick(categorise(rows, X, names, Y, idx), test, a.n, rng, X, names)
@@ -152,7 +152,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     errs = '<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>' + ''.join(f'<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3]], err)) + '</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>'
     key = {k: row.get(k, '') for k in KEY_SETTINGS if k in row}; rest = {k: v for k, v in sorted(row.items()) if k not in key and k not in ('final', 'raw')}
     look = '<table class=t><tr><th></th>' + ''.join(f'<th>{t}</th>' for t in LK.TARGETS) + '</tr>' + ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in vals) + '</tr>' for nm, vals in (('predicted', pred), ('your final', actual))) + '</table>'
-    did_html = table({'tone curve on L (from, to)': ' '.join(f'{x:g}->{y:g}' for x, y in did['curve']), 'neutral lightness percentiles': did['source_L'], 'chroma scale': did['chroma_scale'], 'colour cast moved (a, b)': did['cast'], 'camera aligned': how[0], 'neutral aligned': how[1]})
+    did_html = table({'tone curve on L (from, to)': ' '.join(f'{x:g}->{y:g}' for x, y in did['curve']), 'neutral lightness percentiles': did['source_L'], 'chroma scale': did['chroma_scale'], 'local sliders used': did['sliders'], 'colour cast moved (a, b)': did['cast'], 'camera aligned': how[0], 'neutral aligned': how[1]})
     ex = {k: v for k, v in exif.items() if k != 'SourceFile' and not str(v).startswith('(Binary')}
     sh = f"{exif.get('IFD0:Model', '')} · {exif.get('ExifIFD:LensModel', exif.get('Sony:LensType', ''))} · {exif.get('ExifIFD:FocalLength', '')} · f/{exif.get('ExifIFD:FNumber', '')} · {exif.get('ExifIFD:ExposureTime', '')} s · ISO {exif.get('ExifIFD:ISO', '')}"
     return f"""<section class=pic id="{sid}"><h2>{html.escape(stem)} <small class=why>{html.escape(os.path.basename(os.path.dirname(row['final'])))} · {html.escape(why)}</small></h2><p class=m>{html.escape(sh)} · final {W}x{H} (brought to {LONG} px long side)<br>raw: {html.escape(row['raw'])}<br>final: {html.escape(row['final'])}</p>
