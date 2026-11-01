@@ -148,7 +148,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     ex = {k: v for k, v in exif.items() if k != 'SourceFile' and not str(v).startswith('(Binary')}
     sh = f"{exif.get('IFD0:Model', '')} · {exif.get('ExifIFD:LensModel', exif.get('Sony:LensType', ''))} · {exif.get('ExifIFD:FocalLength', '')} · f/{exif.get('ExifIFD:FNumber', '')} · {exif.get('ExifIFD:ExposureTime', '')} s · ISO {exif.get('ExifIFD:ISO', '')}"
     return f"""<section class=pic id="{sid}"><h2>{html.escape(stem)} <small class=why>{html.escape(os.path.basename(os.path.dirname(row['final'])))} · {html.escape(why)}</small></h2><p class=m>{html.escape(sh)} · final {W}x{H} (brought to {LONG} px long side)<br>raw: {html.escape(row['raw'])}<br>final: {html.escape(row['final'])}</p>
-<div class=ov style="width:{OVERVIEW}px;max-width:100%"><img class=ovimg src="assets/{tabs[2][1]}">{boxes}</div>{tabs_html}{errs}
+<div class=ov style="width:{BR.fit_width(W, H, OVERVIEW)}"><img class=ovimg src="assets/{tabs[2][1]}">{boxes}</div>{tabs_html}{errs}
 <details open><summary>Lightroom: your main settings</summary>{table(key)}</details>
 <details><summary>Auto (ours): the predicted look and what was done</summary>{look}{did_html}</details>
 <details><summary>Neutral (ours): the pipeline's settings</summary>{BR.settings_html(nrec)}</details>
