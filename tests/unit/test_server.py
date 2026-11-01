@@ -51,7 +51,8 @@ def test_settings_roundtrip(client, tmp_path):
 
 def test_the_visual_report_is_served_from_its_folder(client, tmp_path, monkeypatch):
     rep = tmp_path / 'rep'; (rep / 'assets').mkdir(parents=True); (rep / 'index.html').write_text('<h1>report</h1>'); (rep / 'assets' / 'a.jpg').write_bytes(b'jpg'); (tmp_path / 'secret.txt').write_text('no')
-    monkeypatch.setenv('STRATASTILLS_REPORT', str(tmp_path / 'none')); assert client.get('/api/report').json() == dict(available=False, built=None) and client.get('/report/').status_code == 404
-    monkeypatch.setenv('STRATASTILLS_REPORT', str(rep)); assert client.get('/api/report').json()['available'] is True
+    monkeypatch.setenv('STRATASTILLS_REPORT', str(tmp_path / 'none')); assert client.get('/api/report').json() == dict(available=False, built=None, neutral=False, auto=False) and client.get('/report/').status_code == 404
+    (rep / 'auto').mkdir(); (rep / 'auto' / 'index.html').write_text('a')
+    monkeypatch.setenv('STRATASTILLS_REPORT', str(rep)); j = client.get('/api/report').json(); assert j['available'] is True and j['auto'] is True and j['neutral'] is False
     assert client.get('/report/').text == '<h1>report</h1>' and client.get('/report/assets/a.jpg').content == b'jpg' and client.get('/report', follow_redirects=False).status_code in (302, 307)
     assert client.get('/report/../secret.txt').status_code == 404 and client.get('/report/%2e%2e/secret.txt').status_code == 404

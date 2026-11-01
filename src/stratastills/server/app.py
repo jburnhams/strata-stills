@@ -69,8 +69,9 @@ def create_app():
 
     @app.get('/api/report')
     def report_info():
-        f = os.path.join(settings.report_dir(), 'index.html')                  # the visual report (scripts/build_report.py): static files, looked up per request so one built after the server started shows up
-        return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None)
+        root = settings.report_dir(); f = os.path.join(root, 'index.html')     # the visual reports (scripts/build_report.py -> neutral/, scripts/build_lr_report.py -> auto/): static files, looked up per request so one built after the server started shows up
+        peers = {d: os.path.exists(os.path.join(root, d, 'index.html')) for d in ('neutral', 'auto')}
+        return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None, **peers)
 
     @app.get('/report')
     def report_slash(): return RedirectResponse('/report/')
