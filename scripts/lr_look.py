@@ -39,8 +39,10 @@ def _lab(bgr):
 
 def curve_knots(src_L, dst_L):
     """The tone curve (x, y on L 0-100) taking the picture's lightness percentiles `src_L` to the wanted `dst_L`: ends pinned at 0 and 100, made monotone and its slope held within SLOPE."""
-    x = np.concatenate([[0.0], src_L, [100.0]]); y = np.concatenate([[0.0], dst_L, [100.0]])
-    keep = np.concatenate([[True], np.diff(x) > 0.5]); x, y = x[keep], y[keep]                                                    # percentiles that coincide (a flat picture) say nothing about the slope between them
+    keep, last = [], 0.0
+    for i, v in enumerate(src_L):                                                                                                  # percentiles that coincide (a flat picture, clipped highlights) say nothing about the slope between them; the ends stay pinned at (0, 0) and (100, 100)
+        if v > last + 0.5 and v < 99.5: keep.append(i); last = v
+    x = np.concatenate([[0.0], np.asarray(src_L)[keep], [100.0]]); y = np.concatenate([[0.0], np.asarray(dst_L)[keep], [100.0]])
     for _ in range(3):
         dy = np.clip(np.diff(y), SLOPE[0] * np.diff(x), SLOPE[1] * np.diff(x)); y = np.concatenate([[0.0], np.cumsum(dy)])
         y = y * 100.0 / max(y[-1], 1e-6) if y[-1] > 100 else y
