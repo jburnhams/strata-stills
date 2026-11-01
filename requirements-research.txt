@@ -1,0 +1,3 @@
+# Research scripts only (scripts/lr_look.py: learning the person's own edits); not needed by the app or the tests.
+xgboost>=3.0
+scikit-learn>=1.6
