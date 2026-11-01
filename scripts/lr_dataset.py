@@ -153,7 +153,50 @@ def load_features():
     return (np.concatenate([p['X'] for p in parts]), [str(n) for n in parts[0]['names']], np.concatenate([p['F'] for p in parts]), np.concatenate([p['C'] for p in parts]), np.concatenate([p['idx'] for p in parts]))
 
 
+SKIP_TAG = re.compile(r'(Offset|Length|Size$|Checksum|Thumbnail|Preview|File|Directory|ExifTool|ImageUniqueID|Version|Sequence|Count$|Bytes|Table|Padding|Binary|Data$|MakerNote|Comment|Software|Profile|Copyright|Artist|Description|Title|URL|DocumentID|InstanceID|OriginalDocument|Derived|History|Rating|Label|Keywords|SubSec|Date|Time(?!r)|Trailer|Index|Warning|Error)', re.I)
+
+
+def _meta_batch(raws):
+    return {x['SourceFile']: x for x in json.loads(subprocess.run(['exiftool', '-q', '-json', '-n', '-G1', '-fast2', *raws], capture_output=True, text=True).stdout or '[]')}
+
+
+def meta(a):
+    """OUT/meta.npz: as much of every raw's metadata as is usable as model input, whatever the maker wrote (camera and lens, exposure, focus, drive and scene modes, picture style, white balance levels, flash, GPS, ...), one number per column: numbers as they are, short number lists split into columns, text as the frequency rank of its value, and the shot's time as hour of day, day of year, weekday and year. A tag counts when at least 20 % of the pictures have it and it takes more than one value; ids, offsets, sizes, paths and free text are skipped. Aligned with the catalogue rows."""
+    import datetime
+    rows = load_catalogue(); raws = [r['raw'] for r in rows]; recs = [None] * len(raws); chunks = [(k, raws[k:k + 400]) for k in range(0, len(raws), 400)]
+    def work(c):
+        k, rs = c; ex = _meta_batch(rs); print(f'meta {k + len(rs)}/{len(raws)}', flush=True); return k, [ex.get(r) for r in rs]
+    with ThreadPoolExecutor(6) as pool:
+        for k, out in pool.map(work, chunks): recs[k:k + len(out)] = out
+    cols = collections.defaultdict(lambda: [None] * len(raws))
+    for i, e in enumerate(recs):
+        if not e: continue
+        for tag, v in e.items():
+            if tag == 'SourceFile' or SKIP_TAG.search(tag.split(':', 1)[-1]) or isinstance(v, (dict, list)): continue
+            if isinstance(v, (int, float)) and not isinstance(v, bool): cols[tag][i] = float(v); continue
+            t = str(v).strip()
+            if re.fullmatch(r'-?[\d.]+( -?[\d.]+){1,5}', t):
+                for q, x in enumerate(t.split()): cols[f'{tag}[{q}]'][i] = float(x)
+            elif t and len(t) < 80: cols[tag][i] = t
+        m = re.match(r'(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)', str(e.get('ExifIFD:DateTimeOriginal') or e.get('IFD0:ModifyDate') or ''))
+        if m:
+            y, mo, d, h, mi = map(int, m.groups())
+            try: dd = datetime.date(y, mo, d); cols['when:hour'][i] = h + mi / 60; cols['when:doy'][i] = dd.timetuple().tm_yday; cols['when:weekday'][i] = dd.weekday(); cols['when:year'][i] = y
+            except ValueError: pass
+    names, mats = [], []
+    for name, v in sorted(cols.items()):
+        have = [x for x in v if x is not None]
+        if len(have) < 0.2 * len(raws): continue
+        if any(isinstance(x, str) for x in have):
+            rank = {t: n for n, (t, _) in enumerate(collections.Counter(x for x in have if isinstance(x, str)).most_common())}; col = [rank.get(x, np.nan) if isinstance(x, str) else np.nan for x in v]
+        else: col = [np.nan if x is None else x for x in v]
+        arr = np.array(col, np.float32)
+        if not np.isfinite(arr).any() or np.nanmin(arr) == np.nanmax(arr): continue
+        names.append(name); mats.append(arr)
+    np.savez(os.path.join(OUT, 'meta.npz'), M=np.stack(mats, 1), names=np.array(names)); print(f'{len(names)} metadata columns:', ', '.join(names), flush=True)
+
+
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['pairs', 'catalogue', 'features'])
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['pairs', 'catalogue', 'features', 'meta'])
     ap.add_argument('--finals', default=os.path.expanduser('~/personal/Backup/Photos')); ap.add_argument('--raws', default=os.path.expanduser('~/raw'))
-    a = ap.parse_args(); os.makedirs(OUT, exist_ok=True); {'pairs': pairs, 'catalogue': catalogue, 'features': features}[a.step](a)
+    a = ap.parse_args(); os.makedirs(OUT, exist_ok=True); {'pairs': pairs, 'catalogue': catalogue, 'features': features, 'meta': meta}[a.step](a)

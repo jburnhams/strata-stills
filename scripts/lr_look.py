@@ -18,6 +18,8 @@ GUIDE_EPS = 0.01
 SHADOW_GAIN = 25.0
 HIGHLIGHT_GAIN = 25.0
 VIGNETTE_GAIN = 1.0
+SKIN_HUE = 54.0        # CIELAB hue (degrees) of skin-like pixels below which the picture is turned (the 10th percentile of the person's finals' medians over pictures: 53.5; their median 59.7)
+SKIN_TURN = 4.0
 SKIN_HOLD = 0.7         # share of the colour change withheld from skin tones
 
 
@@ -93,10 +95,17 @@ def vignette(L, amount):
     return (L * (1 + VIGNETTE_GAIN * amount / 100 * r2)).astype(np.float32)
 
 
+def skin_rotation(L, a, b):
+    """Degrees to turn the colour plane so that skin-like pixels (hue 25-75, moderate chroma, mid lightness) are not redder than SKIN_HUE (on 15 pictures with skin ours was 2-3 degrees redder than the person's finals on average): a guard against the reddish skin that a wrong guess of the light gives, the one error that looks wrong at once. Nothing when there is little skin-like area (under 3 %); bounded to SKIN_TURN and only a part (0.6) of the way."""
+    h = np.degrees(np.arctan2(b, a)); C = np.hypot(a, b); m = (h > 25) & (h < 75) & (C > 12) & (C < 45) & (L > 25) & (L < 90)
+    if m.mean() < 0.03: return 0.0
+    return float(np.clip(0.6 * (SKIN_HUE - np.median(h[m])), 0, SKIN_TURN))                                                              # one-sided: only skin redder than the person's reddest finals is turned; the finals' own spread is wide (10th-90th percentile 53.5-70.8, and a fixed target made the 65-degree pictures redder)
+
+
 def apply_look(bgr, pred, cam):
     """`bgr` (uint8, our neutral picture) bent to the predicted look `pred` (a row of TARGETS) -> (uint8 picture, what was done). Lightness: the curve through the predicted percentiles. Colour: only the CHANGE the model predicts from OUR neutral picture (`cam`, the camera features, is no longer used for it: the neutral picture is not the camera JPEG), taken only part of the way (COLOUR_TRUST) and kept off skin and strong colours (a vibrance-like weight), because the final's mean colour is mostly the scene's (a crowd in red is not a red cast): chroma scaled by predicted / camera mean chroma, the cast moved by predicted - camera mean a/b."""
     lab = _lab(bgr); L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    L = local_tone(L, slider(pred, 'Shadows2012'), slider(pred, 'Highlights2012'))
+    L = vignette(local_tone(L, slider(pred, 'Shadows2012'), slider(pred, 'Highlights2012')), slider(pred, 'PostCropVignetteAmount'))                      # the vignette goes in before the percentiles are fitted: the finals' percentiles already include theirs, and the curve then makes up the global darkening it costs
     src = [float(np.percentile(L, p)) for p in D.PCTS]; dst = list(pred[:len(D.PCTS)])
     x, y = curve_knots(np.array(src), np.array(dst)); L2 = np.interp(L, x, y).astype(np.float32)
     p = dict(zip(TARGETS, pred)); C = np.hypot(a, b); n_chroma, n_a, n_b = float(C.mean()), float(a.mean()), float(b.mean())                          # the change is measured from OUR neutral picture's own colour, not the camera's (they differ: the camera's JPEG is not our neutral)
@@ -105,13 +114,16 @@ def apply_look(bgr, pred, cam):
     hue = np.degrees(np.arctan2(b, a)) % 360; skin = np.exp(-0.5 * ((hue - 50) / 22) ** 2)                                                      # skin sits around hue 35-65 in CIELAB: its colour is the one that looks wrong first, so it is left nearer the neutral picture
     w = 1 / (1 + (C / 45) ** 2) * (1 - SKIN_HOLD * skin); s = 1 + (scale - 1) * w                                                             # a vibrance-like boost: strong colours (already saturated) and skin get less of it
     wl = np.clip(L2 / 20.0, 0, 1) * (1 - SKIN_HOLD * skin)                                                                                  # no cast pushed into black, or into skin
-    L2 = vignette(L2, slider(pred, 'PostCropVignetteAmount'))
-    out = cv2.cvtColor(np.dstack([L2, a * s + da * wl, b * s + db * wl]), cv2.COLOR_LAB2BGR)
+    a2, b2 = a * s + da * wl, b * s + db * wl; rot = skin_rotation(L2, a2, b2)
+    if rot: c, sn = np.float32(np.cos(np.radians(rot))), np.float32(np.sin(np.radians(rot))); a2, b2 = a2 * c - b2 * sn, a2 * sn + b2 * c                          # the hue turned a little as a whole, like a white-balance nudge
+    out = cv2.cvtColor(np.dstack([L2, a2, b2]), cv2.COLOR_LAB2BGR)
     return np.clip(out * 255 + 0.5, 0, 255).astype(np.uint8), dict(curve=[(round(float(i), 1), round(float(j), 1)) for i, j in zip(x, y)], chroma_scale=round(scale, 3), cast=(round(da, 2), round(db, 2)), sliders={k: round(slider(pred, k), 1) for k, _ in SLIDERS if k in ('Highlights2012', 'Shadows2012', 'PostCropVignetteAmount')}, source_L=[round(v, 1) for v in src])
 
 
 def load():
     rows = D.load_catalogue(); X, names, F, C, idx = D.load_features(); G = np.array([os.path.dirname(rows[i]['final']) for i in idx])
+    f = os.path.join(D.OUT, 'meta.npz')
+    if os.path.exists(f): z = np.load(f); X = np.hstack([X, z['M'][idx]]); names = names + ['meta:' + str(n) for n in z['names']]                  # the rest of the raw's metadata (scripts/lr_dataset.py meta): camera, lens, modes, the as-shot white balance, the time of day and year, ...
     S = np.array([[D.num(rows[i].get(k), d) for k, d in SLIDERS] for i in idx]); S = np.where(np.isnan(S), [d for _, d in SLIDERS], S)          # a setting the file does not have is the typical one
     return rows, X, names, np.hstack([F, C, S]), idx, G
 
