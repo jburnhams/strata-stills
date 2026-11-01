@@ -2,7 +2,7 @@
   python scripts/build_lr_report.py [--n 30] [--out out/report/auto] [--stems DSC01234,...] [--seed 1]
 Served by the app at /report/auto/, a peer of the neutral report (/report/neutral/, build_report.py). The automatic processing that matches the person's edits; the Lightroom export is the reference it learns from, and the report will grow with the auto-process as it supersedes this first model. PRIVATE: the pictures are the person's own, people included; never make this public.
 Needs candidates/personal/ (scripts/lr_dataset.py pairs, catalogue, features)."""
-import argparse, html, json, os, shutil, subprocess, sys, tempfile, time
+import argparse, hashlib, html, json, os, shutil, subprocess, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import build_report as BR, lr_dataset as D, lr_look as LK
@@ -43,21 +43,29 @@ def pick(cats, test, n, rng, X, names):
 def i_shoot(i): return SHOOTS[i]
 
 
-def neutral(raws, work, say):
-    """Our pipeline's 'best' preset, without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read."""
+def neutral(raws, work, say, rebuild=False):
+    """Our pipeline's 'best' preset, without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
+    cdir = os.path.join(BR.ROOT, 'out', 'cache', 'report-auto-neutral'); os.makedirs(cdir, exist_ok=True); out = {}; todo = []
+    key = lambda r: hashlib.sha1(json.dumps([BR.CACHE_VERSION, BR.code_hash(), r, os.path.getsize(r), int(os.path.getmtime(r))]).encode()).hexdigest()
+    for r in raws:
+        base = os.path.join(cdir, key(r)); im = None if rebuild or not os.path.exists(base + '.json') else cv2.imread(base + '.jpg')
+        if im is not None: out[r] = (im, json.load(open(base + '.json', encoding='utf-8')))
+        else: todo.append(r)
+    say(f'neutral pictures: {len(out)} cached, {len(todo)} to make')
+    if not todo: return out
     os.environ['STRATASTILLS_PROJECTS'] = os.path.join(work, 'projects'); os.environ['STRATASTILLS_HOME'] = os.path.join(work, 'home')
     from stratastills import projects as P, pipeline as PL
     src = os.path.join(work, 'raws'); os.makedirs(src, exist_ok=True); names = {}
-    for k, r in enumerate(raws):
+    for k, r in enumerate(todo):
         n = f'{k:03d}_{os.path.basename(r)}'; os.symlink(r, os.path.join(src, n)); names[os.path.splitext(n)[0]] = r
-    pid = P.create('lr-report', [src])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path']); out = {}
+    pid = P.create('lr-report', [src])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path'])
     for it in P.source_items(pid, sid):
         r = names.get(it['stem'])
         if not r: continue
         t0 = time.time()
         try: rec = PL.generate(pid, it['id'], preset='best', options=dict(quality=95, level=False, size='native'), progress=lambda m: None)
         except Exception as e: say(f'  {os.path.basename(r)}: FAILED ({type(e).__name__}: {e})'); continue
-        out[r] = (cv2.imread(rec['file']), rec); say(f'  {os.path.basename(r)}: neutral in {time.time() - t0:.0f} s')
+        out[r] = (cv2.imread(rec['file']), rec); base = os.path.join(cdir, key(r)); shutil.copyfile(rec['file'], base + '.jpg'); json.dump(rec, open(base + '.json', 'w', encoding='utf-8'), default=str); say(f'  {os.path.basename(r)}: neutral in {time.time() - t0:.0f} s')
     return out
 
 
@@ -109,7 +117,7 @@ def build(a):
     work = tempfile.mkdtemp(prefix='lr-report-', dir=os.path.dirname(out)); sections, nav, summary = [], [], []
     try:
         raws = [rows[idx[i]]['raw'] for i in chosen]; ex = D.exif_of(raws); full_exif = {x['SourceFile']: x for x in json.loads(subprocess.run(['exiftool', '-json', '-G1', '-a', '--ThumbnailImage', '--PreviewImage', *raws], capture_output=True, text=True).stdout or '[]')}
-        dev = neutral(raws, work, say)
+        dev = neutral(raws, work, say, a.rebuild)
         for i in chosen:
             row = rows[idx[i]]; raw = row['raw']; stem = os.path.splitext(os.path.basename(raw))[0]; sid = f'{os.path.basename(os.path.dirname(row["final"]))[:10]}_{stem}'.replace(' ', '')
             fin = cv2.imread(row['final']); camera = D.camera_picture(raw)
@@ -170,5 +178,5 @@ def page(sections, nav, summary, held, n_shoots, n_pics):
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'auto')); ap.add_argument('--n', type=int, default=30); ap.add_argument('--stems'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--crops', type=int, default=3)
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--rebuild', action='store_true', help='make the neutral pictures again, ignoring the cache in out/cache/'); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'auto')); ap.add_argument('--n', type=int, default=30); ap.add_argument('--stems'); ap.add_argument('--seed', type=int, default=1); ap.add_argument('--crops', type=int, default=3)
     sys.exit(build(ap.parse_args()))

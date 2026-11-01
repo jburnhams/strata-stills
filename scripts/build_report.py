@@ -2,7 +2,7 @@
   python scripts/build_report.py [--out out/report/neutral] [--set a7c --set dji] [--min-lens 2] [--min-device 5] [--all] [--stems DSC00014,...] [--public-only] [--quality 95] [--crops 3]
 Reads candidates/<set>/ (scripts/copy_candidates.py) and docs/report_public.json (the pictures whose subject is not a person, so that they could be public; hand-picked). The report has every kind of picture, the public ones marked, and a switch at the top of the page that shows only those (also `?public=1` in the address): it is for this machine and the app's own server (/report/), never to be committed or published as it is; --public-only leaves the others out altogether, for a report that may go public; shows at least --min-lens of each lens and --min-device of each device, then more until every octave of ISO the pool has is covered; writes <out>/index.html and <out>/assets/*.jpg (gitignored with out/). The pictures of ours are made again on every run (a temporary project: nothing of the app's projects is touched); an optional step of the build (scripts/setup_env.sh --report), skipped when there are no candidate photos.
 How the crops are chosen: every program's picture is brought to the size of ours and registered to it; the disagreement at each place is the colour and brightness difference (blurred, so that a one pixel shift does not count) plus the difference in how much fine detail and noise there is, each relative to its median over the picture; the best window of each kind that does not overlap an earlier one is shown (1: the two together, 2: the detail and noise, 3: the colour and tone)."""
-import argparse, collections, glob, html, json, os, shutil, sys, tempfile, time
+import argparse, functools, hashlib, collections, glob, html, json, os, shutil, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import compare_detail as CD, render_external as RE
@@ -190,6 +190,33 @@ def write_landing(root):
     open(os.path.join(root, 'index.html'), 'w', encoding='utf-8').write(f'<!doctype html><meta charset=utf-8><title>stratastills: reports</title><style>{CSS}</style><header><h1>Reports</h1></header><main><ul>{items}</ul></main>')
 
 
+CACHE_VERSION = 1                 # bump when the code of this script that makes the pictures or numbers of a photo changes (the pipeline's own code is hashed, this script's page layout is not part of it)
+
+
+@functools.lru_cache(maxsize=None)
+def code_hash():
+    """A hash of the code and data the pictures of ours depend on (src/stratastills without the server, its profiles, the detail metrics): any change there makes every photo again."""
+    h = hashlib.sha1(); base = os.path.join(ROOT, 'src', 'stratastills')
+    for dp, dn, fn in sorted(os.walk(base)):
+        dn[:] = sorted(d for d in dn if d not in ('server', '__pycache__'))
+        for f in sorted(fn):
+            if f.endswith(('.py', '.json')): h.update(f.encode()); h.update(open(os.path.join(dp, f), 'rb').read())
+    h.update(open(os.path.join(os.path.dirname(__file__), 'compare_detail.py'), 'rb').read()); return h.hexdigest()
+
+
+def cache_load(cdir, stem, key):
+    f = os.path.join(cdir, stem, 'data.json')
+    try: d = json.load(open(f, encoding='utf-8'))
+    except (OSError, ValueError): return None
+    return d['data'] if d.get('key') == key and all(os.path.exists(os.path.join(cdir, stem, n)) for n in d['data']['files']) else None
+
+
+def cache_save(cdir, stem, key, data, assets):
+    sd = os.path.join(cdir, stem); shutil.rmtree(sd, ignore_errors=True); os.makedirs(sd)
+    for n in data['files']: shutil.copyfile(os.path.join(assets, n), os.path.join(sd, n))
+    json.dump(dict(key=key, data=data), open(os.path.join(sd, 'data.json'), 'w', encoding='utf-8'), default=str)
+
+
 def fit_width(W, H, cap=None):
     """CSS width of an overview box: its natural size, but never wider than the page nor so wide that the picture is taller than the viewport (the boxes are percentages, so the wrapper has to be exactly as big as the picture)."""
     return f'min({cap or OVERVIEW}px,100%,calc((100vh - 24px) * {W / H:.4f}))'
@@ -219,7 +246,16 @@ def build(a):
             raws = {st: (files[st], shots[st][4] or 0) for st in stems}; RE.render_missing('darktable', setname, raws, say=say); RE.render_missing('rawtherapee', setname, raws, 'auto-matched', say=say)       # whatever of the other programs' renders is missing is made now (a failure stops the report)
             ext_times = {'darktable': RE.timings(setname, 'darktable'), 'RawTherapee': RE.timings(setname, 'rawtherapee', 'auto-matched')}
             say(f'{cfg["label"]}: {len(stems)} pictures ({"; ".join(f"{g[1]}: {len(ss)}" for g, ss in groups.items())})')
-            for stem, o in run_ours(folder, stems, a.quality, work, say):
+            sig = lambda f: f'{os.path.getsize(f)}:{int(os.path.getmtime(f))}' if os.path.exists(f) else '-'
+            def stem_key(stem):                                                                       # what the pictures and numbers of one photo depend on: the code that makes them, the raw, the camera JPEG, the other programs' renders and the options
+                ins = [files[stem]] + glob.glob(os.path.join(folder, stem + '.[jJ][pP][gG]')) + [os.path.join(ROOT, 'candidates', 'renders', cfg['prefix'] + d, stem + '.jpg') for d, _ in OTHERS]
+                return hashlib.sha1(json.dumps([CACHE_VERSION, code_hash(), a.quality, a.crops, [sig(f) for f in ins]]).encode()).hexdigest()
+            cdir = os.path.join(ROOT, 'out', 'cache', 'report-' + os.path.basename(final), setname); data = {}
+            for stem in stems:                                                                        # a photo whose inputs and code have not changed since the last run is not made again: its pictures and numbers come from the cache
+                d = None if a.rebuild else cache_load(cdir, stem, stem_key(stem))
+                if d: data[stem] = d
+            say(f'{len(data)} of {len(stems)} pictures unchanged since the last report, {len(stems) - len(data)} to make')
+            for stem, o in run_ours([s for s in stems if s not in data], a.quality, work, say):
                 fin = read(o['file'])
                 if fin is None: continue
                 H, W = fin.shape[:2]; size = (W, H)
@@ -255,9 +291,14 @@ def build(a):
                     name = f'{stem}-crop{n}.jpg'; cv2.imwrite(os.path.join(assets, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
                     blocks.append(dict(n=n, kind=kind, x=x0 / W, y=y0 / H, w=WIN[0] / W, h=WIN[1] / H, sheet=name, sheet_size=(cols * pw, rows * ph), names=[nm for nm, _ in panels], cols=cols, pw=pw, ph=ph))
                 metrics = metric_table([im for _, im in aligned] + [fin], [nm for nm, _ in aligned] + ['Ours (final)'])
-                legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm, _ in aligned}); total_pics += 1
-                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); tm = o['rec'].get('timing', []); perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()})); sections.append(render_picture(cfg, stem, whys.get(stem, ''), W, H, o['rec'], blocks, metrics, kind, stem in public, timing_html(tm, perf[-1]['ext']), tabs)); nav.append((stem, f'{sh[1]} {stem}', stem in public))
+                data[stem] = dict(W=W, H=H, rec=o['rec'], blocks=blocks, metrics=metrics, tabs=tabs, names=[nm for nm, _ in aligned], files=sorted(f for f in os.listdir(assets) if f.startswith(stem + '-'))); cache_save(cdir, stem, stem_key(stem), data[stem], assets)
                 for f in o['stages'].values(): os.remove(f)
+            for stem in stems:                                                                        # the page: in the order of the pictures, from fresh or cached data (the HTML is always made again, so a change to it costs seconds)
+                d = data.get(stem)
+                if d is None: continue
+                for f in d['files']: shutil.copyfile(os.path.join(cdir, stem, f), os.path.join(assets, f)) if not os.path.exists(os.path.join(assets, f)) else None
+                legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm in d['names']}); total_pics += 1
+                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); tm = d['rec'].get('timing', []); perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()})); sections.append(render_picture(cfg, stem, whys.get(stem, ''), d['W'], d['H'], d['rec'], d['blocks'], d['metrics'], kind, stem in public, timing_html(tm, perf[-1]['ext']), d['tabs'])); nav.append((stem, f'{sh[1]} {stem}', stem in public))
     finally: shutil.rmtree(work, ignore_errors=True)
     if not sections: say('nothing to report on (no candidate photos)'); return 1
     leg = ''.join(f'<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>' for k, v in legend.items())
@@ -304,6 +345,6 @@ def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind, public=True
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'neutral')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--min-lens', type=int, default=2, help='at least this many pictures of each lens'); ap.add_argument('--min-device', type=int, default=5, help='at least this many of each device'); ap.add_argument('--public-only', action='store_true', help='leave out the pictures that are not on the public list (docs/report_public.json): a report that may go public')
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--rebuild', action='store_true', help='make every photo again, ignoring the cache in out/cache/'); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'neutral')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--min-lens', type=int, default=2, help='at least this many pictures of each lens'); ap.add_argument('--min-device', type=int, default=5, help='at least this many of each device'); ap.add_argument('--public-only', action='store_true', help='leave out the pictures that are not on the public list (docs/report_public.json): a report that may go public')
     ap.add_argument('--all', action='store_true'); ap.add_argument('--stems'); ap.add_argument('--quality', type=int, default=95); ap.add_argument('--crops', type=int, default=3)
     a = ap.parse_args(); a.set = a.set or list(SETS); sys.exit(build(a))
