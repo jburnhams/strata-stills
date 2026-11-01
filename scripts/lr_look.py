@@ -10,18 +10,21 @@ SLIDERS = [('Highlights2012', -74.0), ('Shadows2012', 60.0), ('Whites2012', 4.0)
 TARGETS = D.FINAL_L + D.FINAL_C + [k for k, _ in SLIDERS]
 N_LOOK = len(D.FINAL_L) + len(D.FINAL_C)
 SLOPE = (0.25, 4.0)
-CHROMA_SCALE = (0.8, 1.4)
+CHROMA_SCALE = (0.8, 2.0)
 CAST_MAX = 6.0
 CAST_TRUST = 0.6        # tried 0.6, 0.8, 1.0 on the 31 pictures: the mean cast error from the finals is lowest at 0.6 (3.52, 3.63, 3.74): the predicted cast is noisy, following it further adds error on the usual pictures
-COLOUR_TRUST = 0.6      # the model's colour change explains little of the spread (correlation about 0.55-0.8): go only part of the way, so that a wrong guess costs little at the extremes (indoor, tungsten, skin) where it shows
+COLOUR_TRUST = 1.0      # the saturation follows the predicted chroma (correlation 0.79 with the finals'): at 0.6 with the skin and vibrance weights the report came out 22 % less colourful than the person's finals (median C_mean ratio 0.79), and the person rated it 'too flat / dull'; 1.0 with a wider clip gives 0.9
 SLIDER_TRUST = 0.7      # the sliders are only moderately predictable (R2 0.2-0.5): the prediction counts for 70 %, the person's typical value for the rest
+CLARITY_GAIN = 1.0
+VIBRANCE_GAIN = 1.0
 GUIDE_EPS = 0.01
 SHADOW_GAIN = 25.0
 HIGHLIGHT_GAIN = 25.0
 VIGNETTE_GAIN = 1.0
 SKIN_HUE = 54.0        # CIELAB hue (degrees) of skin-like pixels below which the picture is turned (the 10th percentile of the person's finals' medians over pictures: 53.5; their median 59.7)
 SKIN_TURN = 4.0
-SKIN_HOLD = 0.7         # share of the colour change withheld from skin tones
+VIB_KNEE = 55.0         # chroma at which the colour boost has fallen to half (vibrance-like: already strong colours get less)
+SKIN_HOLD = 0.5         # share of the colour change withheld from skin tones
 
 
 def test_shoot(shoot, share=0.1):
@@ -89,6 +92,13 @@ def local_tone(L, shadows, highlights):
     return np.clip(L + lift, 0, 100).astype(np.float32)
 
 
+def clarity(L, amount):
+    """Lightroom-like Clarity: the mid-scale detail (lightness minus its blur at 1.5 % of the long side) added back in proportion to the slider, strongest in the midtones. CLARITY_GAIN is the extra detail at slider 100."""
+    if abs(amount) < 1: return L
+    sigma = max(2.0, 0.015 * max(L.shape)); detail = L - cv2.GaussianBlur(L, (0, 0), sigma); mid = 1 - ((L - 50) / 50) ** 2
+    return np.clip(L + CLARITY_GAIN * amount / 100 * np.clip(mid, 0, 1) * detail, 0, 100).astype(np.float32)
+
+
 def vignette(L, amount):
     """Post-crop vignette: lightness scaled by 1 + amount/100 * r^2 (r = 0 at the centre, 1 in the corners); negative darkens the corners."""
     if abs(amount) < 1: return L
@@ -109,11 +119,13 @@ def apply_look(bgr, pred, cam):
     L = vignette(local_tone(L, slider(pred, 'Shadows2012'), slider(pred, 'Highlights2012')), slider(pred, 'PostCropVignetteAmount'))                      # the vignette goes in before the percentiles are fitted: the finals' percentiles already include theirs, and the curve then makes up the global darkening it costs
     src = [float(np.percentile(L, p)) for p in D.PCTS]; dst = list(pred[:len(D.PCTS)])
     x, y = curve_knots(np.array(src), np.array(dst)); L2 = np.interp(L, x, y).astype(np.float32)
+    L2 = clarity(L2, slider(pred, 'Clarity2012'))
     p = dict(zip(TARGETS, pred)); C = np.hypot(a, b); n_chroma, n_a, n_b = float(C.mean()), float(a.mean()), float(b.mean())                          # the change is measured from OUR neutral picture's own colour, not the camera's (they differ: the camera's JPEG is not our neutral)
     scale = float(np.clip(1 + COLOUR_TRUST * (p['C_mean'] / max(n_chroma, 0.5) - 1), *CHROMA_SCALE))
     da, db = (float(np.clip(CAST_TRUST * (p['a_mean'] - n_a), -CAST_MAX, CAST_MAX)), float(np.clip(CAST_TRUST * (p['b_mean'] - n_b), -CAST_MAX, CAST_MAX)))
     hue = np.degrees(np.arctan2(b, a)) % 360; skin = np.exp(-0.5 * ((hue - 50) / 22) ** 2)                                                      # skin sits around hue 35-65 in CIELAB: its colour is the one that looks wrong first, so it is left nearer the neutral picture
-    w = 1 / (1 + (C / 45) ** 2) * (1 - SKIN_HOLD * skin); s = 1 + (scale - 1) * w                                                             # a vibrance-like boost: strong colours (already saturated) and skin get less of it
+    vib = float(np.clip(1 + (slider(pred, 'Vibrance') - dict(SLIDERS)['Vibrance']) / 100 * VIBRANCE_GAIN, 0.6, 1.6))                         # the person's Vibrance slider, against their usual +20, strengthens or weakens the boost
+    w = 1 / (1 + (C / VIB_KNEE) ** 2) * (1 - SKIN_HOLD * skin); s = 1 + (scale - 1) * w * vib                                                             # a vibrance-like boost: strong colours (already saturated) and skin get less of it
     wl = np.clip(L2 / 20.0, 0, 1)                                                                                                         # no cast pushed into black (and none withheld from skin: in warm indoor light the whole picture is skin-coloured, and holding the cast there left it red)
     a2, b2 = a * s + da * wl, b * s + db * wl; rot = skin_rotation(L2, a2, b2)
     if rot: c, sn = np.float32(np.cos(np.radians(rot))), np.float32(np.sin(np.radians(rot))); a2, b2 = a2 * c - b2 * sn, a2 * sn + b2 * c                          # the hue turned a little as a whole, like a white-balance nudge
