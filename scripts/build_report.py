@@ -195,12 +195,12 @@ CACHE_VERSION = 1                 # bump when the code of this script that makes
 
 @functools.lru_cache(maxsize=None)
 def code_hash():
-    """A hash of the code and data the pictures of ours depend on (src/stratastills without the server, its profiles, the detail metrics): any change there makes every photo again."""
+    """A hash of the code and data the pictures of ours depend on (src/stratastills without the server, settings.py and cli.py, with its profiles, and the detail metrics): any change there makes every photo again."""
     h = hashlib.sha1(); base = os.path.join(ROOT, 'src', 'stratastills')
     for dp, dn, fn in sorted(os.walk(base)):
         dn[:] = sorted(d for d in dn if d not in ('server', '__pycache__'))
         for f in sorted(fn):
-            if f.endswith(('.py', '.json')): h.update(f.encode()); h.update(open(os.path.join(dp, f), 'rb').read())
+            if f.endswith(('.py', '.json')) and f not in ('settings.py', 'cli.py'): h.update(f.encode()); h.update(open(os.path.join(dp, f), 'rb').read())
     h.update(open(os.path.join(os.path.dirname(__file__), 'compare_detail.py'), 'rb').read()); return h.hexdigest()
 
 
@@ -282,7 +282,7 @@ def build(a):
                 d = None if a.rebuild else cache_load(cdir, stem, stem_key(stem))
                 if d: data[stem] = d
             say(f'{len(data)} of {len(stems)} pictures unchanged since the last report, {len(stems) - len(data)} to make')
-            for stem, o in run_ours([s for s in stems if s not in data], a.quality, work, say):
+            for stem, o in run_ours(folder, [s for s in stems if s not in data], a.quality, work, say):
                 fin = read(o['file'])
                 if fin is None: continue
                 H, W = fin.shape[:2]; size = (W, H)
