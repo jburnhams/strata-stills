@@ -61,7 +61,7 @@ def test_the_visual_report_is_served_from_its_folder(client, tmp_path, monkeypat
 def test_report_flags_are_kept_per_report_and_picture(client, tmp_path, monkeypatch):
     monkeypatch.setenv('STRATASTILLS_REPORT_FLAGS', str(tmp_path / 'flags'))
     assert client.get('/api/report-flags/auto').json() == {} and client.get('/api/report-flags/other').status_code == 404
-    r = client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(flag=True, reasons=['too red / warm'], note='skin ok, room red', status='deferred')); assert r.status_code == 200 and r.json()['status'] == 'deferred'
+    r = client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(rating='bad', reasons=['too red / warm'], note='skin ok, room red', status='deferred')); assert r.status_code == 200 and r.json()['status'] == 'deferred' and r.json()['rating'] == 'bad' and r.json()['first'] and r.json()['at']
     assert client.get('/api/report-flags/auto').json()['2023-12-16_DSC05595']['reasons'] == ['too red / warm'] and client.get('/api/report-flags/neutral').json() == {}
     assert client.put('/api/report-flags/auto/..%2Fx', json=dict(flag=True)).status_code in (400, 404, 405)
-    client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(flag=False)); assert client.get('/api/report-flags/auto').json() == {}
+    assert client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(rating='nonsense')).json() == {}; assert client.get('/api/report-flags/auto').json() == {}

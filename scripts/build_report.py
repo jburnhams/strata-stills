@@ -218,28 +218,35 @@ def cache_save(cdir, stem, key, data, assets):
 
 
 REASONS = ['skin tone', 'too red / warm', 'too cool / blue', 'green / magenta cast', 'too saturated', 'too flat / dull', 'too dark', 'too bright', 'highlights', 'shadows', 'contrast', 'noise', 'sharpness / halos', 'wrong crop / alignment', 'other']
-FLAG_CSS = """.flag{margin:6px 0;line-height:1.2}.flag .fb{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;cursor:pointer}.pic.flagged .fb{background:#b3541e;border-color:#b3541e;color:#fff}.flag .fx{display:none;margin-top:6px}.pic.flagged .fx{display:block}.flag label{display:inline-block;margin:0 10px 4px 0;white-space:nowrap}.flag input[type=text]{width:min(520px,90%);background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 6px}.flag select{background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px}.flag .fs{color:#9aa;font-size:12px;margin-left:8px}body.onlyflagged .pic:not(.flagged){display:none}.pic.stale .fs{color:#ffb74d}"""
+FLAG_CSS = """.flag{margin:6px 0;line-height:1.2}.flag .fb{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;cursor:pointer}.flag .fx{margin-top:6px}.flag .fr{margin-bottom:4px}.pic[data-rating=worst] .fs,.pic[data-rating=bad] .fs{color:#ff8a65}.flag label{display:inline-block;margin:0 10px 4px 0;white-space:nowrap}.flag input[type=text]{width:min(520px,90%);background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 6px}.flag select{background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px}.flag .fs{color:#9aa;font-size:12px;margin-left:8px}body.onlyflagged .pic:not(.flagged){display:none}.pic.stale .fs{color:#ffb74d}"""
+
+
+RATINGS = ['worst', 'bad', 'medium', 'good', 'perfect']
 
 
 def flag_widget(pic):
-    """The flag on one picture: a button, then the reasons, a status (open, fixable, deferred, fixed) and a note. Kept by the server (/api/report-flags/<report>/<pic>, in out/flags/), so that it survives a rebuild of the report; without the server, in this browser."""
+    """The rating and flags of one picture, always shown: a rating (worst, bad, medium, good, perfect), what is wrong (checkboxes), a status (open, fixable, deferred, fixed) and a note. Kept by the server (/api/report-flags/<report>/<pic>, in out/flags/), so that it survives a rebuild of the report; without the server, in this browser."""
+    rate = ''.join(f'<label><input type=radio name="r-{html.escape(pic)}" value={r}> {r}</label>' for r in RATINGS)
     chips = ''.join(f'<label><input type=checkbox value="{html.escape(r)}"> {html.escape(r)}</label>' for r in REASONS)
-    return f'<div class=flag data-pic="{html.escape(pic)}"><button class=fb type=button>Flag as not good</button><span class=fs></span><div class=fx>{chips}<br><select class=st><option value=open>open</option><option value=fixable>fixable</option><option value=deferred>deferred (cannot fix yet)</option><option value=fixed>fixed</option></select> <input type=text class=note placeholder="what is wrong (optional)"></div></div>'
+    return f'<div class=flag data-pic="{html.escape(pic)}"><div class=fr>{rate} <button class=fb type=button>clear</button><span class=fs></span></div><div class=fx>{chips}<br><select class=st><option value=open>open</option><option value=fixable>fixable</option><option value=deferred>deferred (cannot fix yet)</option><option value=fixed>fixed</option></select> <input type=text class=note placeholder="what is wrong (optional)"></div></div>'
 
 
 def flag_header(report):
-    return '<label class=sw><input type=checkbox id=onlyflagged> only flagged pictures (<span id=nflag>0</span>)</label><a href="../../api/report-flags/%s" class=m>flags as JSON</a>' % report
+    return '<label class=sw><input type=checkbox id=onlyflagged> only rated or flagged pictures (<span id=nflag>0</span>)</label><a href="../../api/report-flags/%s" class=m>ratings and flags as JSON</a>' % report
 
 
 def flag_script(report):
-    return """<script>(()=>{const R='%s',BUILT=%d*1000,API='../../api/report-flags/'+R,LS='flags-'+R;let F={},server=true;
-const save=(pic)=>{const w=document.querySelector('.flag[data-pic="'+pic+'"]'),sec=w.closest('.pic'),d=F[pic]||{};
- fetch(API+'/'+encodeURIComponent(pic),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({flag:!!d.flag,reasons:d.reasons||[],note:d.note||'',status:d.status||'open'})}).then(r=>{if(!r.ok)throw 0;w.querySelector('.fs').textContent=d.flag?'saved':''}).catch(()=>{server=false;try{localStorage.setItem(LS,JSON.stringify(F))}catch(e){}w.querySelector('.fs').textContent='kept in this browser only (open the report through the app to keep it)'})};
+    return """<script>(()=>{const R='%s',BUILT=%d*1000,API='../../api/report-flags/'+R,LS='flags-'+R;let F={};
+const empty=d=>!d||(!d.rating&&!(d.reasons||[]).length&&!d.note);
+const save=(pic)=>{const w=document.querySelector('.flag[data-pic="'+pic+'"]'),d=F[pic]||{};
+ fetch(API+'/'+encodeURIComponent(pic),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({flag:true,rating:d.rating||'',reasons:d.reasons||[],note:d.note||'',status:d.status||'open'})}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(j=>{if(j&&j.at)F[pic]=j;paint()}).catch(()=>{try{localStorage.setItem(LS,JSON.stringify(F))}catch(e){}w.querySelector('.fs').textContent='kept in this browser only (open the report through the app to keep it)'})};
 const when=d=>d.at?new Date(d.at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'';
-const paint=()=>{let n=0;document.querySelectorAll('.flag').forEach(w=>{const d=F[w.dataset.pic]||{},on=!!d.flag;n+=on;const old=on&&d.at&&new Date(d.at).getTime()<BUILT;w.closest('.pic').classList.toggle('stale',old);if(on&&d.at&&!/browser only/.test(w.querySelector('.fs').textContent))w.querySelector('.fs').textContent='flagged '+when(d)+(old?' - before this build: revisit':'');w.closest('.pic').classList.toggle('flagged',on);w.querySelector('.fb').textContent=on?'Flagged (click to clear)':'Flag as not good';w.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=(d.reasons||[]).includes(c.value));w.querySelector('.st').value=d.status||'open';w.querySelector('.note').value=d.note||''});document.getElementById('nflag').textContent=n};
-const upd=(w,f)=>{const p=w.dataset.pic,d=F[p]=F[p]||{};f(d);if(!d.flag&&!(d.reasons||[]).length&&!d.note)delete F[p];paint();save(p)};
-document.addEventListener('click',e=>{const b=e.target.closest('.fb');if(b){const w=b.parentNode;upd(w,d=>{d.flag=!d.flag;if(!d.flag){d.reasons=[];d.note=''}})}});
-document.addEventListener('change',e=>{const w=e.target.closest('.flag');if(!w)return;if(e.target.matches('input[type=checkbox]'))upd(w,d=>{d.flag=true;d.reasons=[...w.querySelectorAll('input:checked')].map(c=>c.value)});else if(e.target.matches('.st'))upd(w,d=>{d.flag=true;d.status=e.target.value});else if(e.target.matches('.note'))upd(w,d=>{d.flag=true;d.note=e.target.value})});
+const paint=()=>{let n=0;document.querySelectorAll('.flag').forEach(w=>{const d=F[w.dataset.pic]||{},on=!empty(d);n+=on;const old=on&&d.at&&new Date(d.at).getTime()<BUILT,sec=w.closest('.pic');sec.classList.toggle('flagged',on);sec.classList.toggle('stale',old);sec.dataset.rating=d.rating||'';
+ if(!/browser only/.test(w.querySelector('.fs').textContent)||on===false)w.querySelector('.fs').textContent=on&&d.at?'set '+when(d)+(old?' - before this build: revisit':''):'';
+ w.querySelectorAll('input[type=radio]').forEach(c=>c.checked=(d.rating||'')===c.value);w.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=(d.reasons||[]).includes(c.value));w.querySelector('.st').value=d.status||'open';w.querySelector('.note').value=d.note||''});document.getElementById('nflag').textContent=n};
+const upd=(w,f)=>{const p=w.dataset.pic,d=F[p]=F[p]||{};f(d);if(empty(d))delete F[p];paint();save(p)};
+document.addEventListener('click',e=>{const b=e.target.closest('.fb');if(b){const w=b.closest('.flag');upd(w,d=>{d.rating='';d.reasons=[];d.note='';d.status='open'})}});
+document.addEventListener('change',e=>{const w=e.target.closest('.flag');if(!w)return;if(e.target.matches('input[type=radio]'))upd(w,d=>{d.rating=e.target.value});else if(e.target.matches('input[type=checkbox]'))upd(w,d=>{d.reasons=[...w.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value)});else if(e.target.matches('.st'))upd(w,d=>{d.status=e.target.value});else if(e.target.matches('.note'))upd(w,d=>{d.note=e.target.value})});
 document.getElementById('onlyflagged').onchange=e=>document.body.classList.toggle('onlyflagged',e.target.checked);
 fetch(API).then(r=>r.json()).then(j=>{F=j;paint()}).catch(()=>{try{F=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}paint()})})()</script>""" % (report, int(time.time()))
 
