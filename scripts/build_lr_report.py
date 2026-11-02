@@ -78,6 +78,18 @@ def to_final(im, row, orientation, ref):
     M = M.copy(); M[:, 2] /= k; return cv2.warpAffine(c, M, (W, H), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE), 'Lightroom crop, then registered'
 
 
+def face_errors(ims, ref, faces):
+    """For the largest face (scripts/lr_faces.py: box as fractions of the picture): how far the skin of each picture in `ims` is from `ref`'s, from the median CIELAB of the inner half of the box: (lightness, hue in degrees, chroma, CIE76 distance), all absolute. None without a face."""
+    if not faces: return None
+    H, W = ref.shape[:2]; x, y, w, h = faces[0]['box']; x0, x1, y0, y1 = int((x + w / 4) * W), int((x + 3 * w / 4) * W), int((y + h / 4) * H), int((y + 3 * h / 4) * H)
+    med = lambda im: np.median(cv2.cvtColor(im[y0:y1, x0:x1], cv2.COLOR_BGR2LAB).astype(np.float32).reshape(-1, 3), 0) - np.array([0, 128, 128], np.float32)
+    r = med(ref); out = []
+    for im in ims:
+        m = med(im); dh = (np.degrees(np.arctan2(m[2], m[1])) - np.degrees(np.arctan2(r[2], r[1])) + 180) % 360 - 180
+        out.append((abs(float(m[0] - r[0])) * 100 / 255, abs(float(dh)), abs(float(np.hypot(m[1], m[2]) - np.hypot(r[1], r[2]))), float(np.sqrt(((m - r) ** 2 * np.array([(100 / 255) ** 2, 1, 1])).sum()))))
+    return out
+
+
 def errors(ims, ref):
     """Mean |lightness difference| and mean colour difference (CIE76, blurred 1.5 px so that noise and a pixel of misregistration do not count) of each picture from `ref`."""
     lab = lambda x: cv2.GaussianBlur(cv2.cvtColor(x.astype(np.float32) / 255, cv2.COLOR_BGR2LAB), (0, 0), 1.5); r = lab(ref); out = []
@@ -109,13 +121,14 @@ def build(a):
     rows, X, names, Y, idx, G = LK.load(); SHOOTS = G; test = np.array([LK.test_shoot(g) for g in G]); rng = np.random.default_rng(a.seed)
     say = lambda m: print(m, flush=True); say(f'{len(X)} pairs, {test.sum()} in {len(set(G[test]))} held-out shoots; training the look model on the other {(~test).sum()}')
     tmodels = TM.train_cached(a.hard_weight)
+    FACES = json.load(open(os.path.join(D.OUT, 'faces.json'))) if os.path.exists(os.path.join(D.OUT, 'faces.json')) else {}
     models = LK.train_cached(X[~test], Y[~test]); P = LK.predict(models, X[test]); cam = X[test][:, [names.index(f'L_p{p}') for p in D.PCTS]]
     held = dict(model=np.abs(P[:, :9] - Y[test][:, :9]).mean(0), camera=np.abs(cam - Y[test][:, :9]).mean(0), avg=np.abs(np.median(Y[~test][:, :9], 0) - Y[test][:, :9]).mean(0))
     if a.stems: want = set(a.stems.split(',')); chosen = [i for i in range(len(idx)) if test[i] and os.path.splitext(os.path.basename(rows[idx[i]]['raw']))[0] in want]; why = {i: 'asked for' for i in chosen}
     else: chosen, why = pick(categorise(rows, X, names, Y, idx), test, a.n, rng, X, names)
     say(f'{len(chosen)} pictures: ' + ', '.join(f'{lab} {sum(1 for i in chosen if why[i] == lab)}' for _, lab, _ in CATEGORIES))
     final_dir = os.path.abspath(a.out); out = final_dir + '.building'; assets = os.path.join(out, 'assets'); shutil.rmtree(out, ignore_errors=True); os.makedirs(assets)
-    work = tempfile.mkdtemp(prefix='lr-report-', dir=os.path.dirname(out)); sections, nav, summary = [], [], []
+    work = tempfile.mkdtemp(prefix='lr-report-', dir=os.path.dirname(out)); sections, nav, summary, face_summary = [], [], [], []
     try:
         raws = [rows[idx[i]]['raw'] for i in chosen]; ex = D.exif_of(raws); full_exif = {x['SourceFile']: x for x in json.loads(subprocess.run(['exiftool', '-json', '-G1', '-a', '--ThumbnailImage', '--PreviewImage', *raws], capture_output=True, text=True).stdout or '[]')}
         dev = neutral(raws, work, say, a.rebuild)
@@ -127,7 +140,8 @@ def build(a):
             o = ex.get(raw, {}).get('Orientation', 1); nim, nrec = dev[raw]
             cam_a, how_c = to_final(camera, row, o, fin); neu_a, how_n = to_final(D.unorient(nim, o), row, o, fin)          # our output is turned the way up already: back to the sensor's frame for Lightroom's crop
             pred = LK.predict(models, X[i:i + 1])[0]; auto, did = LK.apply_look(neu_a, pred, dict(zip(names, X[i])))
-            auto2, _ = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i:i + 1])[0]); ims = [cam_a, neu_a, fin, auto, auto2]; err = errors([cam_a, neu_a, auto, auto2], fin); summary.append((why[i], err))
+            auto2, _ = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i:i + 1])[0]); ims = [cam_a, neu_a, fin, auto, auto2]; err = errors([cam_a, neu_a, auto, auto2], fin); summary.append((why[i], err)); fl = FACES.get(str(int(idx[i])), []); fe = face_errors([cam_a, neu_a, auto, auto2], fin, fl)
+            if fe: face_summary.append(fe)
             maps = [('auto against yours', tone_map(fin, auto)), ('neutral against yours', tone_map(fin, neu_a)), ('camera against yours', tone_map(fin, cam_a))]
             kk = 1000 / max(W, H); small = lambda m: cv2.resize(m, (round(W * kk), round(H * kk)), interpolation=cv2.INTER_AREA)
             sel = windows([(kind, small(m)) for kind, m in maps], (round(WIN[0] * kk), round(WIN[1] * kk)), a.crops)
@@ -139,16 +153,18 @@ def build(a):
                 x0 = min(max(0, int(round(cx / kk))), W - WIN[0]); y0 = min(max(0, int(round(cy / kk))), H - WIN[1]); pw, ph = WIN[0] * ZOOM, WIN[1] * ZOOM
                 sheet = np.hstack([BR.label(cv2.resize(im[y0:y0 + WIN[1], x0:x0 + WIN[0]], (pw, ph), interpolation=cv2.INTER_CUBIC).copy(), nm) for nm, im in zip(NAMES, ims)])
                 fn = f'{sid}-crop{n}.jpg'; cv2.imwrite(os.path.join(assets, fn), sheet, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); blocks.append(dict(n=n, kind=kind, x=x0 / W, y=y0 / H, w=WIN[0] / W, h=WIN[1] / H, sheet=fn, pw=pw, ph=ph))
-            sections.append(render(sid, stem, row, why[i], W, H, tabs, blocks, err, pred, did, nrec, full_exif.get(raw, {}), (how_c, how_n), Y[i])); nav.append((sid, f'{stem} ({why[i]})'))
+            sections.append(render(sid, stem, row, why[i], W, H, tabs, blocks, err, pred, did, nrec, full_exif.get(raw, {}), (how_c, how_n), Y[i], fl, fe)); nav.append((sid, f'{stem} ({why[i]})'))
     finally: shutil.rmtree(work, ignore_errors=True)
     if not sections: say('nothing to report on'); return 1
-    open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(page(sections, nav, summary, held, len(set(G[test])), int(test.sum())))
+    open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(page(sections, nav, summary, held, len(set(G[test])), int(test.sum()), face_summary))
     shutil.rmtree(final_dir, ignore_errors=True); os.rename(out, final_dir); say(f'report: {os.path.join(final_dir, "index.html")} ({len(sections)} pictures)'); return 0
 
 
-def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, how, actual):
+def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, how, actual, faces=(), fe=None):
     tabs_html = '<div class=tabs>' + ''.join(f'<button data-src="assets/{fn}"{" class=on" if j == 2 else ""}>{html.escape(nm)}</button>' for j, (nm, fn) in enumerate(tabs)) + '</div>'
-    boxes = ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks)
+    fboxes = ''.join(f'<div class="box fbox" style="left:{f["box"][0] * 100:.2f}%;top:{f["box"][1] * 100:.2f}%;width:{f["box"][2] * 100:.2f}%;height:{f["box"][3] * 100:.2f}%"></div>' for f in faces)
+    ftab = '<table class=t><tr><th>largest face, off from your final by</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>' + ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in e) + '</tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], fe)) + '</table>' if fe else ''
+    boxes = fboxes + ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks)
     crops = ''.join(f'<h3>Crop {b["n"]}: where {html.escape(b["kind"])} differ most</h3><div class=crop><div class=ov style="width:260px"><img src="assets/{tabs[2][1]}" width=260><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div><img src="assets/{b["sheet"]}" width={b["pw"] * 4 // 2} style="max-width:100%"></div>' for b in blocks)
     errs = '<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>' + ''.join(f'<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], err)) + '</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>'
     key = {k: row.get(k, '') for k in KEY_SETTINGS if k in row}; rest = {k: v for k, v in sorted(row.items()) if k not in key and k not in ('final', 'raw')}
@@ -157,7 +173,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     ex = {k: v for k, v in exif.items() if k != 'SourceFile' and not str(v).startswith('(Binary')}
     sh = f"{exif.get('IFD0:Model', '')} · {exif.get('ExifIFD:LensModel', exif.get('Sony:LensType', ''))} · {exif.get('ExifIFD:FocalLength', '')} · f/{exif.get('ExifIFD:FNumber', '')} · {exif.get('ExifIFD:ExposureTime', '')} s · ISO {exif.get('ExifIFD:ISO', '')}"
     return f"""<section class=pic id="{sid}"><h2>{html.escape(stem)} <small class=why>{html.escape(os.path.basename(os.path.dirname(row['final'])))} · {html.escape(why)}</small></h2>{BR.flag_widget(sid)}<p class=m>{html.escape(sh)} · final {W}x{H} (brought to {LONG} px long side)<br>raw: {html.escape(row['raw'])}<br>final: {html.escape(row['final'])}</p>
-<div class=ov style="width:{BR.fit_width(W, H, OVERVIEW)}"><img class=ovimg src="assets/{tabs[2][1]}">{boxes}</div>{tabs_html}{errs}
+<div class=ov style="width:{BR.fit_width(W, H, OVERVIEW)}"><img class=ovimg src="assets/{tabs[2][1]}">{boxes}</div>{tabs_html}{errs}{ftab}
 <details open><summary>Lightroom: your main settings</summary>{table(key)}</details>
 <details><summary>Auto (ours): the predicted look and what was done</summary>{look}{did_html}</details>
 <details><summary>Neutral (ours): the pipeline's settings</summary>{BR.settings_html(nrec)}</details>
@@ -165,7 +181,15 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
 <details><summary>The raw's metadata ({len(ex)} tags)</summary>{table(ex)}</details>{crops}</section>"""
 
 
-def page(sections, nav, summary, held, n_shoots, n_pics):
+def face_table(fs):
+    """The faces, which matter most: over the shown pictures that have a face, the mean distance of the largest face's skin from your final's."""
+    if not fs: return ''
+    mean = lambda j, k: float(np.mean([e[j][k] for e in fs]))
+    rows = ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{mean(j, k):.1f}</td>' for k in range(4)) + '</tr>' for j, nm in enumerate(['Camera', 'Neutral', 'Auto', 'Auto 2 (learned colour)']))
+    return f'<h3>Faces ({len(fs)} of the shown pictures have one)</h3><table class=t><tr><th>mean distance of the largest face from your final</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>{rows}</table>'
+
+
+def page(sections, nav, summary, held, n_shoots, n_pics, face_summary=()):
     med = lambda v: float(np.mean(v)) if v else float('nan')
     rows = ''.join(f'<tr><th>{html.escape(lab)} ({sum(1 for w, _ in summary if w == lab)})</th>' + ''.join(f'<td>{med([e[j][0] for w, e in summary if w == lab]):.1f} / {med([e[j][1] for w, e in summary if w == lab]):.1f}</td>' for j in range(4)) + '</tr>' for _, lab, _ in CATEGORIES if any(w == lab for w, _ in summary))
     rows += '<tr><th>all shown</th>' + ''.join(f'<td>{med([e[j][0] for _, e in summary]):.1f} / {med([e[j][1] for _, e in summary]):.1f}</td>' for j in range(4)) + '</tr>'
@@ -173,7 +197,7 @@ def page(sections, nav, summary, held, n_shoots, n_pics):
     return f"""<!doctype html><meta charset=utf-8><title>stratastills: auto-process</title><style>{BR.CSS}</style><header><h1>Auto-process: camera, neutral, your Lightroom final and auto</h1>
 <div class=note>PRIVATE: your own pictures. Generated {time.strftime('%Y-%m-%d %H:%M')} by scripts/build_lr_report.py, on pictures from shoots the look model was not trained on. Every picture is shown on the crop of your final, at {LONG} px on the long side: <b>Camera</b> (the camera's JPEG beside the raw, else the preview inside the raw: smaller, so softer), <b>Neutral</b> (our 'best' pipeline, not levelled), <b>Lightroom</b> (your export), <b>Auto</b> (our neutral bent to the look the model predicts you would have given it: version 1, one global tone curve, colour strength and cast; no local Highlights/Shadows yet). Crops are taken where auto, neutral and the camera differ most from yours. <a href="../neutral/">Neutral report</a> · <a href="../">All reports</a></div>
 {BR.flag_header('auto')}<nav>{''.join(f'<a href="#{s}">{html.escape(t)}</a>' for s, t in nav)}</nav></header><main>
-<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th><th>Auto 2 (learned colour)</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>
+<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th><th>Auto 2 (learned colour)</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>{face_table(face_summary)}
 <h3>All {n_pics} pictures of the {n_shoots} held-out shoots (the model's prediction only, no pictures made)</h3><table class=t><tr><th>error of the final's lightness at</th>{''.join(f'<th>p{p}</th>' for p in D.PCTS)}</tr>{hrows}</table>
 {''.join(sections)}</main>{BR.flag_script('auto')}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');b.closest('section').querySelector('.ovimg').src=b.dataset.src}})</script>"""
 
