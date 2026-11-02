@@ -1,6 +1,8 @@
 # Detector models for the subject / object stages (added when those stages land; same choices as strata-360).
 ultralytics                # YOLO11 (fetches its own weights on first use)
 insightface                # faces: detection (buffalo_l)
+nudenet                    # the nudity filter (nsfw.py): local ONNX detector, weights inside the package
+onnxruntime                # runs it
 spandrel==0.4.2            # loads the denoising model (denoise_ai.py)
 einops                     # needed by SCUNet
 # torch/torchvision with CUDA are installed separately (RTX 30/40: --index-url https://download.pytorch.org/whl/cu128, torch==2.9.1 torchvision==0.24.1; cp313 and cp314 wheels exist)
