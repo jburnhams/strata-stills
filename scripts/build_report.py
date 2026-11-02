@@ -6,7 +6,7 @@ import argparse, functools, hashlib, collections, glob, html, json, os, shutil, 
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import compare_detail as CD, render_external as RE
-from stratastills import externaltools as ET
+from stratastills import externaltools as ET, nsfw
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 RAW_EXTS = ('.arw', '.cr2', '.cr3', '.nef', '.dng', '.rw2', '.orf', '.raf', '.pef', '.srw')
@@ -271,7 +271,7 @@ def build(a):
             cfg = SETS[setname]; folder = os.path.join(ROOT, 'candidates', setname); cj = os.path.join(ROOT, 'docs', f'{setname}_candidates.json')
             if not os.path.isdir(folder) or not os.path.exists(cj): say(f'{setname}: no candidate photos here ({folder}), skipped'); continue
             cands = json.load(open(cj)); whys = {c['stem']: c.get('why', '') for c in cands}
-            files = {os.path.splitext(f)[0]: os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in RAW_EXTS}; shots = {st: shot(f) for st, f in files.items()}
+            files = {os.path.splitext(f)[0]: os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in RAW_EXTS and not nsfw.flagged(os.path.join(folder, f))}; shots = {st: shot(f) for st, f in files.items()}
             public = set(json.load(open(os.path.join(ROOT, 'docs', 'report_public.json'))).get(setname, []))      # (a set without an entry has not been looked through: nothing of it in a report that may go public)
             pool = [s for s in a.stems.split(',') if s in files] if a.stems else [s for s in files if not a.public_only or s in public]; feats = {s: look(files[s]) for s in pool}; lens_n, dev_n = (10 ** 6, 10 ** 6) if a.all else (a.min_lens, a.min_device)
             groups = choose(pool, shots, feats, lens_n, dev_n); stems = [s for ss in groups.values() for s in ss]

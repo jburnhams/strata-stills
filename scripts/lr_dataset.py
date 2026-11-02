@@ -7,6 +7,8 @@ Lightroom's crop (crs:CropTop/Left/Bottom/Right, CropAngle) is in the frame of t
 import argparse, collections, json, math, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 import cv2, numpy as np
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from stratastills import nsfw
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'candidates', 'personal')
@@ -35,6 +37,7 @@ def pairs(a):
             s, e = os.path.splitext(f); m = STEM.match(s)
             if e.lower() not in ('.jpg', '.jpeg', '.tif', '.tiff') or not m or '-Pano' in s or os.sep + 'small' in root.lower(): continue      # panoramas are stitched from several raws; small/ holds resized copies of the same edit
             c = [p for p in raws.get(m.group(1).upper(), []) if f'{os.sep}{year}{os.sep}' in p]                                            # file numbers repeat over the years: same stem and same year
+            if c and nsfw.flagged(os.path.join(root, f)): continue                                                                          # the nudity filter: such a picture feeds no report, model or arena
             if c: first.setdefault(c[0], os.path.join(root, f))
     out = [dict(final=f, raw=r) for r, f in first.items()]
     json.dump(out, open(os.path.join(OUT, 'pairs.json'), 'w')); print(f'{len(out)} raws with a final')

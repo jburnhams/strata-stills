@@ -9,7 +9,7 @@ Work done on a shot in an editor lands next to it with a suffix:
   `...-Pano.jpg/.dng`                     a merged panorama of several shots: its OWN item (kind 'pano', stem `<stem>-Pano`, `parent` the shot it is named after), since it is a different picture
 A variant is {id, label, path, kind: raw|jpeg|derived, ext}. The default primary variant is the raw when there is one, else the camera's JPEG, else the first derived file; the project can choose another (projects.py).
 
-`scan(folder)` returns the items sorted by name (which, for DJI, is by time); nothing is decoded."""
+`scan(folder)` returns the items sorted by name (which, for DJI, is by time), without the pictures the nudity filter flags (nsfw.py: the one place every consumer lists pictures through)."""
 import os, re
 from dataclasses import dataclass, field
 
@@ -83,4 +83,5 @@ def scan(folder, recursive=False):
             else: s.jpeg = path
         elif key in shots: shots[key].derived.append((tag, path))
         else: shots[key] = Shot(stem=stem, derived=[(tag, path)])
-    return [shots[k] for k in sorted(shots)]
+    from stratastills import nsfw
+    return nsfw.keep_shots([shots[k] for k in sorted(shots)])                    # a picture the nudity filter flags is skipped for every purpose (nsfw.py)
