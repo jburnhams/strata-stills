@@ -65,3 +65,16 @@ def test_report_flags_are_kept_per_report_and_picture(client, tmp_path, monkeypa
     assert client.get('/api/report-flags/auto').json()['2023-12-16_DSC05595']['reasons'] == ['too red / warm'] and client.get('/api/report-flags/neutral').json() == {}
     assert client.put('/api/report-flags/auto/..%2Fx', json=dict(flag=True)).status_code in (400, 404, 405)
     assert client.put('/api/report-flags/auto/2023-12-16_DSC05595', json=dict(rating='nonsense')).json() == {}; assert client.get('/api/report-flags/auto').json() == {}
+
+
+def test_the_arena_offers_blind_pairs_records_votes_and_rates(client, tmp_path, monkeypatch):
+    arena = tmp_path / 'arena'; (arena / 'img').mkdir(parents=True); monkeypatch.setenv('STRATASTILLS_ARENA', str(arena))
+    assert client.get('/api/arena/next').status_code == 404 and client.get('/arena/').status_code == 200
+    for n in ('lr', 'auto1'): (arena / 'img' / f'{n}.jpg').write_bytes(b'jpg-' + n.encode())
+    (arena / 'pool.json').write_text('{"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "b"}}}')
+    p = client.get('/api/arena/next').json(); assert 'lr' not in str(p) and 'auto1' not in str(p)
+    got = {client.get('/arena/' + p['left']).content, client.get('/arena/' + p['right']).content}; assert got == {b'jpg-lr', b'jpg-auto1'}
+    assert client.post('/api/arena/vote', json=dict(token=p['token'], choice='left', ms=900)).json()['votes'] == 1 and client.post('/api/arena/vote', json=dict(token=p['token'], choice='left')).status_code == 404
+    q = client.get('/api/arena/next').json(); assert client.post('/api/arena/vote', json=dict(token=q['token'], choice='sideways')).status_code == 400
+    r = client.get('/api/arena/ratings').json(); assert r['votes'] == 1 and {v['name'] for v in r['variants']} == {'lr', 'auto1'} and r['head_to_head'][0]['ties'] == 0
+    assert client.post('/api/arena/undo').json()['votes'] == 0 and client.post('/api/arena/undo').status_code == 404

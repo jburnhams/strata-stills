@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rating arena</title>
+<style>
+:root{--bg:#111;--fg:#d8dbe0;--mu:#8a909a;--ac:#3b6fd8}
+@media (prefers-color-scheme:light){:root{--bg:#f3f3f3;--fg:#222;--mu:#666}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;gap:12px;align-items:center;padding:8px 14px;flex-wrap:wrap}header b{font-size:15px}.mu{color:var(--mu)}
+button{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:5px;padding:5px 12px;cursor:pointer;font:inherit}button:hover{border-color:var(--ac)}
+main{flex:1;min-height:0;display:flex;gap:6px;padding:0 6px 6px}
+.side{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;cursor:pointer;border:2px solid transparent;border-radius:4px}.side:hover{border-color:var(--ac)}
+.side img{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain;display:block}
+#msg{padding:30px;text-align:center}#rat{padding:10px 20px;overflow:auto}table{border-collapse:collapse}td,th{padding:3px 12px;text-align:right;border-bottom:1px solid #333}th:first-child,td:first-child{text-align:left}
+@media (max-width:700px){main{flex-direction:column}.side img{max-height:42vh}}
+</style></head><body>
+<header><b>Which is better?</b><span class="mu">click a picture, or &larr; &rarr; &middot; &darr; equal &middot; S skip &middot; Z undo</span>
+<button id="tie">equal</button><button id="skip">skip</button><button id="undo">undo</button><button id="rt">ratings</button><span class="mu" id="cnt"></span></header>
+<div id="msg" hidden></div><div id="rat" hidden></div>
+<main id="m"><div class="side" id="l"><img id="li" alt=""></div><div class="side" id="r"><img id="ri" alt=""></div></main>
+<script>
+const $=id=>document.getElementById(id);let cur=null,nxt=null,t0=0,busy=false;
+async function get(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.status);return r.json()}
+const pre=p=>new Promise(res=>{let n=0;const d=()=>{if(++n==2)res()};for(const s of [p.left,p.right]){const i=new Image();i.onload=i.onerror=d;i.src=s}});
+async function fetchNext(){const p=await get('../api/arena/next');await pre(p);return p}
+async function show(){
+  try{cur=nxt||await fetchNext();nxt=null}catch(e){$('m').hidden=true;$('msg').hidden=false;$('msg').textContent=String(e.message||e);return}
+  $('msg').hidden=true;$('m').hidden=false;$('li').src=cur.left;$('ri').src=cur.right;t0=Date.now();$('cnt').textContent=cur.votes+' votes, '+cur.pool+' pictures';
+  fetchNext().then(p=>{nxt=p}).catch(()=>{})}
+async function vote(c){if(!cur||busy)return;busy=true;const tk=cur.token;try{await get('../api/arena/vote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tk,choice:c,ms:Date.now()-t0})})}catch(e){}busy=false;if(!$('rat').hidden)ratings();show()}
+async function undo(){try{await get('../api/arena/undo',{method:'POST'})}catch(e){}cur=null;nxt=null;show()}
+async function ratings(){const j=await get('../api/arena/ratings');$('rat').innerHTML='<p class="mu">'+j.votes+' votes on '+j.voted_pictures+' of '+j.pictures+' pictures. Rating = Bradley-Terry on the Elo scale (mean 1500), with the 5-95% range from resampling the votes; Elo is played in time order.</p><table><tr><th>version</th><th>rating</th><th>range</th><th>Elo</th><th>votes</th></tr>'+j.variants.map(v=>'<tr><td>'+v.name+'</td><td>'+(v.bt??'-')+'</td><td>'+(v.lo!=null?v.lo+' to '+v.hi:'-')+'</td><td>'+(v.elo??'-')+'</td><td>'+v.votes+'</td></tr>').join('')+'</table><p></p><table><tr><th>pair</th><th>first wins</th><th>second wins</th><th>equal</th></tr>'+j.head_to_head.map(h=>'<tr><td>'+h.a+' vs '+h.b+'</td><td>'+h.a_wins+'</td><td>'+h.b_wins+'</td><td>'+h.ties+'</td></tr>').join('')+'</table>'}
+$('l').onclick=()=>vote('left');$('r').onclick=()=>vote('right');$('tie').onclick=()=>vote('tie');$('skip').onclick=()=>vote('skip');$('undo').onclick=undo;$('rt').onclick=()=>{$('rat').hidden=!$('rat').hidden;if(!$('rat').hidden)ratings()};
+document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea'))return;const k=e.key.toLowerCase();if(k==='arrowleft')vote('left');else if(k==='arrowright')vote('right');else if(k==='arrowdown'||k==='e')vote('tie');else if(k==='s')vote('skip');else if(k==='z')undo()});
+show();
+</script></body></html>

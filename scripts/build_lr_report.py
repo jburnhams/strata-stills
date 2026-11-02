@@ -5,12 +5,12 @@ Needs candidates/personal/ (scripts/lr_dataset.py pairs, catalogue, features).""
 import argparse, hashlib, html, json, os, shutil, subprocess, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import build_report as BR, lr_dataset as D, lr_look as LK, lr_tmodel as TM
+import build_report as BR, lr_dataset as D, lr_look as LK, lr_tmodel as TM, lr_ftarget as FT
 
 ROOT = BR.ROOT
 LONG = 3000                    # every picture brought to the final's framing at this long side
 WIN = (200, 140); ZOOM = 2; OVERVIEW = 1100; JPEG_Q = 82
-NAMES = ['Camera', 'Neutral (ours)', 'Lightroom (yours)', 'Auto (ours)', 'Auto 2 (learned colour)']
+NAMES = ['Camera', 'Neutral (ours)', 'Lightroom (yours)', 'Auto (ours)', 'Auto 2 (learned colour)', 'Auto 3 (face anchor)']
 KEY_SETTINGS = ['ProcessVersion', 'CameraProfile', 'WhiteBalance', 'Temperature', 'Tint', 'Exposure2012', 'Contrast2012', 'Highlights2012', 'Shadows2012', 'Whites2012', 'Blacks2012', 'Texture', 'Clarity2012', 'Dehaze', 'Vibrance', 'Saturation', 'ToneCurveName2012', 'PostCropVignetteAmount', 'LensProfileEnable', 'HasCrop', 'CropAngle']
 CATEGORIES = [('usual', 'a usual picture', 0.4), ('dark_cam', 'dark in camera', 0.12), ('bright_cam', 'bright in camera', 0.12), ('kept_dark', 'you kept it darker than the camera suggests', 0.12), ('brightest', 'one of your brightest finals', 0.1), ('masks', 'you used masks or brushes', 0.07), ('extreme', 'a slider far from your usual', 0.07)]
 
@@ -122,6 +122,7 @@ def build(a):
     say = lambda m: print(m, flush=True); say(f'{len(X)} pairs, {test.sum()} in {len(set(G[test]))} held-out shoots; training the look model on the other {(~test).sum()}')
     tmodels = TM.train_cached(a.hard_weight)
     FACES = json.load(open(os.path.join(D.OUT, 'faces.json'))) if os.path.exists(os.path.join(D.OUT, 'faces.json')) else {}
+    fmodels = FT.train_cached()
     models = LK.train_cached(X[~test], Y[~test]); P = LK.predict(models, X[test]); cam = X[test][:, [names.index(f'L_p{p}') for p in D.PCTS]]
     held = dict(model=np.abs(P[:, :9] - Y[test][:, :9]).mean(0), camera=np.abs(cam - Y[test][:, :9]).mean(0), avg=np.abs(np.median(Y[~test][:, :9], 0) - Y[test][:, :9]).mean(0))
     if a.stems: want = set(a.stems.split(',')); chosen = [i for i in range(len(idx)) if test[i] and os.path.splitext(os.path.basename(rows[idx[i]]['raw']))[0] in want]; why = {i: 'asked for' for i in chosen}
@@ -140,7 +141,8 @@ def build(a):
             o = ex.get(raw, {}).get('Orientation', 1); nim, nrec = dev[raw]
             cam_a, how_c = to_final(camera, row, o, fin); neu_a, how_n = to_final(D.unorient(nim, o), row, o, fin)          # our output is turned the way up already: back to the sensor's frame for Lightroom's crop
             pred = LK.predict(models, X[i:i + 1])[0]; auto, did = LK.apply_look(neu_a, pred, dict(zip(names, X[i])))
-            auto2, _ = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i:i + 1])[0]); ims = [cam_a, neu_a, fin, auto, auto2]; err = errors([cam_a, neu_a, auto, auto2], fin); summary.append((why[i], err)); fl = FACES.get(str(int(idx[i])), []); fe = face_errors([cam_a, neu_a, auto, auto2], fin, fl)
+            auto2, _ = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i:i + 1])[0]); fl = FACES.get(str(int(idx[i])), []); fa = dict(box=fl[0]['box'], target=FT.face_target(fmodels, X[i], fl[0])) if fl else None; auto3, did3 = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i:i + 1])[0], face=fa); did = dict(did, **{k: v for k, v in did3.items() if k.startswith('face_')})
+            ims = [cam_a, neu_a, fin, auto, auto2, auto3]; err = errors([cam_a, neu_a, auto, auto2, auto3], fin); summary.append((why[i], err)); fe = face_errors([cam_a, neu_a, auto, auto2, auto3], fin, fl)
             if fe: face_summary.append(fe)
             maps = [('auto against yours', tone_map(fin, auto)), ('neutral against yours', tone_map(fin, neu_a)), ('camera against yours', tone_map(fin, cam_a))]
             kk = 1000 / max(W, H); small = lambda m: cv2.resize(m, (round(W * kk), round(H * kk)), interpolation=cv2.INTER_AREA)
@@ -163,10 +165,10 @@ def build(a):
 def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, how, actual, faces=(), fe=None):
     tabs_html = '<div class=tabs>' + ''.join(f'<button data-src="assets/{fn}"{" class=on" if j == 2 else ""}>{html.escape(nm)}</button>' for j, (nm, fn) in enumerate(tabs)) + '</div>'
     fboxes = ''.join(f'<div class="box fbox" style="left:{f["box"][0] * 100:.2f}%;top:{f["box"][1] * 100:.2f}%;width:{f["box"][2] * 100:.2f}%;height:{f["box"][3] * 100:.2f}%"></div>' for f in faces)
-    ftab = '<table class=t><tr><th>largest face, off from your final by</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>' + ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in e) + '</tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], fe)) + '</table>' if fe else ''
+    ftab = '<table class=t><tr><th>largest face, off from your final by</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>' + ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in e) + '</tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4], NAMES[5]], fe)) + '</table>' if fe else ''
     boxes = fboxes + ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks)
     crops = ''.join(f'<h3>Crop {b["n"]}: where {html.escape(b["kind"])} differ most</h3><div class=crop><div class=ov style="width:260px"><img src="assets/{tabs[2][1]}" width=260><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div><img src="assets/{b["sheet"]}" width={b["pw"] * 4 // 2} style="max-width:100%"></div>' for b in blocks)
-    errs = '<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>' + ''.join(f'<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], err)) + '</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>'
+    errs = '<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>' + ''.join(f'<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>' for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4], NAMES[5]], err)) + '</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>'
     key = {k: row.get(k, '') for k in KEY_SETTINGS if k in row}; rest = {k: v for k, v in sorted(row.items()) if k not in key and k not in ('final', 'raw')}
     look = '<table class=t><tr><th></th>' + ''.join(f'<th>{t}</th>' for t in LK.TARGETS) + '</tr>' + ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in vals) + '</tr>' for nm, vals in (('predicted', pred), ('your final', actual))) + '</table>'
     did_html = table({'tone curve on L (from, to)': ' '.join(f'{x:g}->{y:g}' for x, y in did['curve']), 'neutral lightness percentiles': did['source_L'], 'chroma scale': did['chroma_scale'], 'local sliders used': did['sliders'], 'colour cast moved (a, b)': did['cast'], 'camera aligned': how[0], 'neutral aligned': how[1]})
@@ -185,19 +187,19 @@ def face_table(fs):
     """The faces, which matter most: over the shown pictures that have a face, the mean distance of the largest face's skin from your final's."""
     if not fs: return ''
     mean = lambda j, k: float(np.mean([e[j][k] for e in fs]))
-    rows = ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{mean(j, k):.1f}</td>' for k in range(4)) + '</tr>' for j, nm in enumerate(['Camera', 'Neutral', 'Auto', 'Auto 2 (learned colour)']))
+    rows = ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{mean(j, k):.1f}</td>' for k in range(4)) + '</tr>' for j, nm in enumerate(['Camera', 'Neutral', 'Auto', 'Auto 2 (learned colour)', 'Auto 3 (face anchor)']))
     return f'<h3>Faces ({len(fs)} of the shown pictures have one)</h3><table class=t><tr><th>mean distance of the largest face from your final</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>{rows}</table>'
 
 
 def page(sections, nav, summary, held, n_shoots, n_pics, face_summary=()):
     med = lambda v: float(np.mean(v)) if v else float('nan')
-    rows = ''.join(f'<tr><th>{html.escape(lab)} ({sum(1 for w, _ in summary if w == lab)})</th>' + ''.join(f'<td>{med([e[j][0] for w, e in summary if w == lab]):.1f} / {med([e[j][1] for w, e in summary if w == lab]):.1f}</td>' for j in range(4)) + '</tr>' for _, lab, _ in CATEGORIES if any(w == lab for w, _ in summary))
-    rows += '<tr><th>all shown</th>' + ''.join(f'<td>{med([e[j][0] for _, e in summary]):.1f} / {med([e[j][1] for _, e in summary]):.1f}</td>' for j in range(4)) + '</tr>'
+    rows = ''.join(f'<tr><th>{html.escape(lab)} ({sum(1 for w, _ in summary if w == lab)})</th>' + ''.join(f'<td>{med([e[j][0] for w, e in summary if w == lab]):.1f} / {med([e[j][1] for w, e in summary if w == lab]):.1f}</td>' for j in range(5)) + '</tr>' for _, lab, _ in CATEGORIES if any(w == lab for w, _ in summary))
+    rows += '<tr><th>all shown</th>' + ''.join(f'<td>{med([e[j][0] for _, e in summary]):.1f} / {med([e[j][1] for _, e in summary]):.1f}</td>' for j in range(5)) + '</tr>'
     hrows = ''.join(f'<tr><th>{nm}</th>' + ''.join(f'<td>{v:.1f}</td>' for v in held[k]) + '</tr>' for k, nm in (('camera', 'camera picture as it is'), ('avg', 'your average final'), ('model', 'auto (predicted)')))
     return f"""<!doctype html><meta charset=utf-8><title>stratastills: auto-process</title><style>{BR.CSS}</style><header><h1>Auto-process: camera, neutral, your Lightroom final and auto</h1>
 <div class=note>PRIVATE: your own pictures. Generated {time.strftime('%Y-%m-%d %H:%M')} by scripts/build_lr_report.py, on pictures from shoots the look model was not trained on. Every picture is shown on the crop of your final, at {LONG} px on the long side: <b>Camera</b> (the camera's JPEG beside the raw, else the preview inside the raw: smaller, so softer), <b>Neutral</b> (our 'best' pipeline, not levelled), <b>Lightroom</b> (your export), <b>Auto</b> (our neutral bent to the look the model predicts you would have given it: version 1, one global tone curve, colour strength and cast; no local Highlights/Shadows yet). Crops are taken where auto, neutral and the camera differ most from yours. <a href="../neutral/">Neutral report</a> · <a href="../">All reports</a></div>
 {BR.flag_header('auto')}<nav>{''.join(f'<a href="#{s}">{html.escape(t)}</a>' for s, t in nav)}</nav></header><main>
-<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th><th>Auto 2 (learned colour)</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>{face_table(face_summary)}
+<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th><th>Auto 2 (learned colour)</th><th>Auto 3 (face anchor)</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>{face_table(face_summary)}
 <h3>All {n_pics} pictures of the {n_shoots} held-out shoots (the model's prediction only, no pictures made)</h3><table class=t><tr><th>error of the final's lightness at</th>{''.join(f'<th>p{p}</th>' for p in D.PCTS)}</tr>{hrows}</table>
 {''.join(sections)}</main>{BR.flag_script('auto')}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');b.closest('section').querySelector('.ovimg').src=b.dataset.src}})</script>"""
 

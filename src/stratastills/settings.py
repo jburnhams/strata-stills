@@ -55,6 +55,11 @@ def report_flags_dir():
     return os.path.join(os.path.dirname(report_dir()), 'flags') if not os.environ.get('STRATASTILLS_REPORT_FLAGS') else os.path.abspath(os.path.expanduser(os.environ['STRATASTILLS_REPORT_FLAGS']))
 
 
+def arena_dir():
+    """Where the rating arena keeps its pictures, pool and votes (`out/arena` by default; STRATASTILLS_ARENA moves it)."""
+    return os.path.abspath(os.path.expanduser(os.environ.get('STRATASTILLS_ARENA') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'out', 'arena')))
+
+
 def report_dir():
     """Where scripts/build_report.py writes the visual report (`out/report` of the repository), which the server shows at /report/: the STRATASTILLS_REPORT environment variable or `report_dir` of the settings file move it."""
     p = os.environ.get('STRATASTILLS_REPORT') or load().get('report_dir') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'out', 'report')

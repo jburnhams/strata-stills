@@ -19,6 +19,22 @@ def face_table(idx):
     return F, T
 
 
+def train_cached():
+    """Three models (one per Lab channel) for the CHANGE of the largest face from the preview to the final, trained on the shoots not held out; kept in out/cache/. Returns (models, feature names)."""
+    import hashlib, pickle, xgboost as xgb
+    rows, X, names, Y, idx, G = K.load(); F, T = face_table(idx); has = ~np.isnan(T[:, 0]); test = np.array([K.test_shoot(g) for g in G]); XF = np.hstack([X, F]); tr = has & ~test
+    key = hashlib.sha1(repr((XF.shape, float(np.nansum(XF)), float(np.nansum(T)), tr.sum())).encode()).hexdigest()[:16]; f = os.path.join(D.ROOT, 'out', 'cache', f'lr-ftarget-{key}.pkl')
+    if os.path.exists(f): return pickle.load(open(f, 'rb'))
+    delta = T - F[:, 2:5]; models = [xgb.XGBRegressor(n_estimators=300, max_depth=5, learning_rate=0.06, subsample=0.8, colsample_bytree=0.6, min_child_weight=5, n_jobs=os.cpu_count(), tree_method='hist').fit(XF[tr], delta[tr, j]) for j in range(3)]
+    os.makedirs(os.path.dirname(f), exist_ok=True); pickle.dump(models, open(f, 'wb')); return models
+
+
+def face_target(models, x, face):
+    """The predicted face (L, a, b) of the final for one picture: features `x` (a row of lr_look.load's X) and its largest face from faces.json (`face`)."""
+    L, a, b = face['cam']; f = np.array([[1, face['box'][2] * face['box'][3], L, a, b, np.hypot(a, b), np.degrees(np.arctan2(b, a)) % 360, face['score']]], np.float32)
+    return np.array([L, a, b]) + np.array([m.predict(np.hstack([x[None], f]))[0] for m in models])
+
+
 def main():
     import xgboost as xgb
     rows, X, names, Y, idx, G = K.load(); F, T = face_table(idx); has = ~np.isnan(T[:, 0]); test = np.array([K.test_shoot(g) for g in G])

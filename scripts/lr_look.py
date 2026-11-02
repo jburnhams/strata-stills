@@ -17,6 +17,9 @@ COLOUR_TRUST = 1.15     # the saturation follows the predicted chroma (correlati
 SLIDER_TRUST = 0.7      # the sliders are only moderately predictable (R2 0.2-0.5): the prediction counts for 70 %, the person's typical value for the rest
 CLARITY_GAIN = 1.0
 VIBRANCE_GAIN = 1.0
+FACE_L_MAX = 12.0       # bounds of the whole-picture move that puts the face where the model says the final's face is
+FACE_C_RANGE = (0.7, 1.5)
+FACE_ROT_MAX = 8.0
 GUIDE_EPS = 0.01
 SHADOW_GAIN = 25.0
 HIGHLIGHT_GAIN = 25.0
@@ -113,7 +116,7 @@ def skin_rotation(L, a, b):
     return float(np.clip(0.6 * (SKIN_HUE - np.median(h[m])), 0, SKIN_TURN))                                                              # one-sided: only skin redder than the person's reddest finals is turned; the finals' own spread is wide (10th-90th percentile 53.5-70.8, and a fixed target made the 65-degree pictures redder)
 
 
-def apply_look(bgr, pred, cam, colour=None):
+def _apply_look(bgr, pred, cam, colour=None):
     """`bgr` (uint8, our neutral picture) bent to the predicted look `pred` (a row of TARGETS) -> (uint8 picture, what was done). Lightness: the curve through the predicted percentiles. Colour: only the CHANGE the model predicts from OUR neutral picture (`cam`, the camera features, is no longer used for it: the neutral picture is not the camera JPEG), taken only part of the way (COLOUR_TRUST) and kept off skin and strong colours (a vibrance-like weight), because the final's mean colour is mostly the scene's (a crowd in red is not a red cast): chroma scaled by predicted / camera mean chroma, the cast moved by predicted - camera mean a/b."""
     lab = _lab(bgr); L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     L = vignette(local_tone(L, slider(pred, 'Shadows2012'), slider(pred, 'Highlights2012')), slider(pred, 'PostCropVignetteAmount'))                      # the vignette goes in before the percentiles are fitted: the finals' percentiles already include theirs, and the curve then makes up the global darkening it costs
@@ -136,6 +139,29 @@ def apply_look(bgr, pred, cam, colour=None):
     if rot: c, sn = np.float32(np.cos(np.radians(rot))), np.float32(np.sin(np.radians(rot))); a2, b2 = a2 * c - b2 * sn, a2 * sn + b2 * c                          # the hue turned a little as a whole, like a white-balance nudge
     out = cv2.cvtColor(np.dstack([L2, a2, b2]), cv2.COLOR_LAB2BGR)
     return np.clip(out * 255 + 0.5, 0, 255).astype(np.uint8), dict(curve=[(round(float(i), 1), round(float(j), 1)) for i, j in zip(x, y)], chroma_scale=round(scale, 3), cast=(round(da, 2), round(db, 2)), sliders={k: round(slider(pred, k), 1) for k, _ in SLIDERS if k in ('Highlights2012', 'Shadows2012', 'PostCropVignetteAmount')}, source_L=[round(v, 1) for v in src])
+
+
+def _ang(d):
+    return (d + 180) % 360 - 180
+
+
+def anchor_face(bgr, box, target):
+    """Move the whole picture so that its face lands near `target` (L, a, b), the predicted face of the final, without a mask around the face: the three corrections are global and selective by value, as a colourist's tools are. `box` is the face (x, y, w, h as fractions). (1) Lightness: a smooth bump in the tone curve centred on the face's lightness (everything of about that lightness moves). (2) Chroma: a gain on the skin hue band (hue within about 25 degrees of the face's, not near grey). (3) Hue: a turn of that band toward the target hue. Each is bounded, and the hue only half way (it is the part the model predicts worst)."""
+    lab = _lab(bgr); L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]; H, W = L.shape; x, y, w, h = box; sl = (slice(max(0, int((y + h / 4) * H)), int((y + 3 * h / 4) * H)), slice(max(0, int((x + w / 4) * W)), int((x + 3 * w / 4) * W)))
+    if L[sl].size == 0: return bgr, {}
+    fL, fa, fb = float(np.median(L[sl])), float(np.median(a[sl])), float(np.median(b[sl])); fC = float(np.hypot(fa, fb)); fh = float(np.degrees(np.arctan2(fb, fa))); tL, ta, tb = target; tC = float(np.hypot(ta, tb)); th = float(np.degrees(np.arctan2(tb, ta)))
+    dL = float(np.clip(tL - fL, -FACE_L_MAX, FACE_L_MAX)); gC = float(np.clip(tC / max(fC, 1.0), FACE_C_RANGE[0], FACE_C_RANGE[1])); rot = float(np.clip(0.5 * _ang(th - fh), -FACE_ROT_MAX, FACE_ROT_MAX))
+    C = np.hypot(a, b); hue = np.degrees(np.arctan2(b, a)); band = np.exp(-0.5 * (_ang(hue - fh) / 25) ** 2) * np.clip(C / 8, 0, 1)
+    L2 = np.clip(L + dL * np.exp(-0.5 * ((L - fL) / 22) ** 2), 0, 100); C2 = C * (1 + (gC - 1) * band); h2 = np.radians(hue + rot * band)
+    out = cv2.cvtColor(np.dstack([L2, C2 * np.cos(h2), C2 * np.sin(h2)]).astype(np.float32), cv2.COLOR_LAB2BGR)
+    return np.clip(out * 255 + 0.5, 0, 255).astype(np.uint8), dict(face_dL=round(dL, 1), face_chroma_gain=round(gC, 2), face_hue_turn=round(rot, 1))
+
+
+def apply_look(bgr, pred, cam, colour=None, face=None):
+    """`_apply_look`, then, when the picture has a face (`face` = dict(box=(x, y, w, h) as fractions, target=(L, a, b) predicted for the final)), the whole picture moved so that the face lands near its target (`anchor_face`)."""
+    out, did = _apply_look(bgr, pred, cam, colour)
+    if face is not None: out, more = anchor_face(out, face['box'], face['target']); did = dict(did, **more)
+    return out, did
 
 
 def load():
