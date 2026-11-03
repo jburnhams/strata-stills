@@ -251,7 +251,7 @@ def test_server_api_get_settings_and_detail_error(client, project, monkeypatch):
     assert res.status_code == 400
     assert "Simulated detail error" in res.json()['detail']
 
-def test_server_api_new_project_error(client, project, monkeypatch):
+def test_server_api_new_project_error(client, project, monkeypatch, tmp_path):
     pid, sid = project
     # Trigger a ProjectError by trying to create a project that already exists
     res = client.post('/api/projects', json={'name': 'Demo', 'sources': []})
@@ -262,5 +262,5 @@ def test_server_api_new_project_error(client, project, monkeypatch):
     assert res.status_code == 400
 
     # Test settings success
-    res = client.put('/api/settings', json={'projects_dir': '/absolute/path'})
+    res = client.put('/api/settings', json={'projects_dir': str(tmp_path)})
     assert res.status_code == 200
