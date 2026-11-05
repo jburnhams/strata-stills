@@ -56,4 +56,48 @@ describe('AutoGenerate', () => {
     expect(await screen.findByText('A_1: Failed to generate')).toBeInTheDocument()
     unmount()
   })
+
+  it('handles error when saving rules', async () => {
+    let requestBody: any = null
+    server.use(http.put('/api/project/rules', async ({ request }) => {
+      requestBody = await request.json()
+      return HttpResponse.json({ detail: 'Failed to save rule' }, { status: 500 })
+    }))
+    const { unmount } = render(<AutoGenerate project="demo" source="abcd1234" onDone={vi.fn()} />)
+    await userEvent.click(await screen.findByLabelText('Best quality (automatic)'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to save rule')
+    expect(requestBody).toEqual({ rules: [{ source: 'abcd1234', pipeline: 'best' }] })
+    unmount()
+  })
+
+  it('handles error when applying rules', async () => {
+    let requestMade = false
+    server.use(http.post('/api/project/apply', async () => {
+      requestMade = true
+      return HttpResponse.json({ detail: 'Failed to apply rules' }, { status: 500 })
+    }))
+    server.use(http.get('/api/project/rules', () => HttpResponse.json({ rules: [{ source: 'abcd1234', pipeline: 'best' }], pending: 2 })))
+    const { unmount } = render(<AutoGenerate project="demo" source="abcd1234" onDone={vi.fn()} />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate 2 missing' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to apply rules')
+    expect(requestMade).toBe(true)
+    unmount()
+  })
+
+  it('handles error when polling apply status', async () => {
+    let requestMade = false
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    server.use(http.get('/api/project/rules', () => HttpResponse.json({ rules: [{ source: 'abcd1234', pipeline: 'best' }], pending: 3 })))
+    server.use(http.get('/api/project/apply', async () => {
+      requestMade = true
+      return HttpResponse.json({ detail: 'Polling failed' }, { status: 500 })
+    }))
+    const { unmount } = render(<AutoGenerate project="demo" source="abcd1234" onDone={vi.fn()} />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate 3 missing' }))
+    vi.advanceTimersByTime(2000)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Polling failed')
+    expect(requestMade).toBe(true)
+    vi.useRealTimers()
+    unmount()
+  })
 })
