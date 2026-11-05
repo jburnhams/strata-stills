@@ -55,10 +55,10 @@ def neutral(raws, work, say, rebuild=False):
     if not todo: return out
     os.environ['STRATASTILLS_PROJECTS'] = os.path.join(work, 'projects'); os.environ['STRATASTILLS_HOME'] = os.path.join(work, 'home')
     from stratastills import projects as P, pipeline as PL
-    src = os.path.join(work, 'raws'); os.makedirs(src, exist_ok=True); names = {}
+    src = os.path.join(work, 'raws-%d' % time.time_ns()); os.makedirs(src, exist_ok=True); names = {}
     for k, r in enumerate(todo):
         n = f'{k:03d}_{os.path.basename(r)}'; os.symlink(r, os.path.join(src, n)); names[os.path.splitext(n)[0]] = r
-    pid = P.create('lr-report', [src])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path'])
+    pid = P.create('lr-report-%d' % time.time_ns(), [src])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path'])
     for it in P.source_items(pid, sid):
         r = names.get(it['stem'])
         if not r: continue
