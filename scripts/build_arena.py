@@ -50,7 +50,9 @@ def main():
     pf = os.path.join(root, 'pool.json'); pool = json.load(open(pf)) if os.path.exists(pf) else {}
     rows, X, names, Y, idx, G = LK.load(); test = np.array([LK.test_shoot(g) for g in G]); FACES = json.load(open(os.path.join(D.OUT, 'faces.json'))) if os.path.exists(os.path.join(D.OUT, 'faces.json')) else {}
     models, tmodels, fmodels = LK.train_cached(X[~test], Y[~test]), TM.train_cached(), FT.train_cached(); keys = {n: code_key(n) for n in AV.VARIANTS}
-    todo = []
+    todo = []; valid = {sid for _, sid in order(rows, idx, G, test, a.seed)}
+    gone = [k for k in pool if k not in valid]
+    if gone: pool = {k: v for k, v in pool.items() if k in valid}; save_json(pf, pool); say(f'dropped {len(gone)} pictures from the pool: no longer in the dataset (the nudity filter flags them): {gone}')           # votes on them stay in votes.jsonl but the server no longer offers them
     for i, sid in order(rows, idx, G, test, a.seed):
         have = pool.get(sid, {}); need = [n for n in AV.VARIANTS if n in a.redo or n not in have or have[n].get('key') != keys[n]]
         if sid in pool or len(pool) + len([t for t in todo if t[1] not in pool]) < a.n:

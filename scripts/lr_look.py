@@ -5,6 +5,8 @@ import argparse, os, sys, hashlib
 import numpy as np, cv2
 sys.path.insert(0, os.path.dirname(__file__))
 import lr_dataset as D
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from stratastills import nsfw
 
 SLIDERS = [('Highlights2012', -74.0), ('Shadows2012', 60.0), ('Whites2012', 4.0), ('Blacks2012', -11.0), ('Contrast2012', 6.0), ('Clarity2012', 0.0), ('Vibrance', 20.0), ('PostCropVignetteAmount', -10.0)]     # the person's Lightroom sliders that shape the picture beyond its global tone (and the typical value of each: this person's recipe is nearly the same on every picture, so a prediction is only trusted a part of the way from it)
 TARGETS = D.FINAL_L + D.FINAL_C + [k for k, _ in SLIDERS]
@@ -176,7 +178,9 @@ def load():
             if k is not None: M[r] = np.concatenate([z['pca'][k], z['labels'][k]])
         X = np.hstack([X, M]); names = names + ['clip:' + str(n) for n in z['pca_names']] + ['clip:' + str(n) for n in z['label_names']]                    # what CLIP sees in the preview (scripts/lr_clip.py): scene labels and the principal components of the embedding
     S = np.array([[D.num(rows[i].get(k), d) for k, d in SLIDERS] for i in idx]); S = np.where(np.isnan(S), [d for _, d in SLIDERS], S)          # a setting the file does not have is the typical one
-    return rows, X, names, np.hstack([F, C, S]), idx, G
+    Y = np.hstack([F, C, S]); ok = np.array([not nsfw.flagged(rows[i]['final']) for i in idx])                                                    # the nudity filter, applied to the dataset as it is read, so a datasets built before it (or with a higher threshold) feeds no model, report or arena either
+    if ok.all(): return rows, X, names, Y, idx, G
+    return rows, X[ok], names, Y[ok], idx[ok], G[ok]
 
 
 def evaluate(a):

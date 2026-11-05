@@ -7,7 +7,7 @@ Settings (environment first, then `~/.stratastills/settings.json`):
   STRATASTILLS_NSFW=0          or `nsfw_filter: false`: switch the filter off (the tests do). On by default: with it on and no detector installed, listing a folder fails with a clear message rather than letting pictures through.
   STRATASTILLS_NSFW_THRESHOLD  or `nsfw_threshold`: 0..1, a picture is flagged when its highest 'exposed' score is at least this (default 0.45; lower flags more, higher less).
 Every skip is logged (loguru warning: file, class, score, threshold) and appended to `<STRATASTILLS_HOME>/nsfw_skipped.jsonl`; `python -m stratastills.nsfw <folder|file> ...` prints the verdict per picture."""
-import json, os, sys, time
+import json, os, sys, threading, time
 
 DEFAULT_THRESHOLD = 0.45
 EXPOSED = ('FEMALE_GENITALIA_EXPOSED', 'MALE_GENITALIA_EXPOSED', 'FEMALE_BREAST_EXPOSED', 'ANUS_EXPOSED', 'BUTTOCKS_EXPOSED')                    # not MALE_BREAST_EXPOSED (a bare chest) and not the *_COVERED classes
@@ -18,6 +18,7 @@ _detector = None                                    # callable(bgr ndarray) -> [
 _cache = {}                                         # path|size|mtime -> [score, class]; loaded from disk once
 _loaded = False
 _logged = set()
+_lock = threading.RLock()                         # the server asks for several listings at once; one writer of the cache file at a time
 
 
 class NsfwUnavailable(RuntimeError): pass
@@ -68,14 +69,15 @@ def _cache_file(): return os.path.join(home(), 'nsfw_cache.json')
 
 def _load():
     global _loaded, _cache
-    if _loaded: return
-    try: _cache = json.load(open(_cache_file()))
-    except (OSError, ValueError): _cache = {}
-    _loaded = True
+    with _lock:
+        if _loaded: return
+        try: _cache = json.load(open(_cache_file()))
+        except (OSError, ValueError): _cache = {}
+        _loaded = True
 
 
 def _save():
-    os.makedirs(home(), exist_ok=True); tmp = _cache_file() + '.tmp'
+    os.makedirs(home(), exist_ok=True); tmp = f'{_cache_file()}.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp, 'w') as f: json.dump(_cache, f)
     os.replace(tmp, _cache_file())
 
@@ -102,7 +104,8 @@ def score(path):
         for d in _detect(bgr) or []:
             if d.get('class') in EXPOSED and float(d.get('score', 0)) > best[0]: best = (float(d['score']), d['class'])
         res = best
-    _cache[k] = list(res); _save(); return res
+    with _lock: _cache[k] = list(res); _save()
+    return res
 
 
 def flagged(path, thr=None):

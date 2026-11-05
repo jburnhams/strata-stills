@@ -51,3 +51,11 @@ def test_missing_detector_fails_loudly(folder, monkeypatch):
     real = builtins.__import__
     monkeypatch.setattr(builtins, '__import__', lambda n, *a, **k: (_ for _ in ()).throw(ImportError()) if n == 'nudenet' else real(n, *a, **k))
     with pytest.raises(nsfw.NsfwUnavailable): ingest.scan(folder)
+
+
+def test_concurrent_scores_do_not_corrupt_the_cache(folder):
+    from concurrent.futures import ThreadPoolExecutor
+    nsfw.set_detector(fake([{'class': 'FACE_FEMALE', 'score': 0.9}]))
+    paths = [os.path.join(folder, f) for f in sorted(os.listdir(folder))]
+    with ThreadPoolExecutor(6) as ex: assert len(list(ex.map(nsfw.score, paths * 4))) == 12
+    nsfw.reset(); assert len(json.load(open(os.path.join(nsfw.home(), 'nsfw_cache.json')))) == 3
