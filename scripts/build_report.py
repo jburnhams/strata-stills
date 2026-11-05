@@ -1,12 +1,12 @@
 """A visual report on the candidate photos: each one rendered by our pipeline (with the picture kept at every stage), set beside the camera's own JPEG and the other raw tools' renders (darktable, RawTherapee) where candidates/renders/ has them, as crops from the places where the programs differ most, each shown in context on an overview of the picture. No full-size picture goes into the report, only an overview and the crops, so it stays a few MB.
-  python scripts/build_report.py [--out out/report] [--set a7c --set dji] [--min-lens 2] [--min-device 5] [--all] [--stems DSC00014,...] [--public-only] [--quality 95] [--crops 3]
+  python scripts/build_report.py [--out out/report/neutral] [--set a7c --set dji] [--min-lens 2] [--min-device 5] [--all] [--stems DSC00014,...] [--public-only] [--quality 95] [--crops 3]
 Reads candidates/<set>/ (scripts/copy_candidates.py) and docs/report_public.json (the pictures whose subject is not a person, so that they could be public; hand-picked). The report has every kind of picture, the public ones marked, and a switch at the top of the page that shows only those (also `?public=1` in the address): it is for this machine and the app's own server (/report/), never to be committed or published as it is; --public-only leaves the others out altogether, for a report that may go public; shows at least --min-lens of each lens and --min-device of each device, then more until every octave of ISO the pool has is covered; writes <out>/index.html and <out>/assets/*.jpg (gitignored with out/). The pictures of ours are made again on every run (a temporary project: nothing of the app's projects is touched); an optional step of the build (scripts/setup_env.sh --report), skipped when there are no candidate photos.
 How the crops are chosen: every program's picture is brought to the size of ours and registered to it; the disagreement at each place is the colour and brightness difference (blurred, so that a one pixel shift does not count) plus the difference in how much fine detail and noise there is, each relative to its median over the picture; the best window of each kind that does not overlap an earlier one is shown (1: the two together, 2: the detail and noise, 3: the colour and tone)."""
-import argparse, collections, glob, html, json, os, shutil, sys, tempfile, time
+import argparse, functools, hashlib, collections, glob, html, json, os, shutil, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import compare_detail as CD, render_external as RE
-from stratastills import externaltools as ET
+from stratastills import externaltools as ET, nsfw
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 RAW_EXTS = ('.arw', '.cr2', '.cr3', '.nef', '.dng', '.rw2', '.orf', '.raf', '.pef', '.srw')
@@ -181,10 +181,85 @@ def metric_table(ims, names):
     return f'<table class=t><tr><th></th>{head}</tr>{body}</table>'
 
 
+REPORTS = [('neutral', 'Neutral', 'our pipeline processing photos as neutrally as possible, against the camera JPEG and the other raw tools (darktable, RawTherapee)'), ('auto', 'Auto-process', 'automatic processing that learns to match the person\'s own finished edits (private: their own pictures)')]
+
+
+def write_landing(root):
+    """The page at the top of the reports folder (out/report/index.html), linking the sibling reports that have been built: neutral/ (build_report.py) and auto/ (build_lr_report.py). Each builder calls it, so the page lists whatever exists."""
+    items = ''.join(f'<li><a href="{d}/">{t}</a>: {html.escape(w)}</li>' for d, t, w in REPORTS if os.path.isfile(os.path.join(root, d, 'index.html')))
+    open(os.path.join(root, 'index.html'), 'w', encoding='utf-8').write(f'<!doctype html><meta charset=utf-8><title>stratastills: reports</title><style>{CSS}</style><header><h1>Reports</h1></header><main><ul>{items}</ul></main>')
+
+
+CACHE_VERSION = 1                 # bump when the code of this script that makes the pictures or numbers of a photo changes (the pipeline's own code is hashed, this script's page layout is not part of it)
+
+
+@functools.lru_cache(maxsize=None)
+def code_hash():
+    """A hash of the code and data the pictures of ours depend on (src/stratastills without the server, settings.py and cli.py, with its profiles, and the detail metrics): any change there makes every photo again."""
+    h = hashlib.sha1(); base = os.path.join(ROOT, 'src', 'stratastills')
+    for dp, dn, fn in sorted(os.walk(base)):
+        dn[:] = sorted(d for d in dn if d not in ('server', '__pycache__'))
+        for f in sorted(fn):
+            if f.endswith(('.py', '.json')) and f not in ('settings.py', 'cli.py'): h.update(f.encode()); h.update(open(os.path.join(dp, f), 'rb').read())
+    h.update(open(os.path.join(os.path.dirname(__file__), 'compare_detail.py'), 'rb').read()); return h.hexdigest()
+
+
+def cache_load(cdir, stem, key):
+    f = os.path.join(cdir, stem, 'data.json')
+    try: d = json.load(open(f, encoding='utf-8'))
+    except (OSError, ValueError): return None
+    return d['data'] if d.get('key') == key and all(os.path.exists(os.path.join(cdir, stem, n)) for n in d['data']['files']) else None
+
+
+def cache_save(cdir, stem, key, data, assets):
+    sd = os.path.join(cdir, stem); shutil.rmtree(sd, ignore_errors=True); os.makedirs(sd)
+    for n in data['files']: shutil.copyfile(os.path.join(assets, n), os.path.join(sd, n))
+    json.dump(dict(key=key, data=data), open(os.path.join(sd, 'data.json'), 'w', encoding='utf-8'), default=str)
+
+
+REASONS = ['skin tone', 'too red / warm', 'too cool / blue', 'green / magenta cast', 'too saturated', 'too flat / dull', 'too dark', 'too bright', 'highlights', 'shadows', 'contrast', 'noise', 'sharpness / halos', 'wrong crop / alignment', 'other']
+FLAG_CSS = """.flag{margin:6px 0;line-height:1.2}.flag .fb{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;cursor:pointer}.flag .fx{margin-top:6px}.flag .fr{margin-bottom:4px}.pic[data-rating=worst] .fs,.pic[data-rating=bad] .fs{color:#ff8a65}.flag label{display:inline-block;margin:0 10px 4px 0;white-space:nowrap}.flag input[type=text]{width:min(520px,90%);background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 6px}.flag select{background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px}.flag .fs{color:#9aa;font-size:12px;margin-left:8px}body.onlyflagged .pic:not(.flagged){display:none}.pic.stale .fs{color:#ffb74d}.fbox{border-color:#5ee27a;box-shadow:none}"""
+
+
+RATINGS = ['worst', 'bad', 'medium', 'good', 'perfect']
+
+
+def flag_widget(pic):
+    """The rating and flags of one picture, always shown: a rating (worst, bad, medium, good, perfect), what is wrong (checkboxes), a status (open, fixable, deferred, fixed) and a note. Kept by the server (/api/report-flags/<report>/<pic>, in out/flags/), so that it survives a rebuild of the report; without the server, in this browser."""
+    rate = ''.join(f'<label><input type=radio name="r-{html.escape(pic)}" value={r}> {r}</label>' for r in RATINGS)
+    chips = ''.join(f'<label><input type=checkbox value="{html.escape(r)}"> {html.escape(r)}</label>' for r in REASONS)
+    return f'<div class=flag data-pic="{html.escape(pic)}"><div class=fr>{rate} <button class=fb type=button>clear</button><span class=fs></span></div><div class=fx>{chips}<br><select class=st><option value=open>open</option><option value=fixable>fixable</option><option value=deferred>deferred (cannot fix yet)</option><option value=fixed>fixed</option></select> <input type=text class=note placeholder="what is wrong (optional)"></div></div>'
+
+
+def flag_header(report):
+    return '<label class=sw><input type=checkbox id=onlyflagged> only rated or flagged pictures (<span id=nflag>0</span>)</label><a href="../../api/report-flags/%s" class=m>ratings and flags as JSON</a>' % report
+
+
+def flag_script(report):
+    return """<script>(()=>{const R='%s',BUILT=%d*1000,API='../../api/report-flags/'+R,LS='flags-'+R;let F={};
+const empty=d=>!d||(!d.rating&&!(d.reasons||[]).length&&!d.note);
+const save=(pic)=>{const w=document.querySelector('.flag[data-pic="'+pic+'"]'),d=F[pic]||{};
+ fetch(API+'/'+encodeURIComponent(pic),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({flag:true,rating:d.rating||'',reasons:d.reasons||[],note:d.note||'',status:d.status||'open'})}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(j=>{if(j&&j.at)F[pic]=j;paint()}).catch(()=>{try{localStorage.setItem(LS,JSON.stringify(F))}catch(e){}w.querySelector('.fs').textContent='kept in this browser only (open the report through the app to keep it)'})};
+const when=d=>d.at?new Date(d.at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'';
+const paint=()=>{let n=0;document.querySelectorAll('.flag').forEach(w=>{const d=F[w.dataset.pic]||{},on=!empty(d);n+=on;const old=on&&d.at&&new Date(d.at).getTime()<BUILT,sec=w.closest('.pic');sec.classList.toggle('flagged',on);sec.classList.toggle('stale',old);sec.dataset.rating=d.rating||'';
+ if(!/browser only/.test(w.querySelector('.fs').textContent)||on===false)w.querySelector('.fs').textContent=on&&d.at?'set '+when(d)+(old?' - before this build: revisit':''):'';
+ w.querySelectorAll('input[type=radio]').forEach(c=>c.checked=(d.rating||'')===c.value);w.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=(d.reasons||[]).includes(c.value));w.querySelector('.st').value=d.status||'open';w.querySelector('.note').value=d.note||''});document.getElementById('nflag').textContent=n};
+const upd=(w,f)=>{const p=w.dataset.pic,d=F[p]=F[p]||{};f(d);if(empty(d))delete F[p];paint();save(p)};
+document.addEventListener('click',e=>{const b=e.target.closest('.fb');if(b){const w=b.closest('.flag');upd(w,d=>{d.rating='';d.reasons=[];d.note='';d.status='open'})}});
+document.addEventListener('change',e=>{const w=e.target.closest('.flag');if(!w)return;if(e.target.matches('input[type=radio]'))upd(w,d=>{d.rating=e.target.value});else if(e.target.matches('input[type=checkbox]'))upd(w,d=>{d.reasons=[...w.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value)});else if(e.target.matches('.st'))upd(w,d=>{d.status=e.target.value});else if(e.target.matches('.note'))upd(w,d=>{d.note=e.target.value})});
+document.getElementById('onlyflagged').onchange=e=>document.body.classList.toggle('onlyflagged',e.target.checked);
+fetch(API).then(r=>r.json()).then(j=>{F=j;paint()}).catch(()=>{try{F=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}paint()})})()</script>""" % (report, int(time.time()))
+
+
+def fit_width(W, H, cap=None):
+    """CSS width of an overview box: its natural size, but never wider than the page nor so wide that the picture is taller than the viewport (the boxes are percentages, so the wrapper has to be exactly as big as the picture)."""
+    return f'min({cap or OVERVIEW}px,100%,calc((100vh - 24px) * {W / H:.4f}))'
+
+
 CSS = """.tabs{margin:6px 0}.tabs button{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;margin-right:4px;cursor:pointer}.tabs button.on{background:#3b6fd8;border-color:#3b6fd8;color:#fff}.sw{display:block;margin:8px 0}body.pubonly .pic:not(.pub),body.pubonly nav a:not(.pub){display:none}body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#16181c;color:#d8dbe0}header{padding:18px 28px;background:#0e0f12}h1{margin:0 0 4px;font-size:22px}h2{font-size:18px;margin:34px 0 4px}h3{font-size:15px;margin:22px 0 6px}main{max-width:1500px;margin:0 auto;padding:0 28px 60px}a{color:#8ab4ff}nav a{margin-right:12px}
-.pic{border-top:1px solid #333;margin-top:30px}.why{color:#9aa}.ov{position:relative;display:inline-block;line-height:0}.ov img{max-width:100%;height:auto}.box{position:absolute;border:2px solid #ffd54a;box-shadow:0 0 0 1px #000;color:#ffd54a;font:bold 13px sans-serif;line-height:1}.box b{position:absolute;left:0;top:-16px;background:#000;padding:1px 4px}
+.pic{border-top:1px solid #333;margin-top:30px}.why{color:#9aa}.ov{position:relative;display:inline-block;line-height:0}.ov img{width:100%;height:auto}.box{position:absolute;border:2px solid #ffd54a;box-shadow:0 0 0 1px #000;color:#ffd54a;font:bold 13px sans-serif;line-height:1}.box b{position:absolute;left:0;top:-16px;background:#000;padding:1px 4px}
 .crop{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin:10px 0}.sheet{display:grid;gap:4px}.sheet div{background-repeat:no-repeat;position:relative}.sheet span{position:absolute;left:0;top:0;right:0;background:#000b;color:#fff;font:12px sans-serif;padding:2px 6px}
-table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-align:left;border-bottom:1px solid #2a2d33}.t td{text-align:right;font-variant-numeric:tabular-nums}.m{color:#9aa;font-size:12px}details{margin:8px 0}summary{cursor:pointer;color:#8ab4ff}ul{margin:6px 0 6px 18px;padding:0}.note{max-width:1000px;color:#aab}"""
+table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-align:left;border-bottom:1px solid #2a2d33}.t td{text-align:right;font-variant-numeric:tabular-nums}.m{color:#9aa;font-size:12px}details{margin:8px 0}summary{cursor:pointer;color:#8ab4ff}ul{margin:6px 0 6px 18px;padding:0}.note{max-width:1000px;color:#aab}""" + FLAG_CSS
 
 
 def build(a):
@@ -196,7 +271,7 @@ def build(a):
             cfg = SETS[setname]; folder = os.path.join(ROOT, 'candidates', setname); cj = os.path.join(ROOT, 'docs', f'{setname}_candidates.json')
             if not os.path.isdir(folder) or not os.path.exists(cj): say(f'{setname}: no candidate photos here ({folder}), skipped'); continue
             cands = json.load(open(cj)); whys = {c['stem']: c.get('why', '') for c in cands}
-            files = {os.path.splitext(f)[0]: os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in RAW_EXTS}; shots = {st: shot(f) for st, f in files.items()}
+            files = {os.path.splitext(f)[0]: os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in RAW_EXTS and not nsfw.flagged(os.path.join(folder, f))}; shots = {st: shot(f) for st, f in files.items()}
             public = set(json.load(open(os.path.join(ROOT, 'docs', 'report_public.json'))).get(setname, []))      # (a set without an entry has not been looked through: nothing of it in a report that may go public)
             pool = [s for s in a.stems.split(',') if s in files] if a.stems else [s for s in files if not a.public_only or s in public]; feats = {s: look(files[s]) for s in pool}; lens_n, dev_n = (10 ** 6, 10 ** 6) if a.all else (a.min_lens, a.min_device)
             groups = choose(pool, shots, feats, lens_n, dev_n); stems = [s for ss in groups.values() for s in ss]
@@ -205,7 +280,16 @@ def build(a):
             raws = {st: (files[st], shots[st][4] or 0) for st in stems}; RE.render_missing('darktable', setname, raws, say=say); RE.render_missing('rawtherapee', setname, raws, 'auto-matched', say=say)       # whatever of the other programs' renders is missing is made now (a failure stops the report)
             ext_times = {'darktable': RE.timings(setname, 'darktable'), 'RawTherapee': RE.timings(setname, 'rawtherapee', 'auto-matched')}
             say(f'{cfg["label"]}: {len(stems)} pictures ({"; ".join(f"{g[1]}: {len(ss)}" for g, ss in groups.items())})')
-            for stem, o in run_ours(folder, stems, a.quality, work, say):
+            sig = lambda f: f'{os.path.getsize(f)}:{int(os.path.getmtime(f))}' if os.path.exists(f) else '-'
+            def stem_key(stem):                                                                       # what the pictures and numbers of one photo depend on: the code that makes them, the raw, the camera JPEG, the other programs' renders and the options
+                ins = [files[stem]] + glob.glob(os.path.join(folder, stem + '.[jJ][pP][gG]')) + [os.path.join(ROOT, 'candidates', 'renders', cfg['prefix'] + d, stem + '.jpg') for d, _ in OTHERS]
+                return hashlib.sha1(json.dumps([CACHE_VERSION, code_hash(), a.quality, a.crops, [sig(f) for f in ins]]).encode()).hexdigest()
+            cdir = os.path.join(ROOT, 'out', 'cache', 'report-' + os.path.basename(final), setname); data = {}
+            for stem in stems:                                                                        # a photo whose inputs and code have not changed since the last run is not made again: its pictures and numbers come from the cache
+                d = None if a.rebuild else cache_load(cdir, stem, stem_key(stem))
+                if d: data[stem] = d
+            say(f'{len(data)} of {len(stems)} pictures unchanged since the last report, {len(stems) - len(data)} to make')
+            for stem, o in run_ours(folder, [s for s in stems if s not in data], a.quality, work, say):
                 fin = read(o['file'])
                 if fin is None: continue
                 H, W = fin.shape[:2]; size = (W, H)
@@ -241,20 +325,23 @@ def build(a):
                     name = f'{stem}-crop{n}.jpg'; cv2.imwrite(os.path.join(assets, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
                     blocks.append(dict(n=n, kind=kind, x=x0 / W, y=y0 / H, w=WIN[0] / W, h=WIN[1] / H, sheet=name, sheet_size=(cols * pw, rows * ph), names=[nm for nm, _ in panels], cols=cols, pw=pw, ph=ph))
                 metrics = metric_table([im for _, im in aligned] + [fin], [nm for nm, _ in aligned] + ['Ours (final)'])
-                legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm, _ in aligned}); total_pics += 1
-                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); tm = o['rec'].get('timing', []); perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()})); sections.append(render_picture(cfg, stem, whys.get(stem, ''), W, H, o['rec'], blocks, metrics, kind, stem in public, timing_html(tm, perf[-1]['ext']), tabs)); nav.append((stem, f'{sh[1]} {stem}', stem in public))
+                data[stem] = dict(W=W, H=H, rec=o['rec'], blocks=blocks, metrics=metrics, tabs=tabs, names=[nm for nm, _ in aligned], files=sorted(f for f in os.listdir(assets) if f.startswith(stem + '-'))); cache_save(cdir, stem, stem_key(stem), data[stem], assets)
                 for f in o['stages'].values(): os.remove(f)
+            for stem in stems:                                                                        # the page: in the order of the pictures, from fresh or cached data (the HTML is always made again, so a change to it costs seconds)
+                d = data.get(stem)
+                if d is None: continue
+                for f in d['files']: shutil.copyfile(os.path.join(cdir, stem, f), os.path.join(assets, f)) if not os.path.exists(os.path.join(assets, f)) else None
+                legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm in d['names']}); total_pics += 1
+                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); tm = d['rec'].get('timing', []); perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()})); sections.append(render_picture(cfg, stem, whys.get(stem, ''), d['W'], d['H'], d['rec'], d['blocks'], d['metrics'], kind, stem in public, timing_html(tm, perf[-1]['ext']), d['tabs'])); nav.append((stem, f'{sh[1]} {stem}', stem in public))
     finally: shutil.rmtree(work, ignore_errors=True)
     if not sections: say('nothing to report on (no candidate photos)'); return 1
     leg = ''.join(f'<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>' for k, v in legend.items())
     page = f"""<!doctype html><meta charset=utf-8><title>stratastills: candidate photos compared</title><style>{CSS}</style><header><h1>Candidate photos: our pipeline against the camera and other raw tools</h1>
 <div class=note>Generated {time.strftime('%Y-%m-%d %H:%M')} by scripts/build_report.py. Each crop is a place where the programs disagree most, marked on the overview of the picture; the panels show the same place in every program and in ours at each stage. Crops are shown at {ZOOM}x of the final picture (the stages before the resize hold more pixels, so they look finer: the field of view is the same). Ours was made with the 'best' preset at JPEG quality {a.quality} (the quality of the comparison runs).</div>
-{"" if a.public_only else '<a id=lrlink href="lightroom/" hidden>Your Lightroom edits: camera, neutral, yours and auto (private)</a>'}<label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{''.join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{perf_html(perf)}{''.join(sections)}</main><script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');t.previousElementSibling.querySelector('.ovimg').src=b.dataset.src}});const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f();fetch('lightroom/').then(r=>{{const l=document.getElementById('lrlink');if(r.ok&&l)l.hidden=false}}).catch(()=>{{}})</script>"""
+{"" if a.public_only else '<a id=autolink href="../auto/" hidden>Auto-process report (private)</a> '}<a href="../">All reports</a> {flag_header('neutral')}<label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{''.join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{perf_html(perf)}{''.join(sections)}</main>{flag_script('neutral')}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');t.previousElementSibling.querySelector('.ovimg').src=b.dataset.src}});const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f();fetch('../auto/').then(r=>{{const l=document.getElementById('autolink');if(r.ok&&l)l.hidden=false}}).catch(()=>{{}})</script>"""
     open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(page)
     size = sum(os.path.getsize(os.path.join(assets, f)) for f in os.listdir(assets)) + os.path.getsize(os.path.join(out, 'index.html'))
-    keep = os.path.join(final, 'lightroom')                                                     # the report on the person's own edits (scripts/build_lr_report.py) lives inside this one and is built separately: carried over
-    if os.path.isdir(keep) and not a.public_only: shutil.move(keep, os.path.join(out, 'lightroom'))                     # private: never inside a report built to be public
-    shutil.rmtree(final, ignore_errors=True); os.rename(out, final); say(f'report: {os.path.join(final, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
+    shutil.rmtree(final, ignore_errors=True); os.rename(out, final); write_landing(os.path.dirname(final)); say(f'report: {os.path.join(final, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
 
 
 def timing_html(timing, ext):
@@ -287,11 +374,11 @@ def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind, public=True
         tiles = ''.join(f'<div style="width:{b["pw"]}px;height:{b["ph"]}px;background-image:url(assets/{b["sheet"]});background-position:-{(i % b["cols"]) * b["pw"]}px -{(i // b["cols"]) * b["ph"]}px"></div>' for i in range(len(b['names'])))
         mini = f'<div class=ov style="width:300px"><img src="assets/{stem}-overview.jpg" width=300><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div>'
         crops.append(f'<h3>Crop {b["n"]}: where the programs differ most in {html.escape(b["kind"])}</h3><div class=crop>{mini}<div class=sheet style="grid-template-columns:repeat({b["cols"]},{b["pw"]}px)">{tiles}</div></div>')
-    return f"""<section class="pic{' pub' if public else ''}" id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{' · ' + html.escape(why) if why else ''}</small></h2><div class=ov style="width:{OVERVIEW}px;max-width:100%"><img class=ovimg src="assets/{stem}-overview.jpg">{boxes}</div>{tabs_html}
+    return f"""<section class="pic{' pub' if public else ''}" id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{' · ' + html.escape(why) if why else ''}</small></h2>{flag_widget(stem)}<div class=ov style="width:{fit_width(W, H)}"><img class=ovimg src="assets/{stem}-overview.jpg">{boxes}</div>{tabs_html}
 {timing}<details open><summary>What ours did, and the settings of each stage</summary>{settings_html(rec)}</details><details><summary>Numbers (scripts/compare_detail.py, on this picture)</summary>{metrics}<p class=m>sharp: edge crispness; ring/halo: sharpening artefacts; noise/cnoise: luminance and colour noise in flat areas; detail: texture kept against the noise.</p></details>{''.join(crops)}</section>"""
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--min-lens', type=int, default=2, help='at least this many pictures of each lens'); ap.add_argument('--min-device', type=int, default=5, help='at least this many of each device'); ap.add_argument('--public-only', action='store_true', help='leave out the pictures that are not on the public list (docs/report_public.json): a report that may go public')
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--rebuild', action='store_true', help='make every photo again, ignoring the cache in out/cache/'); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'neutral')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--min-lens', type=int, default=2, help='at least this many pictures of each lens'); ap.add_argument('--min-device', type=int, default=5, help='at least this many of each device'); ap.add_argument('--public-only', action='store_true', help='leave out the pictures that are not on the public list (docs/report_public.json): a report that may go public')
     ap.add_argument('--all', action='store_true'); ap.add_argument('--stems'); ap.add_argument('--quality', type=int, default=95); ap.add_argument('--crops', type=int, default=3)
     a = ap.parse_args(); a.set = a.set or list(SETS); sys.exit(build(a))

@@ -30,6 +30,6 @@ else { Write-Host 'npm not found: winget install OpenJS.NodeJS, then cd web; npm
 
 if ($Report) {
     & $Py -c "import sys; sys.path.insert(0, r'$Root/src'); from stratastills import externaltools as E; E.require()"; if ($LASTEXITCODE) { exit 1 }      # darktable and RawTherapee are needed: the report is a comparison with them
-    if (Test-Path (Join-Path $Root 'candidates')) { & $Py (Join-Path $Root 'scripts/build_report.py'); Write-Host 'report: out/report/index.html' }
+    if (Test-Path (Join-Path $Root 'candidates')) { & $Py (Join-Path $Root 'scripts/build_report.py'); Write-Host 'report: out/report/neutral/index.html' }
     else { Write-Host 'no candidates folder: report skipped (scripts/copy_candidates.py)' }
 }

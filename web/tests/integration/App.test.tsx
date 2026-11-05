@@ -27,23 +27,24 @@ describe('App navigation', () => {
     expect(await screen.findByText('★ primary')).toBeInTheDocument()
   })
 
-  it('links to the visual report only when the server has one', async () => {
+  it('links to the reports only when the server has them', async () => {
     open('#/')
     await screen.findByText('Demo')
-    expect(screen.queryByRole('link', { name: 'Visual report' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Neutral report' })).toBeNull()
   })
 
   it('shows the visual report link when there is a report', async () => {
-    server.use(http.get('/api/report', () => HttpResponse.json({ available: true, built: 1 })))
+    server.use(http.get('/api/report', () => HttpResponse.json({ available: true, built: 1, neutral: true, auto: true })))
     open('#/')
-    const link = await screen.findByRole('link', { name: 'Visual report' })
-    expect(link.getAttribute('href')).toContain('report/')
+    const link = await screen.findByRole('link', { name: 'Neutral report' })
+    expect(link.getAttribute('href')).toContain('report/neutral/')
+    expect((await screen.findByRole('link', { name: 'Auto report' })).getAttribute('href')).toContain('report/auto/')
   })
 
   it('shows no report link when the report request fails', async () => {
     server.use(http.get('/api/report', () => new HttpResponse(null, { status: 500 })))
     open('#/')
     await screen.findByText('Demo')
-    expect(screen.queryByRole('link', { name: 'Visual report' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Neutral report' })).toBeNull()
   })
 })

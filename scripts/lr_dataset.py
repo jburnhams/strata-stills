@@ -7,6 +7,8 @@ Lightroom's crop (crs:CropTop/Left/Bottom/Right, CropAngle) is in the frame of t
 import argparse, collections, json, math, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 import cv2, numpy as np
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from stratastills import nsfw
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT = os.path.join(ROOT, 'candidates', 'personal')
@@ -35,6 +37,7 @@ def pairs(a):
             s, e = os.path.splitext(f); m = STEM.match(s)
             if e.lower() not in ('.jpg', '.jpeg', '.tif', '.tiff') or not m or '-Pano' in s or os.sep + 'small' in root.lower(): continue      # panoramas are stitched from several raws; small/ holds resized copies of the same edit
             c = [p for p in raws.get(m.group(1).upper(), []) if f'{os.sep}{year}{os.sep}' in p]                                            # file numbers repeat over the years: same stem and same year
+            if c and nsfw.flagged(os.path.join(root, f)): continue                                                                          # the nudity filter: such a picture feeds no report, model or arena
             if c: first.setdefault(c[0], os.path.join(root, f))
     out = [dict(final=f, raw=r) for r, f in first.items()]
     json.dump(out, open(os.path.join(OUT, 'pairs.json'), 'w')); print(f'{len(out)} raws with a final')
@@ -153,7 +156,72 @@ def load_features():
     return (np.concatenate([p['X'] for p in parts]), [str(n) for n in parts[0]['names']], np.concatenate([p['F'] for p in parts]), np.concatenate([p['C'] for p in parts]), np.concatenate([p['idx'] for p in parts]))
 
 
+SKIP_TAG = re.compile(r'(Offset|Length|Size$|Checksum|Thumbnail|Preview|File|Directory|ExifTool|ImageUniqueID|Version|Sequence|Count$|Bytes|Table|Padding|Binary|Data$|MakerNote|Comment|Software|Profile|Copyright|Artist|Description|Title|URL|DocumentID|InstanceID|OriginalDocument|Derived|History|Rating|Label|Keywords|SubSec|Date|Time(?!r)|Trailer|Index|Warning|Error)', re.I)
+
+
+def _meta_batch(raws):
+    return {x['SourceFile']: x for x in json.loads(subprocess.run(['exiftool', '-q', '-json', '-n', '-G1', '-fast2', *raws], capture_output=True, text=True).stdout or '[]')}
+
+
+def meta(a):
+    """OUT/meta.npz: as much of every raw's metadata as is usable as model input, whatever the maker wrote (camera and lens, exposure, focus, drive and scene modes, picture style, white balance levels, flash, GPS, ...), one number per column: numbers as they are, short number lists split into columns, text as the frequency rank of its value, and the shot's time as hour of day, day of year, weekday and year. A tag counts when at least 20 % of the pictures have it and it takes more than one value; ids, offsets, sizes, paths and free text are skipped. Aligned with the catalogue rows."""
+    import datetime
+    rows = load_catalogue(); raws = [r['raw'] for r in rows]; recs = [None] * len(raws); chunks = [(k, raws[k:k + 400]) for k in range(0, len(raws), 400)]
+    def work(c):
+        k, rs = c; ex = _meta_batch(rs); print(f'meta {k + len(rs)}/{len(raws)}', flush=True); return k, [ex.get(r) for r in rs]
+    with ThreadPoolExecutor(6) as pool:
+        for k, out in pool.map(work, chunks): recs[k:k + len(out)] = out
+    cols = collections.defaultdict(lambda: [None] * len(raws))
+    for i, e in enumerate(recs):
+        if not e: continue
+        for tag, v in e.items():
+            if tag == 'SourceFile' or SKIP_TAG.search(tag.split(':', 1)[-1]) or isinstance(v, (dict, list)): continue
+            if isinstance(v, (int, float)) and not isinstance(v, bool): cols[tag][i] = float(v); continue
+            t = str(v).strip()
+            if re.fullmatch(r'-?[\d.]+( -?[\d.]+){1,5}', t):
+                for q, x in enumerate(t.split()): cols[f'{tag}[{q}]'][i] = float(x)
+            elif t and len(t) < 80: cols[tag][i] = t
+        m = re.match(r'(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d)', str(e.get('ExifIFD:DateTimeOriginal') or e.get('IFD0:ModifyDate') or ''))
+        if m:
+            y, mo, d, h, mi = map(int, m.groups())
+            try: dd = datetime.date(y, mo, d); cols['when:hour'][i] = h + mi / 60; cols['when:doy'][i] = dd.timetuple().tm_yday; cols['when:weekday'][i] = dd.weekday(); cols['when:year'][i] = y
+            except ValueError: pass
+    names, mats = [], []
+    for name, v in sorted(cols.items()):
+        have = [x for x in v if x is not None]
+        if len(have) < 0.2 * len(raws): continue
+        if any(isinstance(x, str) for x in have):
+            rank = {t: n for n, (t, _) in enumerate(collections.Counter(x for x in have if isinstance(x, str)).most_common())}; col = [rank.get(x, np.nan) if isinstance(x, str) else np.nan for x in v]
+        else: col = [np.nan if x is None else x for x in v]
+        arr = np.array(col, np.float32)
+        if not np.isfinite(arr).any() or np.nanmin(arr) == np.nanmax(arr): continue
+        names.append(name); mats.append(arr)
+    np.savez(os.path.join(OUT, 'meta.npz'), M=np.stack(mats, 1), names=np.array(names)); print(f'{len(names)} metadata columns:', ', '.join(names), flush=True)
+
+
+THUMB = 128
+
+
+def thumbs(a):
+    """OUT/thumbs/t*.npz: for every catalogue row the camera's preview (cut to Lightroom's crop, turned the way up) and the person's final, both squeezed to THUMB x THUMB (uint8 BGR), in batches of BATCH rows: the pair data for fitting what the person does to a picture (scripts/lr_fit.py) and for image features. `idx` says which catalogue row each is, `ok` which rows had both pictures."""
+    rows = load_catalogue(); d = os.path.join(OUT, 'thumbs'); os.makedirs(d, exist_ok=True)
+    for k in range(0, len(rows), BATCH):
+        dst = os.path.join(d, f't{k // BATCH:03d}.npz')
+        if os.path.exists(dst): continue
+        batch = rows[k:k + BATCH]; tmp = tempfile.mkdtemp(dir=d); lst = os.path.join(tmp, 'list.txt'); open(lst, 'w').write('\n'.join(r['raw'] for r in batch))
+        subprocess.run(['exiftool', '-q', '-b', '-PreviewImage', '-w', f'{tmp}/%:1d_%f.jpg', '-@', lst], capture_output=True)
+        ex = {x['SourceFile']: x for x in json.loads(subprocess.run(['exiftool', '-q', '-json', '-n', '-Orientation', '-@', lst], capture_output=True, text=True).stdout or '[]')}
+        with ThreadPoolExecutor(8) as pool: fins = list(pool.map(lambda r: cv2.imread(r['final'], cv2.IMREAD_REDUCED_COLOR_4), batch))
+        C, F, keep = [], [], []
+        for i, (r, fin) in enumerate(zip(batch, fins)):
+            p = f'{tmp}{os.path.dirname(r["raw"])}/_{os.path.splitext(os.path.basename(r["raw"]))[0]}.jpg'; e = ex.get(r['raw']); im = cv2.imread(p) if os.path.exists(p) else None
+            if im is None or e is None or fin is None: continue
+            cam = orient(lr_crop(im, r), e.get('Orientation')); sq = lambda x: cv2.resize(x, (THUMB, THUMB), interpolation=cv2.INTER_AREA)
+            C.append(sq(cam)); F.append(sq(fin)); keep.append(k + i)
+        np.savez(dst, cam=np.array(C, np.uint8), fin=np.array(F, np.uint8), idx=np.array(keep)); shutil.rmtree(tmp); print(f'thumbs batch {k // BATCH}: {len(keep)}/{len(batch)}', flush=True)
+
+
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['pairs', 'catalogue', 'features'])
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['pairs', 'catalogue', 'features', 'meta', 'thumbs'])
     ap.add_argument('--finals', default=os.path.expanduser('~/personal/Backup/Photos')); ap.add_argument('--raws', default=os.path.expanduser('~/raw'))
-    a = ap.parse_args(); os.makedirs(OUT, exist_ok=True); {'pairs': pairs, 'catalogue': catalogue, 'features': features}[a.step](a)
+    a = ap.parse_args(); os.makedirs(OUT, exist_ok=True); {'pairs': pairs, 'catalogue': catalogue, 'features': features, 'meta': meta, 'thumbs': thumbs}[a.step](a)

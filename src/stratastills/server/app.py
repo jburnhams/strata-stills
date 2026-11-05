@@ -5,14 +5,14 @@
 API (JSON): GET /api/report (is there a visual report) and GET /report/ (the report's own pages, from settings.report_dir()); GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
 GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
-import os, threading
+import json, os, random, re, secrets, threading, time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stratastills import export as X, pipeline as PL, preview, projects as P, settings
+from stratastills import arena as AR, export as X, ingest, nsfw, pipeline as PL, preview, projects as P, settings
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 LANDING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'landing.html')
@@ -49,6 +49,41 @@ class RulesIn(BaseModel):
     rules: list[dict]
 
 
+class FlagIn(BaseModel):
+    flag: bool = True
+    rating: str = ''                            # worst | bad | medium | good | perfect | '' (not rated)
+    reasons: list[str] = []
+    note: str = ''
+    status: str = 'open'                        # open | fixable | deferred | fixed
+
+
+class VoteIn(BaseModel):
+    token: str
+    choice: str                                  # left | right | tie | skip
+    ms: int = 0
+
+
+class FlaggedIn(BaseModel):
+    path: str
+    allow: bool = True
+
+
+class FlaggedScanIn(BaseModel):
+    folder: str
+
+
+class AlertIn(BaseModel):
+    token: str
+    side: str                                    # left | right: the picture with something wrong
+    note: str = ''
+    ms: int = 0
+
+
+class AlertStatusIn(BaseModel):
+    id: str
+    resolved: bool = True
+
+
 class SettingsIn(BaseModel):
     projects_dir: str | None = None
 
@@ -67,10 +102,177 @@ def create_app():
         built = os.path.join(STATIC, 'index.html')          # the React app when it has been built (cd web; npm run build), else the plain stand-in page
         return open(built if os.path.exists(built) else LANDING, encoding='utf8').read()
 
+    FLAGGED_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'flagged.html')
+
+    @app.get('/flagged')
+    def flagged_slash(): return RedirectResponse('/flagged/')
+
+    @app.get('/flagged/', response_class=HTMLResponse)
+    def flagged_page(): return open(FLAGGED_PAGE, encoding='utf8').read()
+
+    @app.get('/api/flagged')
+    def flagged_list(): return dict(threshold=nsfw.threshold(), enabled=nsfw.enabled(), items=nsfw.review())
+
+    def flagged_known(path):
+        if path not in {r['path'] for r in nsfw.review()}: raise HTTPException(404, 'not a flagged picture')       # only what the filter has flagged is served: no way to read other files through here
+
+    @app.get('/api/flagged/image')
+    def flagged_image(path: str, px: int = 900):
+        flagged_known(path); from stratastills import images; import cv2
+        ok, buf = cv2.imencode('.jpg', images.load(path, max(100, min(px, 3000))), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return Response(buf.tobytes(), media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+    @app.post('/api/flagged/decide')
+    def flagged_decide(body: FlaggedIn):
+        flagged_known(body.path); nsfw.allow(body.path, body.allow); return dict(ok=True)
+
+    @app.post('/api/flagged/scan')
+    def flagged_scan(body: FlaggedScanIn):
+        """Look at every picture of a folder (and below) so that it shows up here when flagged; the filter's skip is applied by ingest.scan itself."""
+        if not os.path.isdir(body.folder): raise HTTPException(400, f'not a folder: {body.folder}')
+        n = len(ingest.scan(body.folder, recursive=True)); return dict(kept=n, flagged=len(nsfw.review()))
+
     @app.get('/api/report')
     def report_info():
-        f = os.path.join(settings.report_dir(), 'index.html')                  # the visual report (scripts/build_report.py): static files, looked up per request so one built after the server started shows up
-        return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None)
+        root = settings.report_dir(); f = os.path.join(root, 'index.html')     # the visual reports (scripts/build_report.py -> neutral/, scripts/build_lr_report.py -> auto/): static files, looked up per request so one built after the server started shows up
+        peers = {d: os.path.exists(os.path.join(root, d, 'index.html')) for d in ('neutral', 'auto')}
+        return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None, **peers)
+
+    ARENA_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'arena.html'); pending, arena_lock = {}, threading.Lock()
+
+    def arena_pool():
+        f = os.path.join(settings.arena_dir(), 'pool.json')
+        try: return json.load(open(f, encoding='utf8'))
+        except (OSError, ValueError): return {}
+
+    def arena_retired():
+        try: return set(json.load(open(os.path.join(settings.arena_dir(), 'variants.json'), encoding='utf8')).get('retired', []))
+        except (OSError, ValueError): return set()
+
+    def arena_votes(): return AR.load_votes(os.path.join(settings.arena_dir(), 'votes.jsonl'))
+
+    def arena_alert_events(): return AR.load_votes(os.path.join(settings.arena_dir(), 'alerts.jsonl'))      # same append-only JSON lines file format as the votes
+
+    @app.get('/arena')
+    def arena_slash(): return RedirectResponse('/arena/')
+
+    @app.get('/arena/', response_class=HTMLResponse)
+    def arena_page(): return open(ARENA_PAGE, encoding='utf8').read()
+
+    @app.get('/api/arena/next')
+    def arena_next(want: str = ''):
+        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, set(want.split(',')) if want else None, AR.open_alerts(arena_alert_events()))
+        if not pick: raise HTTPException(404, 'nothing to rate yet: make the pictures with scripts/build_arena.py')
+        pic, a, b = pick; token = secrets.token_urlsafe(9)
+        with arena_lock:
+            pending[token] = dict(pic=pic, a=a, b=b, t0=time.time())
+            while len(pending) > 300: pending.pop(next(iter(pending)))
+        return dict(token=token, left=f'img/{token}/left', right=f'img/{token}/right', pool=len(pool), votes=len(arena_votes()))
+
+    @app.get('/arena/img/{token}/{side}')
+    def arena_img(token: str, side: str):
+        q = pending.get(token)
+        if not q or side not in ('left', 'right'): raise HTTPException(404, 'unknown pair')
+        rel = arena_pool()[q['pic']][q['a'] if side == 'left' else q['b']]['file']; root = os.path.realpath(settings.arena_dir()); f = os.path.realpath(os.path.join(root, rel))
+        if os.path.commonpath([root, f]) != root or not os.path.isfile(f): raise HTTPException(404, 'no picture')
+        return FileResponse(f, headers={'Cache-Control': 'max-age=3600'})
+
+    @app.post('/api/arena/vote')
+    def arena_vote(body: VoteIn):
+        with arena_lock: q = pending.pop(body.token, None)
+        if not q: raise HTTPException(404, 'unknown pair (already answered?)')
+        if body.choice == 'skip': return dict(ok=True, skipped=True)
+        if any(a.get('token') == body.token and not a['resolved'] for a in AR.alerts(arena_alert_events())): return dict(ok=True, skipped=True, alerted=True)       # a pair with an open alert is not a vote: one of its pictures is wrong
+        if body.choice not in ('left', 'right', 'tie'): raise HTTPException(400, 'choice is left, right, tie or skip')
+        AR.append_vote(os.path.join(settings.arena_dir(), 'votes.jsonl'), dict(pic=q['pic'], a=q['a'], b=q['b'], winner={'left': 'a', 'right': 'b', 'tie': 'tie'}[body.choice], t=round(time.time(), 1), ms=body.ms))
+        return dict(ok=True, votes=len(arena_votes()))
+
+    ALERTS_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'alerts.html')
+
+    @app.post('/api/arena/alert')
+    def arena_alert(body: AlertIn):
+        """Something is wrong with one picture of the pair on screen (the vote is not recorded; the picture's variant is no longer offered until the alert is resolved)."""
+        if body.side not in ('left', 'right'): raise HTTPException(400, 'side is left or right')
+        q = pending.get(body.token)                                                                       # the pair stays on screen: the alert button turns red and a second press undoes it
+        if not q: raise HTTPException(404, 'unknown pair (already answered?)')
+        mine = [a for a in AR.alerts(arena_alert_events()) if a.get('token') == body.token and a['side'] == body.side and not a['resolved']]
+        if mine: return dict(ok=True, id=mine[0]['id'])
+        var, other = (q['a'], q['b']) if body.side == 'left' else (q['b'], q['a']); votes = arena_votes()
+        ev = dict(id=secrets.token_hex(5), token=body.token, pic=q['pic'], variant=var, other=other, side=body.side, note=body.note.strip()[:500], t=round(time.time(), 1), ms=body.ms, votes_on_pic=sum(v['pic'] == q['pic'] for v in votes), votes_on_variant=sum(v['pic'] == q['pic'] and var in (v['a'], v['b']) for v in votes))
+        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), ev); return dict(ok=True, id=ev['id'])
+
+    @app.post('/api/arena/alert/clear')
+    def arena_alert_clear(body: AlertIn):
+        """Undo the alert on one side of the pair on screen (the button was pressed again)."""
+        mine = [a for a in AR.alerts(arena_alert_events()) if a.get('token') == body.token and a['side'] == body.side and not a['resolved']]
+        for a in mine: AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), dict(id=a['id'], resolved=True, t=round(time.time(), 1)))
+        return dict(ok=True, cleared=len(mine))
+
+    @app.get('/alerts')
+    def alerts_slash(): return RedirectResponse('/alerts/')
+
+    @app.get('/alerts/', response_class=HTMLResponse)
+    def alerts_page(): return open(ALERTS_PAGE, encoding='utf8').read()
+
+    @app.get('/api/alerts')
+    def alerts_list(): return dict(alerts=list(reversed(AR.alerts(arena_alert_events(), arena_pool()))))
+
+    @app.get('/api/alerts/image/{aid}')
+    def alerts_image(aid: str):
+        a = next((x for x in AR.alerts(arena_alert_events(), arena_pool()) if x['id'] == aid), None)
+        if not a or not a['pool']: raise HTTPException(404, 'no picture')
+        root = os.path.realpath(settings.arena_dir()); f = os.path.realpath(os.path.join(root, a['pool']['file']))
+        if os.path.commonpath([root, f]) != root or not os.path.isfile(f): raise HTTPException(404, 'no picture')
+        return FileResponse(f, headers={'Cache-Control': 'max-age=3600'})
+
+    @app.post('/api/alerts/status')
+    def alerts_status(body: AlertStatusIn):
+        if body.id not in {a['id'] for a in AR.alerts(arena_alert_events())}: raise HTTPException(404, 'unknown alert')
+        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), dict(id=body.id, resolved=body.resolved, t=round(time.time(), 1))); return dict(ok=True)
+
+    @app.post('/api/arena/undo')
+    def arena_undo():
+        f = os.path.join(settings.arena_dir(), 'votes.jsonl')
+        with arena_lock:
+            lines = open(f, encoding='utf8').read().splitlines() if os.path.exists(f) else []
+            if not lines: raise HTTPException(404, 'no vote to undo')
+            gone = lines.pop(); open(f, 'w', encoding='utf8').write(''.join(x + '\n' for x in lines))
+        return dict(undone=json.loads(gone), votes=len(lines))
+
+    @app.get('/api/arena/ratings')
+    def arena_ratings():
+        votes, retired = arena_votes(), arena_retired(); pool = arena_pool(); bt = AR.bradley_terry(votes, retired); ci = AR.bootstrap(votes, retired, n=100); e = AR.elo(votes, retired)
+        n = {}
+        for v in votes:
+            for k in (v['a'], v['b']): n[k] = n.get(k, 0) + 1
+        names = sorted(set(bt) | {k for vs in pool.values() for k in vs} - retired, key=lambda k: -bt.get(k, 0))
+        return dict(votes=len(votes), pictures=len(pool), voted_pictures=len({v['pic'] for v in votes}), retired=sorted(retired), variants=[dict(name=k, bt=round(bt[k]) if k in bt else None, elo=round(e[k]) if k in e else None, lo=round(ci[k][0]) if k in ci else None, hi=round(ci[k][1]) if k in ci else None, votes=n.get(k, 0)) for k in names],
+                    head_to_head=[dict(a=a, b=b, a_wins=w[0], b_wins=w[1], ties=w[2]) for (a, b), w in sorted(AR.head_to_head(votes, retired).items())])
+
+    FLAG_REPORTS = ('neutral', 'auto'); FLAG_PIC = re.compile(r'^[A-Za-z0-9_.\- ]{1,120}$'); flag_lock = threading.Lock()
+
+    def flag_file(report):
+        if report not in FLAG_REPORTS: raise HTTPException(404, 'no such report')
+        return os.path.join(settings.report_flags_dir(), f'{report}.json')
+
+    @app.get('/api/report-flags/{report}')
+    def get_flags(report: str):
+        f = flag_file(report)
+        try: return json.load(open(f, encoding='utf8'))
+        except (OSError, ValueError): return {}
+
+    @app.put('/api/report-flags/{report}/{pic}')
+    def put_flag(report: str, pic: str, body: FlagIn):
+        f = flag_file(report)
+        if not FLAG_PIC.match(pic): raise HTTPException(400, 'bad picture id')
+        with flag_lock:                                                                                 # the flags of a report are one small file: read, change one picture, write whole (through a temporary file)
+            try: cur = json.load(open(f, encoding='utf8'))
+            except (OSError, ValueError): cur = {}
+            rating = body.rating if body.rating in ('worst', 'bad', 'medium', 'good', 'perfect') else ''
+            if rating or body.reasons or body.note: now = time.strftime('%Y-%m-%dT%H:%M:%S'); cur[pic] = dict(flag=True, rating=rating, reasons=body.reasons[:20], note=body.note[:2000], status=body.status if body.status in ('open', 'fixable', 'deferred', 'fixed') else 'open', at=now, first=cur.get(pic, {}).get('first', now))      # `at` is the last change, `first` when it was first flagged: to see which to revisit
+            else: cur.pop(pic, None)
+            os.makedirs(os.path.dirname(f), exist_ok=True); tmp = f + '.tmp'; json.dump(cur, open(tmp, 'w', encoding='utf8'), indent=1, sort_keys=True); os.replace(tmp, f)
+        return cur.get(pic, {})
 
     @app.get('/report')
     def report_slash(): return RedirectResponse('/report/')

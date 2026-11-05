@@ -44,7 +44,7 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 const send = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 export const api = {
-  report: () => req<{ available: boolean; built: number | null }>('/api/report'),
+  report: () => req<{ available: boolean; built: number | null; neutral?: boolean; auto?: boolean }>('/api/report'),
   settings: () => req<{ projects_dir: string }>('/api/settings'),
   projects: () => req<Project[]>('/api/projects'),
   createProject: (name: string, sources: string[]) => req<Project>('/api/projects', send('POST', { name, sources })),
