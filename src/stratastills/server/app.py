@@ -182,6 +182,7 @@ def create_app():
         with arena_lock: q = pending.pop(body.token, None)
         if not q: raise HTTPException(404, 'unknown pair (already answered?)')
         if body.choice == 'skip': return dict(ok=True, skipped=True)
+        if any(a.get('token') == body.token and not a['resolved'] for a in AR.alerts(arena_alert_events())): return dict(ok=True, skipped=True, alerted=True)       # a pair with an open alert is not a vote: one of its pictures is wrong
         if body.choice not in ('left', 'right', 'tie'): raise HTTPException(400, 'choice is left, right, tie or skip')
         AR.append_vote(os.path.join(settings.arena_dir(), 'votes.jsonl'), dict(pic=q['pic'], a=q['a'], b=q['b'], winner={'left': 'a', 'right': 'b', 'tie': 'tie'}[body.choice], t=round(time.time(), 1), ms=body.ms))
         return dict(ok=True, votes=len(arena_votes()))
@@ -192,11 +193,20 @@ def create_app():
     def arena_alert(body: AlertIn):
         """Something is wrong with one picture of the pair on screen (the vote is not recorded; the picture's variant is no longer offered until the alert is resolved)."""
         if body.side not in ('left', 'right'): raise HTTPException(400, 'side is left or right')
-        with arena_lock: q = pending.pop(body.token, None)
+        q = pending.get(body.token)                                                                       # the pair stays on screen: the alert button turns red and a second press undoes it
         if not q: raise HTTPException(404, 'unknown pair (already answered?)')
+        mine = [a for a in AR.alerts(arena_alert_events()) if a.get('token') == body.token and a['side'] == body.side and not a['resolved']]
+        if mine: return dict(ok=True, id=mine[0]['id'])
         var, other = (q['a'], q['b']) if body.side == 'left' else (q['b'], q['a']); votes = arena_votes()
-        ev = dict(id=secrets.token_hex(5), pic=q['pic'], variant=var, other=other, side=body.side, note=body.note.strip()[:500], t=round(time.time(), 1), ms=body.ms, votes_on_pic=sum(v['pic'] == q['pic'] for v in votes), votes_on_variant=sum(v['pic'] == q['pic'] and var in (v['a'], v['b']) for v in votes))
+        ev = dict(id=secrets.token_hex(5), token=body.token, pic=q['pic'], variant=var, other=other, side=body.side, note=body.note.strip()[:500], t=round(time.time(), 1), ms=body.ms, votes_on_pic=sum(v['pic'] == q['pic'] for v in votes), votes_on_variant=sum(v['pic'] == q['pic'] and var in (v['a'], v['b']) for v in votes))
         AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), ev); return dict(ok=True, id=ev['id'])
+
+    @app.post('/api/arena/alert/clear')
+    def arena_alert_clear(body: AlertIn):
+        """Undo the alert on one side of the pair on screen (the button was pressed again)."""
+        mine = [a for a in AR.alerts(arena_alert_events()) if a.get('token') == body.token and a['side'] == body.side and not a['resolved']]
+        for a in mine: AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), dict(id=a['id'], resolved=True, t=round(time.time(), 1)))
+        return dict(ok=True, cleared=len(mine))
 
     @app.get('/alerts')
     def alerts_slash(): return RedirectResponse('/alerts/')

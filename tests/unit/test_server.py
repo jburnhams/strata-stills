@@ -87,8 +87,11 @@ def test_arena_alerts_hide_a_version_until_resolved_and_are_listed_with_metadata
     p = client.get('/api/arena/next').json(); assert client.post('/api/arena/alert', json=dict(token=p['token'], side='sideways')).status_code == 400
     assert client.get('/arena/' + p['left']).content in (b'jpg-lr', b'jpg-auto1')
     a = client.post('/api/arena/alert', json=dict(token=p['token'], side='left', note=' banding ', ms=1200)).json()
-    assert client.post('/api/arena/alert', json=dict(token=p['token'], side='left')).status_code == 404 and client.get('/api/arena/next').status_code == 404      # only one version left: no pair
+    assert client.post('/api/arena/alert', json=dict(token=p['token'], side='left')).json()['id'] == a['id'] and client.get('/api/arena/next').status_code == 404      # pressing again does not double it; only one version left: no pair
+    assert client.post('/api/arena/vote', json=dict(token=p['token'], choice='left')).json()['alerted'] and client.get('/api/arena/ratings').json()['votes'] == 0         # a pair with an open alert is not a vote
     row = client.get('/api/alerts').json()['alerts'][0]; assert row['id'] == a['id'] and row['note'] == 'banding' and row['pic'] == 'p1' and row['ms'] == 1200 and not row['resolved'] and row['pool']['file'].startswith('img/')
     assert client.get('/api/alerts/image/' + a['id']).status_code == 200 and 'Arena alerts' in client.get('/alerts/').text
     assert client.post('/api/alerts/status', json=dict(id='nope')).status_code == 404
     client.post('/api/alerts/status', json=dict(id=a['id'], resolved=True)); assert client.get('/api/alerts').json()['alerts'][0]['resolved'] and client.get('/api/arena/next').status_code == 200
+    p = client.get('/api/arena/next').json(); b = client.post('/api/arena/alert', json=dict(token=p['token'], side='right')).json(); assert client.get('/api/arena/next').status_code == 404
+    assert client.post('/api/arena/alert/clear', json=dict(token=p['token'], side='right')).json()['cleared'] == 1 and client.get('/api/arena/next').status_code == 200      # pressed again: undone, the version is offered again
