@@ -69,9 +69,17 @@ def neutral(raws, work, say, rebuild=False):
     return out
 
 
+def turn_to_ref(c, ref):
+    """`c` turned a quarter if its landscape/portrait does not match `ref`'s (some raws, the NEX-5N's among them, say Orientation 1 though Lightroom's picture is the other way up: squeezing the frame to `ref`'s shape would distort it): whichever way round matches `ref`'s tones better."""
+    if (c.shape[1] > c.shape[0]) == (ref.shape[1] > ref.shape[0]): return c
+    H, W = ref.shape[:2]; g = lambda x: cv2.GaussianBlur(cv2.cvtColor(cv2.resize(x, (64, round(64 * H / W))), cv2.COLOR_BGR2GRAY), (0, 0), 1).astype(np.float32); r = g(ref); r -= r.mean()
+    cands = [cv2.rotate(c, cv2.ROTATE_90_CLOCKWISE), cv2.rotate(c, cv2.ROTATE_90_COUNTERCLOCKWISE)]
+    return max(cands, key=lambda x: float(((g(x) - g(x).mean()) * r).sum() / (np.linalg.norm(g(x) - g(x).mean()) * np.linalg.norm(r) + 1e-6)))
+
+
 def to_final(im, row, orientation, ref, with_rect=False):
     """`im` (BGR, in the sensor's frame) cut to Lightroom's crop, turned the way up, then laid exactly on `ref` (the final, BGR) by a similarity transform found from features (lens corrections and the programs' framing differ by a few pixels and a little scale); the crop alone if no transform is found. -> (picture at ref's size, how it was aligned)."""
-    c = D.orient(D.lr_crop(im, row), orientation); H, W = ref.shape[:2]; c = cv2.resize(c, (W, H), interpolation=cv2.INTER_AREA if c.shape[1] > W else cv2.INTER_CUBIC)
+    c = D.orient(D.lr_crop(im, row), orientation); H, W = ref.shape[:2]; c = turn_to_ref(c, ref); c = cv2.resize(c, (W, H), interpolation=cv2.INTER_AREA if c.shape[1] > W else cv2.INTER_CUBIC)
     k = 1500 / max(W, H); g = lambda x: cv2.cvtColor(cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
     M = BR.register(g(ref), g(c))
     if M is None or abs(M[0, 0] - 1) > 0.08 or abs(M[1, 0]) > 0.05: return (c, 'Lightroom crop', (0, 0, W, H)) if with_rect else (c, 'Lightroom crop')
