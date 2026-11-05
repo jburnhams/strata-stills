@@ -72,6 +72,18 @@ class FlaggedScanIn(BaseModel):
     folder: str
 
 
+class AlertIn(BaseModel):
+    token: str
+    side: str                                    # left | right: the picture with something wrong
+    note: str = ''
+    ms: int = 0
+
+
+class AlertStatusIn(BaseModel):
+    id: str
+    resolved: bool = True
+
+
 class SettingsIn(BaseModel):
     projects_dir: str | None = None
 
@@ -139,6 +151,8 @@ def create_app():
 
     def arena_votes(): return AR.load_votes(os.path.join(settings.arena_dir(), 'votes.jsonl'))
 
+    def arena_alert_events(): return AR.load_votes(os.path.join(settings.arena_dir(), 'alerts.jsonl'))      # same append-only JSON lines file format as the votes
+
     @app.get('/arena')
     def arena_slash(): return RedirectResponse('/arena/')
 
@@ -147,7 +161,7 @@ def create_app():
 
     @app.get('/api/arena/next')
     def arena_next(want: str = ''):
-        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, set(want.split(',')) if want else None)
+        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, set(want.split(',')) if want else None, AR.open_alerts(arena_alert_events()))
         if not pick: raise HTTPException(404, 'nothing to rate yet: make the pictures with scripts/build_arena.py')
         pic, a, b = pick; token = secrets.token_urlsafe(9)
         with arena_lock:
@@ -171,6 +185,40 @@ def create_app():
         if body.choice not in ('left', 'right', 'tie'): raise HTTPException(400, 'choice is left, right, tie or skip')
         AR.append_vote(os.path.join(settings.arena_dir(), 'votes.jsonl'), dict(pic=q['pic'], a=q['a'], b=q['b'], winner={'left': 'a', 'right': 'b', 'tie': 'tie'}[body.choice], t=round(time.time(), 1), ms=body.ms))
         return dict(ok=True, votes=len(arena_votes()))
+
+    ALERTS_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'alerts.html')
+
+    @app.post('/api/arena/alert')
+    def arena_alert(body: AlertIn):
+        """Something is wrong with one picture of the pair on screen (the vote is not recorded; the picture's variant is no longer offered until the alert is resolved)."""
+        if body.side not in ('left', 'right'): raise HTTPException(400, 'side is left or right')
+        with arena_lock: q = pending.pop(body.token, None)
+        if not q: raise HTTPException(404, 'unknown pair (already answered?)')
+        var, other = (q['a'], q['b']) if body.side == 'left' else (q['b'], q['a']); votes = arena_votes()
+        ev = dict(id=secrets.token_hex(5), pic=q['pic'], variant=var, other=other, side=body.side, note=body.note.strip()[:500], t=round(time.time(), 1), ms=body.ms, votes_on_pic=sum(v['pic'] == q['pic'] for v in votes), votes_on_variant=sum(v['pic'] == q['pic'] and var in (v['a'], v['b']) for v in votes))
+        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), ev); return dict(ok=True, id=ev['id'])
+
+    @app.get('/alerts')
+    def alerts_slash(): return RedirectResponse('/alerts/')
+
+    @app.get('/alerts/', response_class=HTMLResponse)
+    def alerts_page(): return open(ALERTS_PAGE, encoding='utf8').read()
+
+    @app.get('/api/alerts')
+    def alerts_list(): return dict(alerts=list(reversed(AR.alerts(arena_alert_events(), arena_pool()))))
+
+    @app.get('/api/alerts/image/{aid}')
+    def alerts_image(aid: str):
+        a = next((x for x in AR.alerts(arena_alert_events(), arena_pool()) if x['id'] == aid), None)
+        if not a or not a['pool']: raise HTTPException(404, 'no picture')
+        root = os.path.realpath(settings.arena_dir()); f = os.path.realpath(os.path.join(root, a['pool']['file']))
+        if os.path.commonpath([root, f]) != root or not os.path.isfile(f): raise HTTPException(404, 'no picture')
+        return FileResponse(f, headers={'Cache-Control': 'max-age=3600'})
+
+    @app.post('/api/alerts/status')
+    def alerts_status(body: AlertStatusIn):
+        if body.id not in {a['id'] for a in AR.alerts(arena_alert_events())}: raise HTTPException(404, 'unknown alert')
+        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), dict(id=body.id, resolved=body.resolved, t=round(time.time(), 1))); return dict(ok=True)
 
     @app.post('/api/arena/undo')
     def arena_undo():

@@ -78,3 +78,17 @@ def test_the_arena_offers_blind_pairs_records_votes_and_rates(client, tmp_path, 
     q = client.get('/api/arena/next').json(); assert client.post('/api/arena/vote', json=dict(token=q['token'], choice='sideways')).status_code == 400
     r = client.get('/api/arena/ratings').json(); assert r['votes'] == 1 and {v['name'] for v in r['variants']} == {'lr', 'auto1'} and r['head_to_head'][0]['ties'] == 0
     assert client.post('/api/arena/undo').json()['votes'] == 0 and client.post('/api/arena/undo').status_code == 404
+
+
+def test_arena_alerts_hide_a_version_until_resolved_and_are_listed_with_metadata(client, tmp_path, monkeypatch):
+    arena = tmp_path / 'arena'; (arena / 'img').mkdir(parents=True); monkeypatch.setenv('STRATASTILLS_ARENA', str(arena))
+    for n in ('lr', 'auto1'): (arena / 'img' / f'{n}.jpg').write_bytes(b'jpg-' + n.encode())
+    (arena / 'pool.json').write_text('{"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "b", "key": "k1"}}}')
+    p = client.get('/api/arena/next').json(); assert client.post('/api/arena/alert', json=dict(token=p['token'], side='sideways')).status_code == 400
+    assert client.get('/arena/' + p['left']).content in (b'jpg-lr', b'jpg-auto1')
+    a = client.post('/api/arena/alert', json=dict(token=p['token'], side='left', note=' banding ', ms=1200)).json()
+    assert client.post('/api/arena/alert', json=dict(token=p['token'], side='left')).status_code == 404 and client.get('/api/arena/next').status_code == 404      # only one version left: no pair
+    row = client.get('/api/alerts').json()['alerts'][0]; assert row['id'] == a['id'] and row['note'] == 'banding' and row['pic'] == 'p1' and row['ms'] == 1200 and not row['resolved'] and row['pool']['file'].startswith('img/')
+    assert client.get('/api/alerts/image/' + a['id']).status_code == 200 and 'Arena alerts' in client.get('/alerts/').text
+    assert client.post('/api/alerts/status', json=dict(id='nope')).status_code == 404
+    client.post('/api/alerts/status', json=dict(id=a['id'], resolved=True)); assert client.get('/api/alerts').json()['alerts'][0]['resolved'] and client.get('/api/arena/next').status_code == 200

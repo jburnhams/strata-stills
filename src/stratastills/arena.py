@@ -26,6 +26,19 @@ def append_vote(path, vote):
     with open(path, 'a', encoding='utf8') as f: f.write(json.dumps(vote, sort_keys=True) + '\n')
 
 
+def alerts(events, pool=None):
+    """The alerts (a person saying 'something is wrong with this picture') from the event log, oldest first: [{id, pic, variant, other, side, note, t, ms, resolved, pool: the pool entry of that variant, votes_on_pic}]. An event is an alert ({'id', 'pic', 'variant', ...}) or a status change ({'id', 'resolved': bool}); the last one wins. `open_alerts` names the (picture, variant) pairs that must not be offered."""
+    out = {}
+    for e in events:
+        if 'pic' in e: out[e['id']] = dict(e, resolved=False)
+        elif e.get('id') in out: out[e['id']]['resolved'] = bool(e.get('resolved'))
+    for a in out.values(): a['pool'] = ((pool or {}).get(a['pic']) or {}).get(a['variant'])
+    return sorted(out.values(), key=lambda a: a.get('t', 0))
+
+
+def open_alerts(events): return {(a['pic'], a['variant']) for a in alerts(events) if not a['resolved']}
+
+
 def score(v): return {'a': 1.0, 'b': 0.0, 'tie': 0.5}.get(v.get('winner'))
 
 
@@ -83,9 +96,9 @@ def head_to_head(votes, retired=()):
     return t
 
 
-def pick_pair(pool, votes, rng, retired=(), want=None):
+def pick_pair(pool, votes, rng, retired=(), want=None, blocked=()):
     """Choose what to show next: a picture and two of its variants (-> (picture, left, right), left and right already shuffled), or None when nothing can be offered. Pictures with the fewest votes come first (spreading the votes over the whole pool), then among a picture's pairs the one whose variants have been compared the least in total, ties broken at random; `want` (a set of variant names) limits pairs to those containing one of them (a new variant being tested)."""
-    seen = {}
+    seen = {}; pool = {pic: {n: e for n, e in vs.items() if (pic, n) not in blocked} for pic, vs in pool.items()}                  # a variant with an open alert is not offered
     for v in votes: seen[v['pic']] = seen.get(v['pic'], 0) + 1
     pair_n = {}
     for v in votes: k = frozenset((v['a'], v['b'])); pair_n[k] = pair_n.get(k, 0) + 1
