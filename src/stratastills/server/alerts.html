@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Arena alerts</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1c1c1e;--mut:#6b6b70;--line:#d8d8dc;--acc:#2a6df4}
+@media(prefers-color-scheme:dark){:root{--bg:#161618;--fg:#ececee;--mut:#9a9aa2;--line:#33333a;--acc:#6f9bff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:24px 16px}h1{font-size:20px;margin:0 0 4px}.mut{color:var(--mut)}a{color:var(--acc)}
+.a{display:flex;gap:14px;border:1px solid var(--line);border-radius:8px;padding:10px;margin:12px 0}.a.done{opacity:.55}
+.a img{width:300px;max-width:40%;object-fit:contain;align-self:flex-start;border-radius:4px;background:var(--line)}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:6px 0;font-size:13px}dt{color:var(--mut)}dd{margin:0;word-break:break-all}
+button{padding:6px 12px;border:0;border-radius:6px;background:var(--acc);color:#fff;cursor:pointer}button.l{background:transparent;color:var(--acc);border:1px solid var(--line)}
+@media(max-width:640px){.a{flex-direction:column}.a img{max-width:100%;width:100%}}
+</style></head><body><main>
+<h1>Arena alerts</h1><div class="mut" id="info"></div><div id="list"></div>
+</main><script>
+const $=id=>document.getElementById(id);
+async function api(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.status);return r.json()}
+function row(k,v){const d=document.createDocumentFragment(),a=document.createElement('dt'),b=document.createElement('dd');a.textContent=k;b.textContent=v;d.append(a,b);return d}
+async function load(){
+  const j=await api('../api/alerts'),open=j.alerts.filter(a=>!a.resolved).length;
+  $('info').innerHTML=j.alerts.length+' alerts, '+open+' open (an open alert keeps that version of that picture out of the arena). <a href="../arena/">Back to the arena</a>';
+  $('list').replaceChildren(...j.alerts.map(a=>{const c=document.createElement('div');c.className='a'+(a.resolved?' done':'');
+    const im=new Image();im.loading='lazy';im.src='../api/alerts/image/'+a.id;const d=document.createElement('div');
+    const h=document.createElement('b');h.textContent=a.pic+' / '+a.variant;const dl=document.createElement('dl');
+    for(const [k,v] of [['note',a.note||'(none)'],['when',new Date(a.t*1000).toLocaleString()],['shown',a.side+', against '+a.other],['time on pair',(a.ms/1000).toFixed(1)+' s'],['votes',a.votes_on_pic+' on the picture, '+a.votes_on_variant+' involving this version'],['file',a.pool?a.pool.file:'(gone from the pool)'],['hash / key',a.pool?(a.pool.hash+' / '+(a.pool.key||'')):''],['status',a.resolved?'resolved':'open']])dl.append(row(k,v));
+    const b=document.createElement('button');b.className=a.resolved?'l':'';b.textContent=a.resolved?'Reopen':'Resolve';
+    b.onclick=async()=>{await api('../api/alerts/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:a.id,resolved:!a.resolved})});load()};
+    d.append(h,dl,b);c.append(im,d);return c}))}
+load().catch(e=>{$('info').textContent=String(e.message)});
+</script></body></html>

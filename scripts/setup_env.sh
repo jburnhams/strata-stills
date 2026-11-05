@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the stratastills environment from scratch (macOS Apple silicon or Linux, Python 3.13).
 #   scripts/setup_env.sh [--no-torch] [--with-vision] [--report]
-# --report: at the end, build the visual report on the candidate photos (scripts/build_report.py into out/report/; skipped when there is no candidates/ folder)
+# --report: at the end, build the visual report on the candidate photos (scripts/build_report.py into out/report/neutral/; skipped when there is no candidates/ folder)
 # Environment variables: VENV (default .venv), PYTHON (default python3)
 # torch: scripts/setup_torch.py picks the build for the machine (CUDA = cu128|cu126|rocm64|cpu in the environment overrides it).
 set -euo pipefail
@@ -40,6 +40,6 @@ fi
 # ---- optional: the visual report on the candidate photos ---------------------------------------------------------------------------
 if [ "$REPORT" = 1 ]; then
   PYTHONPATH="$ROOT/src" "$VENV/bin/python" -c "from stratastills import externaltools as E; E.require()" || exit 1      # darktable and RawTherapee are needed: the report is a comparison with them
-  if [ -d "$ROOT/candidates" ]; then PYTHONPATH="$ROOT/src" "$VENV/bin/python" "$ROOT/scripts/build_report.py" && echo "report: $ROOT/out/report/index.html"
+  if [ -d "$ROOT/candidates" ]; then PYTHONPATH="$ROOT/src" "$VENV/bin/python" "$ROOT/scripts/build_report.py" && echo "report: $ROOT/out/report/neutral/index.html"
   else echo "no candidates/ folder: report skipped (scripts/copy_candidates.py)"; fi
 fi
