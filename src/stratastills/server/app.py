@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stratastills import arena as AR, export as X, pipeline as PL, preview, projects as P, settings
+from stratastills import arena as AR, export as X, ingest, nsfw, pipeline as PL, preview, projects as P, settings
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 LANDING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'landing.html')
@@ -63,6 +63,15 @@ class VoteIn(BaseModel):
     ms: int = 0
 
 
+class FlaggedIn(BaseModel):
+    path: str
+    allow: bool = True
+
+
+class FlaggedScanIn(BaseModel):
+    folder: str
+
+
 class SettingsIn(BaseModel):
     projects_dir: str | None = None
 
@@ -80,6 +89,36 @@ def create_app():
     def index():
         built = os.path.join(STATIC, 'index.html')          # the React app when it has been built (cd web; npm run build), else the plain stand-in page
         return open(built if os.path.exists(built) else LANDING, encoding='utf8').read()
+
+    FLAGGED_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'flagged.html')
+
+    @app.get('/flagged')
+    def flagged_slash(): return RedirectResponse('/flagged/')
+
+    @app.get('/flagged/', response_class=HTMLResponse)
+    def flagged_page(): return open(FLAGGED_PAGE, encoding='utf8').read()
+
+    @app.get('/api/flagged')
+    def flagged_list(): return dict(threshold=nsfw.threshold(), enabled=nsfw.enabled(), items=nsfw.review())
+
+    def flagged_known(path):
+        if path not in {r['path'] for r in nsfw.review()}: raise HTTPException(404, 'not a flagged picture')       # only what the filter has flagged is served: no way to read other files through here
+
+    @app.get('/api/flagged/image')
+    def flagged_image(path: str, px: int = 900):
+        flagged_known(path); from stratastills import images; import cv2
+        ok, buf = cv2.imencode('.jpg', images.load(path, max(100, min(px, 3000))), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return Response(buf.tobytes(), media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+    @app.post('/api/flagged/decide')
+    def flagged_decide(body: FlaggedIn):
+        flagged_known(body.path); nsfw.allow(body.path, body.allow); return dict(ok=True)
+
+    @app.post('/api/flagged/scan')
+    def flagged_scan(body: FlaggedScanIn):
+        """Look at every picture of a folder (and below) so that it shows up here when flagged; the filter's skip is applied by ingest.scan itself."""
+        if not os.path.isdir(body.folder): raise HTTPException(400, f'not a folder: {body.folder}')
+        n = len(ingest.scan(body.folder, recursive=True)); return dict(kept=n, flagged=len(nsfw.review()))
 
     @app.get('/api/report')
     def report_info():

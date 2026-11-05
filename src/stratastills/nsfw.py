@@ -108,11 +108,44 @@ def score(path):
     return res
 
 
+def _allowed_file(): return os.path.join(home(), 'nsfw_allowed.json')
+
+
+def _allowed():
+    try: return json.load(open(_allowed_file()))
+    except (OSError, ValueError): return {}
+
+
+def allow(path, yes=True):
+    """Review decision: let this picture (as it is now: size and time stamp) through the filter, or put it back (yes=False)."""
+    with _lock:
+        a = _allowed(); k = _key(path)
+        if yes: a[k] = int(time.time())
+        else: a.pop(k, None)
+        os.makedirs(home(), exist_ok=True); tmp = f'{_allowed_file()}.{os.getpid()}.{threading.get_ident()}.tmp'
+        with open(tmp, 'w') as f: json.dump(a, f)
+        os.replace(tmp, _allowed_file())
+
+
 def flagged(path, thr=None):
-    """None if the picture may be used, else {'path', 'score', 'class', 'threshold'}. Always None with the filter off."""
+    """None if the picture may be used, else {'path', 'score', 'class', 'threshold'}. Always None with the filter off, and for a picture the person cleared on the review page (`allow`)."""
     if not enabled(): return None
     thr = threshold() if thr is None else thr; s, c = score(path)
+    if s >= thr and _key(path) in _allowed(): return None
     return dict(path=path, score=round(s, 3), cls=c, threshold=thr) if s >= thr else None
+
+
+def review():
+    """Every picture the cache has seen that scores at or above the threshold, for the review page: [{path, score, cls, allowed}] by score, highest first. Files that changed or went are not listed."""
+    _load(); thr = threshold(); al = _allowed(); out = []
+    for k, (sc, cls) in list(_cache.items()):
+        model, _, rest = k.partition('|')
+        if model != MODEL or sc < thr: continue
+        path, size, mt = rest.rsplit('|', 2)
+        try: cur = _key(path)
+        except OSError: continue
+        if cur == k: out.append(dict(path=path, score=round(sc, 3), cls=cls, allowed=k in al))
+    return sorted(out, key=lambda r: -r['score'])
 
 
 def _record(info):

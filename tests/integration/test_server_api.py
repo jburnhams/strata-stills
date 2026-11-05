@@ -98,3 +98,18 @@ def test_server_api_pipelines(client):
     # Delete custom pipeline
     res = client.delete('/api/pipeline', params=dict(name='my_custom'))
     assert len(res.json()) == initial_count
+
+
+def test_flagged_review_page(client, tmp_path, monkeypatch):
+    from photos import make_jpeg
+    from stratastills import nsfw
+    monkeypatch.setenv('STRATASTILLS_NSFW', '1'); nsfw.reset(); nsfw.set_detector(lambda b: [{'class': 'ANUS_EXPOSED', 'score': 0.9}])
+    d = tmp_path / 'f'; d.mkdir(); make_jpeg(str(d / 'A.jpg'), w=200, h=150)
+    try:
+        assert client.post('/api/flagged/scan', json={'folder': str(d)}).json() == {'kept': 0, 'flagged': 1}
+        item = client.get('/api/flagged').json()['items'][0]; assert item['cls'] == 'ANUS_EXPOSED' and not item['allowed']
+        assert client.get('/api/flagged/image', params={'path': item['path']}).headers['content-type'] == 'image/jpeg'
+        assert client.get('/api/flagged/image', params={'path': str(tmp_path / 'other.jpg')}).status_code == 404         # nothing but flagged pictures is served
+        assert client.post('/api/flagged/decide', json={'path': item['path']}).status_code == 200 and client.get('/api/flagged').json()['items'][0]['allowed']
+        assert 'Flagged pictures' in client.get('/flagged/').text
+    finally: nsfw.set_detector(None); nsfw.reset()

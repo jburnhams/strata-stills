@@ -59,3 +59,11 @@ def test_concurrent_scores_do_not_corrupt_the_cache(folder):
     paths = [os.path.join(folder, f) for f in sorted(os.listdir(folder))]
     with ThreadPoolExecutor(6) as ex: assert len(list(ex.map(nsfw.score, paths * 4))) == 12
     nsfw.reset(); assert len(json.load(open(os.path.join(nsfw.home(), 'nsfw_cache.json')))) == 3
+
+
+def test_review_lists_flagged_and_a_cleared_picture_passes(folder):
+    nsfw.set_detector(fake([{'class': 'BUTTOCKS_EXPOSED', 'score': 0.7}]))
+    assert ingest.scan(folder) == [] and len(nsfw.review()) == 3 and not any(r['allowed'] for r in nsfw.review())
+    first = nsfw.review()[0]['path']; nsfw.allow(first)
+    assert [s.jpeg for s in ingest.scan(folder)] == [first] and [r['allowed'] for r in nsfw.review()].count(True) == 1
+    nsfw.allow(first, False); assert ingest.scan(folder) == []
