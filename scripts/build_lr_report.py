@@ -70,11 +70,11 @@ def neutral(raws, work, say, rebuild=False):
 
 
 def turn_to_ref(c, ref):
-    """`c` turned a quarter if its landscape/portrait does not match `ref`'s (some raws, the NEX-5N's among them, say Orientation 1 though Lightroom's picture is the other way up: squeezing the frame to `ref`'s shape would distort it): whichever way round matches `ref`'s tones better."""
+    """`c` turned a quarter if its landscape/portrait does not match `ref`'s (a crop cannot swap them, so Lightroom turned the picture, and some raws, the NEX-5N's among them, say Orientation 1 regardless: squeezing the frame to `ref`'s shape would distort it). Which way: the one whose features register on `ref` (the catalogue's own orientation is not in the exported files); `c` itself when neither does."""
     if (c.shape[1] > c.shape[0]) == (ref.shape[1] > ref.shape[0]): return c
-    H, W = ref.shape[:2]; g = lambda x: cv2.GaussianBlur(cv2.cvtColor(cv2.resize(x, (64, round(64 * H / W))), cv2.COLOR_BGR2GRAY), (0, 0), 1).astype(np.float32); r = g(ref); r -= r.mean()
-    cands = [cv2.rotate(c, cv2.ROTATE_90_CLOCKWISE), cv2.rotate(c, cv2.ROTATE_90_COUNTERCLOCKWISE)]
-    return max(cands, key=lambda x: float(((g(x) - g(x).mean()) * r).sum() / (np.linalg.norm(g(x) - g(x).mean()) * np.linalg.norm(r) + 1e-6)))
+    H, W = ref.shape[:2]; k = 1500 / max(W, H); g = lambda x: cv2.cvtColor(cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    cands = [cv2.rotate(c, r) for r in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)]; score = [BR.register(g(ref), g(x), inliers=True)[1] for x in cands]
+    return cands[int(score[1] > score[0])] if max(score) >= 20 else c
 
 
 def to_final(im, row, orientation, ref, with_rect=False):
