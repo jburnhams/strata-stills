@@ -17,11 +17,23 @@ LOOK = ['lr_look.py', 'lr_tmodel.py', 'lr_ftarget.py', 'lr_fit.py']
 def code_key(name):
     """A version is made again when its own function, the brightness helper or (for the automatic ones) the look code changed, not when another version did."""
     import inspect
-    h = hashlib.sha1(name.encode()); h.update(b'framing 2'); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
+    h = hashlib.sha1(name.encode()); h.update(b'framing 3'); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
     if name in ('camera', 'neutral'): h.update(inspect.getsource(AV.match_brightness).encode())
     if name in ('camera', 'neutral') or name.startswith('auto'): h.update(inspect.getsource(AV.auto1).encode())
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())
     return h.hexdigest()[:12]
+
+
+def smear_rect(img, frac=0.3, floor=0.35, max_frac=0.08, margin=6):
+    """(x0, y0, x1, y1) of `img` (BGR) without the bands along its edges that only repeat the last real column or row (what our own develop leaves where its lens correction pulls in pixels from outside the frame): in such a band the picture does not change along the edge-to-centre direction at all (mean absolute difference between neighbouring columns or rows is 0.0, a real picture's is several grey levels). Only a band found is cut, with a margin for the soft ramp where it meets the picture."""
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32); h, w = g.shape; dx, dy = np.abs(np.diff(g, axis=1)).mean(0), np.abs(np.diff(g, axis=0)).mean(1)
+    def band(d, n):
+        thr = min(frac * float(np.median(d[len(d) // 4: 3 * len(d) // 4])), floor); lim = int(max_frac * n); a = 0
+        while a < lim and d[a] < thr: a += 1
+        b = 0
+        while b < lim and d[len(d) - 1 - b] < thr: b += 1
+        return (a + margin if a >= 3 else 0), (b + margin if b >= 3 else 0)
+    l, r = band(dx, w); t, b = band(dy, h); return l, t, w - r, h - b
 
 
 def order(rows, idx, G, test, seed):
@@ -68,8 +80,9 @@ def main():
                 k = DISPLAY / max(fin.shape[:2]); fin = cv2.resize(fin, (round(fin.shape[1] * k), round(fin.shape[0] * k)), interpolation=cv2.INTER_AREA)
                 neu, _, r1 = LRR.to_final(D.unorient(dev[raw][0], ex.get(raw, {}).get('Orientation', 1)), row, ex.get(raw, {}).get('Orientation', 1), fin, with_rect=True); fl = FACES.get(str(int(idx[i])), [])
                 camera = D.camera_picture(raw); cam, _, r2 = LRR.to_final(camera, row, ex.get(raw, {}).get('Orientation', 1), fin, with_rect=True) if camera is not None else (neu, '', r1)
-                x0, y0, x1, y1 = max(r1[0], r2[0]), max(r1[1], r2[1]), min(r1[2], r2[2]), min(r1[3], r2[3]); H, W = fin.shape[:2]; fl = [dict(f, box=[(f['box'][0] * W - x0) / (x1 - x0), (f['box'][1] * H - y0) / (y1 - y0), f['box'][2] * W / (x1 - x0), f['box'][3] * H / (y1 - y0)]) for f in fl]
-                fin, neu, cam = fin[y0:y1, x0:x1], neu[y0:y1, x0:x1], cam[y0:y1, x0:x1]                          # every version on the part where all of them have real pixels: the moved pictures smear their last row and column outside it (streaks on the edges), and the person's final is cut the same way so that nothing shows the difference
+                x0, y0, x1, y1 = max(r1[0], r2[0]), max(r1[1], r2[1]), min(r1[2], r2[2]), min(r1[3], r2[3]); sx0, sy0, sx1, sy1 = smear_rect(neu); x0, y0, x1, y1 = max(x0, sx0), max(y0, sy0), min(x1, sx1), min(y1, sy1); H, W = fin.shape[:2]
+                fl = [dict(f, box=[(f['box'][0] * W - x0) / (x1 - x0), (f['box'][1] * H - y0) / (y1 - y0), f['box'][2] * W / (x1 - x0), f['box'][3] * H / (y1 - y0)]) for f in fl]
+                fin, neu, cam = fin[y0:y1, x0:x1], neu[y0:y1, x0:x1], cam[y0:y1, x0:x1]                          # every version on the part where all of them have real pixels: the moved pictures smear their last row and column outside it, and our own develop repeats its edge pixels where the lens correction pulls from outside the frame (streaks on the edges, smear_rect); the person's final is cut the same way so that nothing shows the difference
                 c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, pred=LK.predict(models, X[i:i + 1])[0], x=X[i], names=names, colour=TM.predict(tmodels, X[i:i + 1])[0], face=dict(box=fl[0]['box'], target=FT.face_target(fmodels, X[i], fl[0])) if fl else None)
                 d = os.path.join(root, 'img', sid); os.makedirs(d, exist_ok=True); entry = pool.get(sid, {})
                 for n in need:
