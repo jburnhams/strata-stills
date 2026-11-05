@@ -17,7 +17,7 @@ LOOK = ['lr_look.py', 'lr_tmodel.py', 'lr_ftarget.py', 'lr_fit.py']
 def code_key(name):
     """A version is made again when its own function, the brightness helper or (for the automatic ones) the look code changed, not when another version did."""
     import inspect
-    h = hashlib.sha1(name.encode()); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
+    h = hashlib.sha1(name.encode()); h.update(b'framing 2'); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
     if name in ('camera', 'neutral'): h.update(inspect.getsource(AV.match_brightness).encode())
     if name in ('camera', 'neutral') or name.startswith('auto'): h.update(inspect.getsource(AV.auto1).encode())
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())
@@ -66,8 +66,10 @@ def main():
                 row = rows[idx[i]]; raw = row['raw']; fin = cv2.imread(row['final']); t0 = time.time()
                 if fin is None or raw not in dev: say(f'  {sid}: skipped (missing picture)'); continue
                 k = DISPLAY / max(fin.shape[:2]); fin = cv2.resize(fin, (round(fin.shape[1] * k), round(fin.shape[0] * k)), interpolation=cv2.INTER_AREA)
-                neu, _ = LRR.to_final(D.unorient(dev[raw][0], ex.get(raw, {}).get('Orientation', 1)), row, ex.get(raw, {}).get('Orientation', 1), fin); fl = FACES.get(str(int(idx[i])), [])
-                camera = D.camera_picture(raw); cam, _ = LRR.to_final(camera, row, ex.get(raw, {}).get('Orientation', 1), fin) if camera is not None else (neu, '')
+                neu, _, r1 = LRR.to_final(D.unorient(dev[raw][0], ex.get(raw, {}).get('Orientation', 1)), row, ex.get(raw, {}).get('Orientation', 1), fin, with_rect=True); fl = FACES.get(str(int(idx[i])), [])
+                camera = D.camera_picture(raw); cam, _, r2 = LRR.to_final(camera, row, ex.get(raw, {}).get('Orientation', 1), fin, with_rect=True) if camera is not None else (neu, '', r1)
+                x0, y0, x1, y1 = max(r1[0], r2[0]), max(r1[1], r2[1]), min(r1[2], r2[2]), min(r1[3], r2[3]); H, W = fin.shape[:2]; fl = [dict(f, box=[(f['box'][0] * W - x0) / (x1 - x0), (f['box'][1] * H - y0) / (y1 - y0), f['box'][2] * W / (x1 - x0), f['box'][3] * H / (y1 - y0)]) for f in fl]
+                fin, neu, cam = fin[y0:y1, x0:x1], neu[y0:y1, x0:x1], cam[y0:y1, x0:x1]                          # every version on the part where all of them have real pixels: the moved pictures smear their last row and column outside it (streaks on the edges), and the person's final is cut the same way so that nothing shows the difference
                 c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, pred=LK.predict(models, X[i:i + 1])[0], x=X[i], names=names, colour=TM.predict(tmodels, X[i:i + 1])[0], face=dict(box=fl[0]['box'], target=FT.face_target(fmodels, X[i], fl[0])) if fl else None)
                 d = os.path.join(root, 'img', sid); os.makedirs(d, exist_ok=True); entry = pool.get(sid, {})
                 for n in need:
