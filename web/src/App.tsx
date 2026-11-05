@@ -14,8 +14,9 @@ export default function App() {
     <div className="max-w-6xl mx-auto px-4 py-6">
       <header className="mb-5 flex items-baseline gap-3">
         <a href={href.projects()} className="text-xl font-semibold">strata-stills</a>
-        {report.neutral && <a href={withBase('/report/neutral/')} target="_blank" rel="noreferrer" className="text-sm text-blue-600 dark:text-blue-400 ml-auto">Neutral report</a>}
-        {report.auto && <a href={withBase('/report/auto/')} target="_blank" rel="noreferrer" className={`text-sm text-blue-600 dark:text-blue-400 ${report.neutral ? '' : 'ml-auto'}`}>Auto report</a>}
+        <a href={withBase('/arena/')} className="text-sm text-blue-600 dark:text-blue-400 ml-auto">Arena</a>
+        {report.neutral && <a href={withBase('/report/neutral/')} target="_blank" rel="noreferrer" className="text-sm text-blue-600 dark:text-blue-400">Neutral report</a>}
+        {report.auto && <a href={withBase('/report/auto/')} target="_blank" rel="noreferrer" className="text-sm text-blue-600 dark:text-blue-400">Auto report</a>}
       </header>
       {r.page === 'projects' && <ProjectList />}
       {r.page === 'project' && <ProjectPage project={r.project} />}
