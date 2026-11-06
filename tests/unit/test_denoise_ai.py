@@ -64,7 +64,7 @@ def test_an_out_of_memory_halves_the_tile_and_goes_on(monkeypatch):
 
     def run(net, t, mult, post):
         seen.append(t.shape[0])
-        if t.shape[0] > 300: raise torch.OutOfMemoryError('CUDA out of memory')
+        if t.shape[0] > 300: raise RuntimeError('CUDA out of memory')
         return t
     monkeypatch.setattr(A, '_load', lambda m, s: object()); monkeypatch.setattr(A, '_run', run)
     x = np.full((600, 600, 3), 0.4, np.float32); out = A.denoise(x, tile=512, overlap=8)
