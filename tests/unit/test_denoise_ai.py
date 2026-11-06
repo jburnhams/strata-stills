@@ -59,7 +59,7 @@ def test_unknown_model_is_refused():
 
 
 def test_an_out_of_memory_halves_the_tile_and_goes_on(monkeypatch):
-    import torch
+    pytest.importorskip("torch")
     seen = []
 
     def run(net, t, mult, post):
@@ -69,3 +69,197 @@ def test_an_out_of_memory_halves_the_tile_and_goes_on(monkeypatch):
     monkeypatch.setattr(A, '_load', lambda m, s: object()); monkeypatch.setattr(A, '_run', run)
     x = np.full((600, 600, 3), 0.4, np.float32); out = A.denoise(x, tile=512, overlap=8)
     assert seen[0] == 512 and max(seen[1:]) <= 256 and np.allclose(out, x)
+
+def test_fetch_downloads_models(monkeypatch):
+    import os, urllib.request
+    downloaded = []
+    monkeypatch.setattr(os.path, 'exists', lambda p: False)
+    monkeypatch.setattr(os, 'makedirs', lambda d, exist_ok: None)
+    monkeypatch.setattr(urllib.request, 'urlretrieve', lambda url, p: downloaded.append(url))
+    A.fetch('esrgan')
+    assert len(downloaded) == 2
+    assert 'realesr-general-x4v3.pth' in downloaded[0]
+
+def test_fp16_returns_true_for_capable_cuda_and_false_for_rocm(monkeypatch):
+    import sys
+    class FakeDev:
+        def __init__(self, typ): self.type = typ
+
+    assert A._fp16(FakeDev('cpu')) is False
+
+    class FakeTorch:
+        class version:
+            hip = True
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorch)
+    assert A._fp16(FakeDev('cuda')) is False
+
+    class FakeTorchCuda:
+        class version:
+            hip = False
+        class cuda:
+            @staticmethod
+            def get_device_capability(dev): return (7, 0)
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorchCuda)
+    assert A._fp16(FakeDev('cuda')) is True
+
+    class FakeTorchCudaOld:
+        class version:
+            hip = False
+        class cuda:
+            @staticmethod
+            def get_device_capability(dev): return (6, 1)
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorchCudaOld)
+    assert A._fp16(FakeDev('cuda')) is False
+
+    class FakeTorchCudaErr:
+        class version:
+            hip = False
+        class cuda:
+            @staticmethod
+            def get_device_capability(dev): raise Exception()
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorchCudaErr)
+    assert A._fp16(FakeDev('cuda')) is True
+
+def test_device_returns_cuda_if_available(monkeypatch):
+    import sys
+    from stratastills import gpu
+    class FakeTorch:
+        class cuda:
+            @staticmethod
+            def is_available(): return True
+        @staticmethod
+        def device(d): return d
+    monkeypatch.setattr(gpu, 'torch_', lambda: FakeTorch)
+    assert A._device() == 'cuda'
+
+def test_load_models_without_real_torch(monkeypatch):
+    import sys
+    class FakeDev:
+        type = 'cpu'
+    monkeypatch.setattr(A, '_device', lambda: FakeDev())
+    monkeypatch.setattr(A, '_fp16', lambda dev: False)
+    class FakeTorch:
+        @staticmethod
+        def load(p, map_location):
+            if 'wdn' in p: return {'params': {'a': 2.0}}
+            return {'params': {'a': 1.0}}
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorch)
+    class FakeModel:
+        def __init__(self, val=None): self.val = val
+        def eval(self): return self
+        def to(self, dev): return self
+    class FakeModelLoader:
+        def load_from_state_dict(self, d): return type('T', (), {'model': FakeModel(d)})()
+        def load_from_file(self, p): return type('T', (), {'model': FakeModel(p)})()
+    monkeypatch.setitem(sys.modules, 'spandrel', type('M', (), {'ModelLoader': FakeModelLoader})())
+
+    A._models.clear()
+    esrgan_net = A._load('esrgan', 0.6)
+    assert esrgan_net.val['a'] == pytest.approx(1.6)
+
+    scunet_net = A._load('scunet', 0.6)
+    assert 'scunet' in scunet_net.val
+
+def test_run_pad_and_unpad(monkeypatch):
+    import sys
+    class FakeTensor:
+        def __init__(self, arr):
+            self.arr = arr
+            self.dtype = 'float32'
+        def to(self, *a, **k): return self
+        def float(self): return self
+        def cpu(self): return self
+        def numpy(self): return self.arr
+        def __getitem__(self, idx): return self
+
+    class FakeNet:
+        def __init__(self): pass
+        def parameters(self): yield type('P', (), {'device': 'cpu', 'dtype': 'float32'})()
+        def __call__(self, x): return FakeTensor(x.arr)
+
+    class FakeTorch:
+        @staticmethod
+        def no_grad(): return type('Ctx', (), {'__enter__': lambda s: None, '__exit__': lambda s, *a: None})()
+        @staticmethod
+        def from_numpy(a): return FakeTensor(a)
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorch)
+
+    tile = np.zeros((10, 10, 3), np.float32)
+    # mult = 8 -> padded shape 16x16
+    out = A._run(FakeNet(), tile, 8, lambda y, shape: y)
+    assert out.shape == (10, 10, 3)
+
+def test_denoise_oom_loop(monkeypatch):
+    from stratastills import gpu
+    monkeypatch.setattr(A, '_load', lambda m, s: object())
+
+    called_tiles = []
+    def fake_tiles(rgb, net, tile, overlap, mult, post, need):
+        called_tiles.append(tile)
+        if tile > 256:
+            raise RuntimeError('CUDA out of memory')
+        return rgb, np.ones_like(rgb)
+    monkeypatch.setattr(A, '_tiles', fake_tiles)
+    monkeypatch.setattr(gpu, 'is_oom', lambda e: 'memory' in str(e))
+    monkeypatch.setattr(gpu, 'free', lambda: None)
+
+    rgb = np.zeros((16, 16, 3), np.float32)
+    out = A.denoise(rgb, model='esrgan', tile=1024)
+    assert out.shape == (16, 16, 3)
+    assert called_tiles == [1024, 512, 256]
+
+def test_denoise_oom_fail_if_not_oom(monkeypatch):
+    from stratastills import gpu
+    monkeypatch.setattr(A, '_load', lambda m, s: object())
+
+    def fake_tiles(rgb, net, tile, overlap, mult, post, need):
+        raise RuntimeError('other error')
+    monkeypatch.setattr(A, '_tiles', fake_tiles)
+    monkeypatch.setattr(gpu, 'is_oom', lambda e: 'memory' in str(e))
+    monkeypatch.setattr(gpu, 'free', lambda: None)
+
+    rgb = np.zeros((16, 16, 3), np.float32)
+    with pytest.raises(RuntimeError):
+        A.denoise(rgb, model='esrgan', tile=1024)
+
+def test_tiles_logic(monkeypatch):
+    monkeypatch.setattr(A, '_run', lambda net, t, mult, post: t * 2)
+    rgb = np.ones((100, 100, 3), np.float32)
+    # tile 64, overlap 16
+    out, wsum = A._tiles(rgb, None, 64, 16, 4, lambda y, shape: y, need=None)
+    assert out.shape == (100, 100, 3)
+    assert wsum.shape == (100, 100, 1)
+
+    # Check need branch
+    called = []
+    def fake_need(y0, y1, x0, x1):
+        called.append(True)
+        return False
+    out, wsum = A._tiles(rgb, None, 64, 16, 4, lambda y, shape: y, need=fake_need)
+    assert out.shape == (100, 100, 3)
+    assert len(called) > 0
+
+def test_denoise_scunet_branch(monkeypatch):
+    monkeypatch.setattr(A, '_load', lambda m, s: object())
+    monkeypatch.setattr(A, '_tiles', lambda *a, **k: (np.zeros((10, 10, 3)), np.ones((10, 10, 3))))
+    out = A.denoise(np.zeros((10, 10, 3)), model='scunet')
+    assert out.shape == (10, 10, 3)
+
+def test_denoise_oom_no_device_to_free(monkeypatch):
+    from stratastills import gpu
+    monkeypatch.setattr(A, '_load', lambda m, s: object())
+
+    called_tiles = []
+    def fake_tiles(rgb, net, tile, overlap, mult, post, need):
+        called_tiles.append(tile)
+        if tile > 256:
+            raise RuntimeError('CUDA out of memory')
+        return rgb, np.ones_like(rgb)
+    monkeypatch.setattr(A, '_tiles', fake_tiles)
+    monkeypatch.setattr(gpu, 'is_oom', lambda e: 'memory' in str(e))
+    monkeypatch.setattr(gpu, 'free', lambda: (_ for _ in ()).throw(RuntimeError('no device')))
+
+    rgb = np.zeros((16, 16, 3), np.float32)
+    out = A.denoise(rgb, model='esrgan', tile=1024)
+    assert out.shape == (16, 16, 3)
+    assert called_tiles == [1024, 512, 256]
