@@ -69,9 +69,18 @@ def neutral(raws, work, say, rebuild=False):
     return out
 
 
+def turn_to_ref(c, ref):
+    """`c` turned a quarter if its landscape/portrait does not match `ref`'s (a crop cannot swap them, so Lightroom turned the picture, and some raws, the NEX-5N's among them, say Orientation 1 regardless: squeezing the frame to `ref`'s shape would distort it). Which way: the one whose features register on `ref` (the catalogue's own orientation is not in the exported files); `c` itself when neither does."""
+    if (c.shape[1] > c.shape[0]) == (ref.shape[1] > ref.shape[0]): return c
+    H, W = ref.shape[:2]; k = 1500 / max(W, H); g = lambda x: cv2.cvtColor(cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    cands = [cv2.rotate(c, r) for r in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)]; reg = [BR.register(g(ref), g(x), inliers=True) for x in cands]
+    score = [n if M is not None and abs(M[0, 0] - 1) <= 0.08 and abs(M[1, 0]) <= 0.05 else 0 for M, n in reg]                      # register allows any rotation: a candidate it lays on `ref` only by another half-turn is the wrong way up
+    return cands[int(score[1] > score[0])] if max(score) >= 20 else c
+
+
 def to_final(im, row, orientation, ref, with_rect=False):
     """`im` (BGR, in the sensor's frame) cut to Lightroom's crop, turned the way up, then laid exactly on `ref` (the final, BGR) by a similarity transform found from features (lens corrections and the programs' framing differ by a few pixels and a little scale); the crop alone if no transform is found. -> (picture at ref's size, how it was aligned)."""
-    c = D.orient(D.lr_crop(im, row), orientation); H, W = ref.shape[:2]; c = cv2.resize(c, (W, H), interpolation=cv2.INTER_AREA if c.shape[1] > W else cv2.INTER_CUBIC)
+    c = D.orient(D.lr_crop(im, row), orientation); H, W = ref.shape[:2]; c = turn_to_ref(c, ref); c = cv2.resize(c, (W, H), interpolation=cv2.INTER_AREA if c.shape[1] > W else cv2.INTER_CUBIC)
     k = 1500 / max(W, H); g = lambda x: cv2.cvtColor(cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
     M = BR.register(g(ref), g(c))
     if M is None or abs(M[0, 0] - 1) > 0.08 or abs(M[1, 0]) > 0.05: return (c, 'Lightroom crop', (0, 0, W, H)) if with_rect else (c, 'Lightroom crop')

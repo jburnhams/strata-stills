@@ -97,14 +97,15 @@ def shift_between(a, b, mask_sigma=3):
     return dx, dy, resp
 
 
-def register(a, b):
-    """The 2x3 similarity matrix (scale, rotation, shift) that lays gray uint8 `b` on `a` (ORB features and RANSAC: the programs differ in framing by tens of pixels and a little in scale, which a pure shift cannot undo), or None."""
-    orb = cv2.ORB_create(5000); ka, da = orb.detectAndCompute(a, None); kb, db = orb.detectAndCompute(b, None)
-    if da is None or db is None or len(ka) < 20 or len(kb) < 20: return None
+def register(a, b, inliers=False):
+    """The 2x3 similarity matrix (scale, rotation, shift) that lays gray uint8 `b` on `a` (ORB features and RANSAC: the programs differ in framing by tens of pixels and a little in scale, which a pure shift cannot undo), or None (with `inliers`: that and the number of matches RANSAC kept, 0 when there is none)."""
+    none = (None, 0) if inliers else None; orb = cv2.ORB_create(5000); ka, da = orb.detectAndCompute(a, None); kb, db = orb.detectAndCompute(b, None)
+    if da is None or db is None or len(ka) < 20 or len(kb) < 20: return none
     m = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(db, da)
-    if len(m) < 20: return None
+    if len(m) < 20: return none
     M, inl = cv2.estimateAffinePartial2D(np.float32([kb[x.queryIdx].pt for x in m]), np.float32([ka[x.trainIdx].pt for x in m]), method=cv2.RANSAC, ransacReprojThreshold=2.0)
-    return M if M is not None and int(inl.sum()) >= 20 else None
+    n = int(inl.sum()) if M is not None else 0; M = M if n >= 20 else None
+    return (M, n) if inliers else M
 
 
 def shifted(im, dx, dy):
