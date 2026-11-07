@@ -26,8 +26,9 @@ def arena(tmp_path):
 
 def test_plan_counts_and_problems_without_a_database(arena):
     p = importer.plan(*arena)
-    assert p['counts'] == dict(arena_pic=3, arena_variant=4, arena_entry=2, arena_vote=3, arena_flag=1, arena_flag_event=3, report_flag=1)
+    assert p['counts'] == dict(arena_pic=2, arena_variant=4, arena_entry=2, arena_vote=3, arena_flag=1, arena_flag_event=3, report_flag=1)
     assert any('unparsable' in x for x in p['problems']) and any('unknown flag' in x for x in p['problems'])
+    assert 'p3' not in p['pics']                                                                      # a report's picture ids are not the arena's pool names
     assert len({v['legacy_key'] for v in p['votes']}) == 3                                           # two identical lines stay two votes
     assert p['flags'][0]['status'] == 'fixed' and p['flags'][0]['note'] == 'smear'
 

@@ -1,7 +1,7 @@
 """One-way, repeatable import of the arena's files into schema `photos`: votes.jsonl, alerts.jsonl (flags and their changes), pool.json, variants.json and the report flags (`out/flags/<report>.json`). The files are only read; nothing in them is changed, moved or deleted, and the arena keeps using them until reads move over (docs/progress.md).
 
 Two steps so that a run can be looked at first: `plan()` reads and parses the files and needs no database (counts, problems, the rows to write); `write()` puts the plan into a session in ONE transaction, skips what is already there (`legacy_key`, primary keys), then compares row counts and a checksum of the keys with the plan and rolls everything back on a mismatch. Run it twice: the second run writes nothing.
-Keys: a line's `legacy_key` is the SHA-1 of its canonical JSON (the Nth identical line gets `N:` in front), so the same line is the same row on every run. Arena pictures are named as the pool names them ('2023-01-11_DSC00010'); matching a name to a photo (SHA-256 of its raw) is a later step (`ArenaPic.photo_id` stays null here)."""
+Keys: a line's `legacy_key` is the SHA-1 of its canonical JSON (the Nth identical line gets `N:` in front), so the same line is the same row on every run. Arena pictures are named as the pool names them (report flags have their own picture ids and are not arena pictures) ('2023-01-11_DSC00010'); matching a name to a photo (SHA-256 of its raw) is a later step (`ArenaPic.photo_id` stays null here)."""
 import hashlib, json, os
 from datetime import datetime
 
@@ -60,7 +60,6 @@ def plan(arena_dir, flags_dir=None):
     for rep in REPORTS:
         d = _read_json(os.path.join(flags_dir, f'{rep}.json')) if flags_dir else None
         for pic, f in sorted((d or {}).items()): report_flags.append(dict(report=rep, pic=pic, rating=f.get('rating') or '', reasons=f.get('reasons') or [], note=f.get('note') or '', status=f.get('status') or 'open', first_at=_time(f.get('first')), at=_time(f.get('at'))))
-    pics = sorted(set(pics) | {r['pic'] for r in report_flags})
     counts = dict(arena_pic=len(pics), arena_variant=len(variants), arena_entry=len(entries), arena_vote=len(votes), arena_flag=len(flags), arena_flag_event=len(flag_events), report_flag=len(report_flags))
     return dict(votes=votes, flags=flags, flag_events=flag_events, pics=pics, variants=variants, retired=set(var), entries=entries, report_flags=report_flags, problems=problems, counts=counts)
 
