@@ -26,13 +26,20 @@ def append_vote(path, vote):
     with open(path, 'a', encoding='utf8') as f: f.write(json.dumps(vote, sort_keys=True) + '\n')
 
 
+STATUSES = ('open', 'investigating', 'fixed', 'wontfix')                                           # the queue of problems with our versions: `fixed` and `wontfix` are done (the version is offered again)
+
+
 def alerts(events, pool=None):
-    """The alerts (a person saying 'something is wrong with this picture') from the event log, oldest first: [{id, pic, variant, other, side, note, t, ms, resolved, pool: the pool entry of that variant, votes_on_pic}]. An event is an alert ({'id', 'pic', 'variant', ...}) or a status change ({'id', 'resolved': bool}); the last one wins. `open_alerts` names the (picture, variant) pairs that must not be offered."""
+    """The flags (a person saying 'something is wrong with this picture') from the event log, oldest first: [{id, pic, variant, other, side, note, status, t, ms, resolved, pool: the pool entry of that variant, votes_on_pic}]. A flag is just the press of a button; the reason (`note`) and `status` (STATUSES) are set afterwards on the alerts page. An event is a flag ({'id', 'pic', 'variant', ...}) or a change ({'id'} plus any of 'note', 'status', or the older 'resolved': bool); later ones win. `resolved` is derived from the status. `open_alerts` names the (picture, variant) pairs that must not be offered."""
     out = {}
     for e in events:
-        if 'pic' in e: out[e['id']] = dict(e, resolved=False)
-        elif e.get('id') in out: out[e['id']]['resolved'] = bool(e.get('resolved'))
-    for a in out.values(): a['pool'] = ((pool or {}).get(a['pic']) or {}).get(a['variant'])
+        if 'pic' in e: out[e['id']] = dict(e, status=e.get('status') or ('fixed' if e.get('resolved') else 'open'))
+        elif e.get('id') in out:
+            a = out[e['id']]
+            if 'note' in e: a['note'] = str(e['note'])[:500]
+            if e.get('status') in STATUSES: a['status'] = e['status']
+            elif 'resolved' in e: a['status'] = 'fixed' if e['resolved'] else 'open'
+    for a in out.values(): a['resolved'] = a['status'] in ('fixed', 'wontfix'); a['pool'] = ((pool or {}).get(a['pic']) or {}).get(a['variant'])
     return sorted(out.values(), key=lambda a: a.get('t', 0))
 
 

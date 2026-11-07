@@ -81,7 +81,9 @@ class AlertIn(BaseModel):
 
 class AlertStatusIn(BaseModel):
     id: str
-    resolved: bool = True
+    resolved: bool | None = None                 # older clients: True = fixed, False = open
+    status: str | None = None                    # open | investigating | fixed | wontfix
+    note: str | None = None                      # the reason, written afterwards
 
 
 class SettingsIn(BaseModel):
@@ -228,7 +230,12 @@ def create_app():
     @app.post('/api/alerts/status')
     def alerts_status(body: AlertStatusIn):
         if body.id not in {a['id'] for a in AR.alerts(arena_alert_events())}: raise HTTPException(404, 'unknown alert')
-        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), dict(id=body.id, resolved=body.resolved, t=round(time.time(), 1))); return dict(ok=True)
+        if body.status is not None and body.status not in AR.STATUSES: raise HTTPException(400, 'status is ' + ', '.join(AR.STATUSES))
+        ev = dict(id=body.id, t=round(time.time(), 1))
+        if body.note is not None: ev['note'] = body.note.strip()[:500]
+        if body.status is not None: ev['status'] = body.status
+        elif body.resolved is not None: ev['resolved'] = body.resolved
+        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), ev); return dict(ok=True)
 
     @app.post('/api/arena/undo')
     def arena_undo():
