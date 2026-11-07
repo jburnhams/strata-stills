@@ -263,3 +263,18 @@ def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_th
     shadow = lambda a: a[:, : w // 2 - 4].reshape(-1, 3).astype(float).mean(0)
     kept = shadow(D._raw_u16('x.arw', False)); monkeypatch.setattr(D, 'PEDESTAL', 0); clipped = shadow(D._raw_u16('x.arw', False))
     assert abs(kept[2] - 20) < 15 and clipped[2] > 50                                                                      # blue: its true mean is 20; clipping the noise at black put it near 60
+
+
+def test_libraw_decodes_with_a_fixed_openmp_thread_count_in_whatever_thread(monkeypatch):
+    """LibRaw's demosaic gives another picture for other OpenMP thread counts above 8, and a thread's default count depends on the thread (torch sets 8 in the one that imports it, a new thread gets all the cores): the decode pins the count for the calling thread first, so the main thread and a worker agree."""
+    import threading
+    calls = []; monkeypatch.setattr(D, '_omp_libs', [lambda n: calls.append((threading.get_ident(), n))])
+    D._libraw_threads(); box = []; t = threading.Thread(target=lambda: (D._libraw_threads(), box.append(threading.get_ident()))); t.start(); t.join()
+    assert calls[0] == (threading.get_ident(), D.LIBRAW_THREADS) and calls[1] == (box[0], D.LIBRAW_THREADS) and D.LIBRAW_THREADS <= 8
+    seen = []; monkeypatch.setattr(D, '_libraw_threads', lambda: seen.append(1))
+    with pytest.raises(Exception): D._raw_u16('/nonexistent/file.arw', False)
+    assert seen == [1]                                                                                                       # set before the file is opened
+
+
+def test_the_openmp_runtimes_are_found_without_error():
+    D._omp_libs = None; D._libraw_threads(); assert isinstance(D._omp_libs, list)
