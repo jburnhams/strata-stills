@@ -7,8 +7,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 import lr_look as LK
 
 
-def match_brightness(img, ref):
+def match_brightness(img, ref, gpu=None):
     """`img` with its mean lightness brought to `ref`'s by a gamma on CIELAB L (a crude automatic exposure): the camera's and our neutral picture come out darker than the finals, and a blind choice should not be decided by that alone."""
+    import lr_gpu
+    if lr_gpu.use() if gpu is None else gpu: return lr_gpu.match_brightness(img, ref)                                                            # the same bisection on the device
     lab = cv2.cvtColor(img.astype(np.float32) / 255, cv2.COLOR_BGR2LAB); L = lab[..., 0] / 100; target = float(np.mean(cv2.cvtColor(ref.astype(np.float32) / 255, cv2.COLOR_BGR2LAB)[..., 0])); lo, hi = 0.2, 3.0
     for _ in range(30):
         g = (lo + hi) / 2

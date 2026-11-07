@@ -159,26 +159,58 @@ def anchor_face(bgr, box, target):
     return np.clip(out * 255 + 0.5, 0, 255).astype(np.uint8), dict(face_dL=round(dL, 1), face_chroma_gain=round(gC, 2), face_hue_turn=round(rot, 1))
 
 
-def apply_look(bgr, pred, cam, colour=None, face=None):
-    """`_apply_look`, then, when the picture has a face (`face` = dict(box=(x, y, w, h) as fractions, target=(L, a, b) predicted for the final)), the whole picture moved so that the face lands near its target (`anchor_face`)."""
+def _on_gpu():
+    """The look runs on the device (scripts/lr_gpu.py) when there is one; STRATASTILLS_GPU=0 (or STRATASTILLS_DEVICE=cpu) keeps the NumPy/OpenCV code above, the reference."""
+    import lr_gpu
+    return lr_gpu.use()
+
+
+def apply_look(bgr, pred, cam, colour=None, face=None, gpu=None):
+    """`_apply_look`, then, when the picture has a face (`face` = dict(box=(x, y, w, h) as fractions, target=(L, a, b) predicted for the final)), the whole picture moved so that the face lands near its target (`anchor_face`). On the device when there is one (`gpu` True/False forces it)."""
+    if gpu is None: gpu = _on_gpu()
+    if gpu:
+        import lr_gpu as G
+        out, did = G._apply_look(bgr, pred, cam, colour)
+        if face is not None: out, more = G.anchor_face(out, face['box'], face['target']); did = dict(did, **more)
+        return out, did
     out, did = _apply_look(bgr, pred, cam, colour)
     if face is not None: out, more = anchor_face(out, face['box'], face['target']); did = dict(did, **more)
     return out, did
 
 
+_loaded = {}                                                                                                                                       # (OUT, STRATASTILLS_NO_CLIP) -> what _load read, once per process: the arena script, the colour model and the face model each call load()
+
+
 def load():
+    """(rows, X, names, Y, idx, G) of the dataset (copies: a caller may change them). The first call in a process reads it, the next ones copy."""
+    key = (D.OUT, os.environ.get('STRATASTILLS_NO_CLIP'))
+    if key not in _loaded: _loaded[key] = _load()
+    rows, X, names, Y, idx, G = _loaded[key]; return list(rows), X.copy(), list(names), Y.copy(), idx.copy(), G.copy()
+
+
+def _flagged_mask(paths):
+    """True for each picture the nudity filter flags, as `nsfw.flagged(path) is not None` says, without nsfw.flagged's two reads of the settings file per picture (21 000 pictures, three loads per run: minutes; the finals are on a CIFS share where a stat takes 5 ms)."""
+    if not nsfw.enabled(): return np.zeros(len(paths), bool)
+    thr = nsfw.threshold(); allowed = nsfw._allowed(); nsfw._load()
+    def one(p):
+        s, _ = nsfw.score(p); return s >= thr and nsfw._key(p) not in allowed
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(32) as ex: return np.array(list(ex.map(one, paths)), bool)                                                         # the finals are on a network share (a stat is about 5 ms there): many at a time
+
+
+def _load():
     rows = D.load_catalogue(); X, names, F, C, idx = D.load_features(); G = np.array([os.path.dirname(rows[i]['final']) for i in idx])
     f = os.path.join(D.OUT, 'meta.npz')
     if os.path.exists(f): z = np.load(f); X = np.hstack([X, z['M'][idx]]); names = names + ['meta:' + str(n) for n in z['names']]                  # the rest of the raw's metadata (scripts/lr_dataset.py meta): camera, lens, modes, the as-shot white balance, the time of day and year, ...
     f = os.path.join(D.OUT, 'clip.npz')
     if os.path.exists(f) and not os.environ.get('STRATASTILLS_NO_CLIP'):
-        z = np.load(f); pos = {int(i): k for k, i in enumerate(z['idx'])}; M = np.full((len(idx), 32 + z['labels'].shape[1]), np.nan, np.float32)
+        z = np.load(f); pca, labels = z['pca'], z['labels']; pos = {int(i): k for k, i in enumerate(z['idx'])}; M = np.full((len(idx), 32 + labels.shape[1]), np.nan, np.float32)      # each z[...] reads and checks the whole member again: 42 000 reads in the loop below took a minute
         for r, i in enumerate(idx):
             k = pos.get(int(i))
-            if k is not None: M[r] = np.concatenate([z['pca'][k], z['labels'][k]])
+            if k is not None: M[r] = np.concatenate([pca[k], labels[k]])
         X = np.hstack([X, M]); names = names + ['clip:' + str(n) for n in z['pca_names']] + ['clip:' + str(n) for n in z['label_names']]                    # what CLIP sees in the preview (scripts/lr_clip.py): scene labels and the principal components of the embedding
     S = np.array([[D.num(rows[i].get(k), d) for k, d in SLIDERS] for i in idx]); S = np.where(np.isnan(S), [d for _, d in SLIDERS], S)          # a setting the file does not have is the typical one
-    Y = np.hstack([F, C, S]); ok = np.array([not nsfw.flagged(rows[i]['final']) for i in idx])                                                    # the nudity filter, applied to the dataset as it is read, so a datasets built before it (or with a higher threshold) feeds no model, report or arena either
+    Y = np.hstack([F, C, S]); ok = ~_flagged_mask([rows[i]['final'] for i in idx])                                                    # the nudity filter, applied to the dataset as it is read, so a datasets built before it (or with a higher threshold) feeds no model, report or arena either
     if ok.all(): return rows, X, names, Y, idx, G
     return rows, X[ok], names, Y[ok], idx[ok], G[ok]
 

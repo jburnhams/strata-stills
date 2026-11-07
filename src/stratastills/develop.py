@@ -478,9 +478,29 @@ def _unbiased_dark(path, r, kw, user_black):
     return np.clip(out + 0.5, 0, 65535).astype(np.uint16)
 
 
+LIBRAW_THREADS = 8              # OpenMP threads LibRaw decodes with: its demosaic gives a different picture for different thread counts above 8 (measured on a 16-thread CPU: 1 to 8 threads give the same bytes, 12 and 16 each another picture, differing in patches of tens of pixels by up to 4 levels after the develop), and the count a thread gets by default depends on the thread (torch sets 8 in the thread that imports it, a new thread gets all the cores), so the same raw came out differently in the main thread and in a worker. 8 is as fast as 16 (0.92 s against 0.86 s for 16 MP) and is what the main thread always had here
+_omp_libs = None
+
+
+def _libraw_threads(n=LIBRAW_THREADS):
+    """Set OpenMP's thread count for the CALLING thread to `n` (the setting is per thread) in every OpenMP runtime the process has loaded (rawpy brings its own libgomp, torch another): LibRaw's parallel loops started from this thread then use `n`, whatever else the process did before."""
+    global _omp_libs
+    import ctypes
+    if _omp_libs is None:
+        _omp_libs = []
+        try:
+            paths = sorted({l.split()[-1] for l in open('/proc/self/maps') if ('libgomp' in l or 'libiomp5' in l) and l.split()[-1].startswith('/')})
+            for p in paths:
+                try: _omp_libs.append(ctypes.CDLL(p).omp_set_num_threads)
+                except (OSError, AttributeError): pass
+        except OSError: pass                                                                                                                         # not Linux: the platform's own default stays
+    for f in _omp_libs: f(int(n))
+
+
 def _raw_u16(path, half):
     """The demosaiced raw as LibRaw gives it: uint16 (H, W, 3), camera RGB, white-balanced, linear. A linear DNG (demosaiced RGB, which LibRaw refuses: Lightroom's merged panoramas) is read by lineardng.py into the same form."""
     import rawpy
+    _libraw_threads()
     try:
         with rawpy.imread(path) as r:
             flip = r.sizes.flip                                                                                                                                                  # before postprocess: with user_flip=0 LibRaw overwrites it with 0
