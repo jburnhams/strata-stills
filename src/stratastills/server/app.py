@@ -220,12 +220,14 @@ def create_app():
     def alerts_list(): return dict(alerts=list(reversed(AR.alerts(arena_alert_events(), arena_pool()))))
 
     @app.get('/api/alerts/image/{aid}')
-    def alerts_image(aid: str):
-        a = next((x for x in AR.alerts(arena_alert_events(), arena_pool()) if x['id'] == aid), None)
-        if not a or not a['pool']: raise HTTPException(404, 'no picture')
-        root = os.path.realpath(settings.arena_dir()); f = os.path.realpath(os.path.join(root, a['pool']['file']))
+    def alerts_image(aid: str, variant: str | None = None):
+        """The newest picture of the flagged version (as in the pool now, so after a rebuild the new one), or with ?variant=lightroom the same picture's other version to compare with."""
+        pool = arena_pool(); a = next((x for x in AR.alerts(arena_alert_events(), pool) if x['id'] == aid), None)
+        ent = a and ((pool.get(a['pic']) or {}).get(variant) if variant else a['pool'])
+        if not ent: raise HTTPException(404, 'no picture')
+        root = os.path.realpath(settings.arena_dir()); f = os.path.realpath(os.path.join(root, ent['file']))
         if os.path.commonpath([root, f]) != root or not os.path.isfile(f): raise HTTPException(404, 'no picture')
-        return FileResponse(f, headers={'Cache-Control': 'max-age=3600'})
+        return FileResponse(f, headers={'Cache-Control': 'no-cache'})
 
     @app.post('/api/alerts/status')
     def alerts_status(body: AlertStatusIn):
