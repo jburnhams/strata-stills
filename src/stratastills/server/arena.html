@@ -14,9 +14,9 @@ main{flex:1;min-height:0;display:flex;gap:6px;padding:0 6px 6px}
 @media (max-width:700px){main{flex-direction:column}.side img{max-height:42vh}}
 </style></head><body>
 <header><b>Which is better?</b><span class="mu">click a picture, or &larr; &rarr; &middot; &darr; equal &middot; S skip &middot; Z undo</span>
-<button id="tie">equal</button><button id="skip">skip</button><button id="undo">undo</button><button id="rt">ratings</button><a href="../alerts/" class="mu">alerts</a><span class="mu" id="cnt"></span></header>
+<button id="tie">equal</button><button id="skip">skip</button><button id="undo">undo</button><button id="rt">ratings</button><a href="../alerts/" class="mu">flags</a><span class="mu" id="cnt"></span></header>
 <div id="msg" hidden></div><div id="rat" hidden></div>
-<main id="m"><div class="side" id="l"><img id="li" alt=""><button class="al" data-s="left" title="something is wrong with this picture (1)">alert</button></div><div class="side" id="r"><img id="ri" alt=""><button class="al" data-s="right" title="something is wrong with this picture (2)">alert</button></div></main>
+<main id="m"><div class="side" id="l"><img id="li" alt=""><button class="al" data-s="left" title="flag: something is wrong with this picture, say why later on the alerts page (1)">flag</button></div><div class="side" id="r"><img id="ri" alt=""><button class="al" data-s="right" title="something is wrong with this picture (2)">flag</button></div></main>
 <script>
 const $=id=>document.getElementById(id);let cur=null,nxt=null,t0=0,busy=false;
 async function get(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.status);return r.json()}
@@ -29,10 +29,9 @@ async function show(){
 async function vote(c){if(!cur||busy)return;busy=true;const tk=cur.token;try{await get('../api/arena/vote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tk,choice:c,ms:Date.now()-t0})})}catch(e){}busy=false;if(!$('rat').hidden)ratings();show()}
 async function undo(){try{await get('../api/arena/undo',{method:'POST'})}catch(e){}cur=null;nxt=null;show()}
 async function ratings(){const j=await get('../api/arena/ratings');$('rat').innerHTML='<p class="mu">'+j.votes+' votes on '+j.voted_pictures+' of '+j.pictures+' pictures. Rating = Bradley-Terry on the Elo scale (mean 1500), with the 5-95% range from resampling the votes; Elo is played in time order.</p><table><tr><th>version</th><th>rating</th><th>range</th><th>Elo</th><th>votes</th></tr>'+j.variants.map(v=>'<tr><td>'+v.name+'</td><td>'+(v.bt??'-')+'</td><td>'+(v.lo!=null?v.lo+' to '+v.hi:'-')+'</td><td>'+(v.elo??'-')+'</td><td>'+v.votes+'</td></tr>').join('')+'</table><p></p><table><tr><th>pair</th><th>first wins</th><th>second wins</th><th>equal</th></tr>'+j.head_to_head.map(h=>'<tr><td>'+h.a+' vs '+h.b+'</td><td>'+h.a_wins+'</td><td>'+h.b_wins+'</td><td>'+h.ties+'</td></tr>').join('')+'</table>'}
-async function alertPic(side){if(!cur||busy)return;const b=document.querySelector('.al[data-s='+side+']'),on=b.classList.contains('on');let note='';
-  if(!on){note=prompt('What is wrong with the '+side+' picture? (optional)','');if(note===null)return}
-  busy=true;try{await get(on?'../api/arena/alert/clear':'../api/arena/alert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:cur.token,side:side,note:note,ms:Date.now()-t0})});b.classList.toggle('on',!on);b.textContent=on?'alert':'alerted - press to undo'}catch(e){}busy=false}
-function resetAlerts(){document.querySelectorAll('.al').forEach(b=>{b.classList.remove('on');b.textContent='alert'})}
+async function alertPic(side){if(!cur||busy)return;const b=document.querySelector('.al[data-s='+side+']'),on=b.classList.contains('on');const note='';
+  busy=true;try{await get(on?'../api/arena/alert/clear':'../api/arena/alert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:cur.token,side:side,note:note,ms:Date.now()-t0})});b.classList.toggle('on',!on);b.textContent=on?'flag':'flagged - press to undo'}catch(e){}busy=false}
+function resetAlerts(){document.querySelectorAll('.al').forEach(b=>{b.classList.remove('on');b.textContent='flag'})}
 document.querySelectorAll('.al').forEach(b=>b.onclick=e=>{e.stopPropagation();alertPic(b.dataset.s)});
 $('l').onclick=()=>vote('left');$('r').onclick=()=>vote('right');$('tie').onclick=()=>vote('tie');$('skip').onclick=()=>vote('skip');$('undo').onclick=undo;$('rt').onclick=()=>{$('rat').hidden=!$('rat').hidden;if(!$('rat').hidden)ratings()};
 document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea'))return;const k=e.key.toLowerCase();if(k==='arrowleft')vote('left');else if(k==='arrowright')vote('right');else if(k==='arrowdown'||k==='e')vote('tie');else if(k==='1')alertPic('left');else if(k==='2')alertPic('right');else if(k==='s')vote('skip');else if(k==='z')undo()});
