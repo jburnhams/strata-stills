@@ -26,7 +26,7 @@ def append_vote(path, vote):
     with open(path, 'a', encoding='utf8') as f: f.write(json.dumps(vote, sort_keys=True) + '\n')
 
 
-STATUSES = ('open', 'investigating', 'fixed', 'wontfix')                                           # the queue of problems with our versions: `fixed` and `wontfix` are done (the version is offered again)
+STATUSES = ('open', 'investigating', 'fixed', 'confirmed', 'wontfix')                                           # the queue of problems with our versions: `fixed` (we think so: look at the newest version on the flags page), `confirmed` (the person agrees) and `wontfix` are done (the version is offered again)
 
 
 def alerts(events, pool=None):
@@ -39,7 +39,7 @@ def alerts(events, pool=None):
             if 'note' in e: a['note'] = str(e['note'])[:500]
             if e.get('status') in STATUSES: a['status'] = e['status']
             elif 'resolved' in e: a['status'] = 'fixed' if e['resolved'] else 'open'
-    for a in out.values(): a['resolved'] = a['status'] in ('fixed', 'wontfix'); a['pool'] = ((pool or {}).get(a['pic']) or {}).get(a['variant'])
+    for a in out.values(): a['resolved'] = a['status'] in ('fixed', 'confirmed', 'wontfix'); a['pool'] = ((pool or {}).get(a['pic']) or {}).get(a['variant'])
     return sorted(out.values(), key=lambda a: a.get('t', 0))
 
 
