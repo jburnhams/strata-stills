@@ -5,6 +5,7 @@ Needs candidates/personal/ (scripts/lr_dataset.py pairs, catalogue, features).""
 import argparse, hashlib, html, json, os, shutil, subprocess, sys, tempfile, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from stratastills import framing as FR
 import build_report as BR, lr_dataset as D, lr_look as LK, lr_tmodel as TM, lr_ftarget as FT
 
 ROOT = BR.ROOT
@@ -87,8 +88,8 @@ def to_final(im, row, orientation, ref, with_rect=False):
     M = M.copy(); M[:, 2] /= k; out = cv2.warpAffine(c, M, (W, H), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     if not with_rect: return out, 'Lightroom crop, then registered'
     ok = cv2.warpAffine(np.full((H, W), 255, np.uint8), M, (W, H), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0          # where the moved picture really has pixels: outside it the border is a smear of the last row or column
-    cols, rows = np.where(ok.mean(0) >= 0.98)[0], np.where(ok.mean(1) >= 0.98)[0]; pad = 3
-    return out, 'Lightroom crop, then registered', ((int(cols[0]) + pad, int(rows[0]) + pad, int(cols[-1]) + 1 - pad, int(rows[-1]) + 1 - pad) if len(cols) and len(rows) else (0, 0, W, H))
+    return out, "Lightroom crop, then registered", FR.inner_rect(ok, pad=3)
+
 
 
 def face_errors(ims, ref, faces):
