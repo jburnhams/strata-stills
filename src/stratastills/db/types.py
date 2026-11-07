@@ -23,6 +23,12 @@ class Vector(TypeDecorator):
             return dialect.type_descriptor(PublicVector(self.dim))
         return dialect.type_descriptor(sa.JSON())
 
+    def compare_against_backend(self, dialect, conn_type):
+        """Alembic's drift check reflects the column as pgvector's VECTOR and would call it a type change from this wrapper (found on the real server, 2026-11-07): a vector column with the same dimension is no change. Elsewhere (JSON) the default comparison applies."""
+        if dialect.name != 'postgresql': return None
+        from pgvector.sqlalchemy import VECTOR
+        return isinstance(conn_type, VECTOR) and (conn_type.dim or None) == (self.dim or None)
+
     def process_bind_param(self, value, dialect):
         if value is None or dialect.name == 'postgresql': return value
         return [float(x) for x in value]

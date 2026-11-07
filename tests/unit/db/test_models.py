@@ -55,3 +55,15 @@ def test_embedding_round_trips_as_a_list(db_session):
 def test_embedding_is_a_pgvector_column(db_engine, db_backend):
     if db_backend != 'postgres': pytest.skip('needs --pg')
     with db_engine.connect() as c: assert c.exec_driver_sql("select data_type, udt_name from information_schema.columns where table_name='embedding' and column_name='vector'").one()[1] == 'vector'
+
+
+def test_vector_is_no_drift_from_pgvectors_own_type():
+    """Alembic reflects the column as pgvector's VECTOR; on Postgres the wrapper must compare equal to it (and unequal across dimensions)."""
+    from pgvector.sqlalchemy import VECTOR
+    from sqlalchemy.dialects import postgresql, sqlite
+    from stratastills.db.types import Vector
+    pg = postgresql.dialect()
+    assert Vector().compare_against_backend(pg, VECTOR()) is True
+    assert Vector(512).compare_against_backend(pg, VECTOR(512)) is True
+    assert Vector(512).compare_against_backend(pg, VECTOR(32)) is False
+    assert Vector().compare_against_backend(sqlite.dialect(), VECTOR()) is None
