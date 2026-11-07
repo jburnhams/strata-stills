@@ -4,7 +4,6 @@ Needs requirements-db.txt."""
 import argparse, hashlib, os, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from stratastills import settings
-from stratastills.db import hashes
 
 EXT = '.arw,.cr2,.cr3,.nef,.dng,.raf,.orf,.rw2,.srw,.pef,.nrw'
 
@@ -29,8 +28,9 @@ def main():
     try: os.nice(15)
     except OSError: pass
     subprocess.run(['ionice', '-c3', '-p', str(os.getpid())], check=False, capture_output=True)
-    from omarchy_db import connect, session
+    from omarchy_db import connect, session                               # the database packages are imported here, so sha256_of and candidates work (and are tested) without them
     from sqlalchemy import select
+    from stratastills.db import hashes
     from stratastills.db.models import File
     eng = connect(a.url or 'photos'); labels = hashes.root_labels(roots); done = batch_n = 0; todo = []
     with session(eng) as s:
