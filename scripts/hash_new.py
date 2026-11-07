@@ -1,7 +1,7 @@
 """Hash the raw files under the source roots that photos.file does not know yet (same root, path, size and mtime_ns) and write them straight to schema `photos` in batches. Resumable: a batch is committed before the next starts, and a rerun skips what is in the database. Runs at nice 15 and idle I/O priority; the files are only read.
   python scripts/hash_new.py [--root ~/raw ...] [--ext .arw,.cr2,...] [--batch 50] [--limit N] [--url ...]
 Needs requirements-db.txt."""
-import argparse, hashlib, os, subprocess, sys
+import argparse, hashlib, os, shutil, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from stratastills import settings
 
@@ -15,6 +15,16 @@ def sha256_of(path):
     return h.hexdigest()
 
 
+def lower_priority():
+    """Nice 15 and idle I/O class where the platform has them (not Windows' os.nice, not macOS' ionice); whatever is missing or refused is skipped."""
+    try:
+        if hasattr(os, 'nice'): os.nice(15)
+    except (OSError, AttributeError): pass
+    try:
+        if shutil.which('ionice'): subprocess.run(['ionice', '-c3', '-p', str(os.getpid())], check=False, capture_output=True)
+    except (OSError, AttributeError): pass
+
+
 def candidates(roots, exts):
     for root in roots:
         for d, _, names in os.walk(root):
@@ -25,9 +35,7 @@ def candidates(roots, exts):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--root', action='append'); ap.add_argument('--ext', default=EXT); ap.add_argument('--batch', type=int, default=50); ap.add_argument('--limit', type=int, default=0); ap.add_argument('--url')
     a = ap.parse_args(); roots = a.root or settings.source_roots(); exts = {e if e.startswith('.') else '.' + e for e in a.ext.lower().split(',')}
-    try: os.nice(15)
-    except OSError: pass
-    subprocess.run(['ionice', '-c3', '-p', str(os.getpid())], check=False, capture_output=True)
+    lower_priority()
     from omarchy_db import connect, session                               # the database packages are imported here, so sha256_of and candidates work (and are tested) without them
     from sqlalchemy import select
     from stratastills.db import hashes

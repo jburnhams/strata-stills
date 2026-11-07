@@ -78,13 +78,14 @@ def write(session, p):
         if (f['root'], f['relpath'], f['size'], f['mtime_ns']) in have_files: continue
         new_files.append(File(root=f['root'], relpath=f['relpath'], size=f['size'], mtime_ns=f['mtime_ns'], photo_id=ids[f['sha256']], role='raw', sha256=f['sha256'], current=True, last_seen=now))
     session.add_all(new_files); session.flush()
-    superseded = 0                                                                                            # per path only the newest planned row is current; older rows of the path stay
-    newest = {}
-    for f in new_files: newest.setdefault((f.root, f.relpath), []).append(f)
-    for k, fs in newest.items():
-        keep = max(fs, key=lambda x: x.mtime_ns)
-        for f in fs + by_path.get(k, []):
-            if f is not keep and f.current and (f.mtime_ns, f.id or 0) < (keep.mtime_ns, keep.id or 0): f.current = False; superseded += 1
+    superseded = 0                                                                                            # per path exactly one version is current: the newest (mtime_ns, then id) across the rows already there AND the new ones, the others stay as history
+    touched = {(f.root, f.relpath) for f in new_files}
+    for k in touched:
+        rows = by_path.get(k, []) + [f for f in new_files if (f.root, f.relpath) == k]
+        keep = max(rows, key=lambda x: (x.mtime_ns, x.id or 0))
+        for f in rows:
+            if f is keep: f.current = True
+            elif f.current: f.current = False; superseded += 1
     session.flush(); bad = []
     for c in _chunks(p['photos']):
         got = {s for (s,) in session.execute(select(Photo.sha256).where(Photo.sha256.in_(c)))}

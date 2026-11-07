@@ -55,3 +55,11 @@ def test_a_changed_file_is_a_new_row_and_the_old_one_stays(roots, db_session):
 def test_an_unreadable_source_is_refused(roots, db_session):
     p = hashes.plan([], list(roots), ['FATAL unreadable x'])
     with pytest.raises(hashes.HashMismatch): hashes.write(db_session, p)
+
+
+def test_an_older_record_loaded_after_a_newer_one_leaves_one_current_row_the_newer(roots, db_session):
+    r, _ = roots; hashes.write(db_session, hashes.plan([rec(r / 'a.ARW', B, 12, 2)], [r]))              # hash_new recorded the newer version first
+    assert hashes.write(db_session, hashes.plan([rec(r / 'a.ARW', A, 10, 1)], [r])) == dict(photo=1, file=1, superseded=1)
+    rows = list(db_session.scalars(select(File).order_by(File.mtime_ns)))
+    assert [(f.sha256, f.current) for f in rows] == [(A, False), (B, True)]
+    assert hashes.write(db_session, hashes.plan([rec(r / 'a.ARW', A, 10, 1)], [r])) == dict(photo=0, file=0, superseded=0)
