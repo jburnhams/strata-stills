@@ -70,3 +70,24 @@ def test_the_server_runs_the_arena_on_the_database(arena, db_url, db_session, mo
     assert c.get('/api/arena/ratings').json()['votes'] == 1 and c.post('/api/arena/undo').json()['votes'] == 0 and c.post('/api/arena/undo').status_code == 404
     with __import__('omarchy_db').session(arena_store.get().engine) as s: assert s.scalar(select(func.count()).select_from(ArenaFlagEvent)) == 2       # the flag and its status change are history rows
     assert not (arena / 'votes.jsonl').exists() and not (arena / 'alerts.jsonl').exists()                                                         # nothing is written to the files any more
+
+
+def _pool(arena, **v): (arena / 'pool.json').write_text(json.dumps({'p1': {n: dict(file=f'img/{n}.jpg', hash=h) for n, h in v.items()}}))
+
+
+def test_a_render_that_returns_is_active_again(arena, db_url, db_session, monkeypatch):
+    monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); arena_store._stores.clear(); _pool(arena, lr='a', auto1='A'); importer.write(db_session, importer.plan(str(arena)))
+    _pool(arena, lr='a', auto1='B'); importer.write(db_session, importer.plan(str(arena))); assert arena_store.get().pool()['p1']['auto1']['hash'] == 'B'
+    _pool(arena, lr='a', auto1='A'); importer.write(db_session, importer.plan(str(arena))); assert arena_store.get().pool()['p1']['auto1']['hash'] == 'A'
+
+
+def test_a_picture_dropped_from_the_pool_is_no_longer_offered_but_kept(arena, db_url, db_session, monkeypatch):
+    from stratastills.db.models import ArenaEntry
+    monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); arena_store._stores.clear(); importer.write(db_session, importer.plan(str(arena)))
+    (arena / 'pool.json').write_text('{}'); importer.write(db_session, importer.plan(str(arena)))
+    assert arena_store.get().pool() == {} and db_session.scalar(select(func.count()).select_from(ArenaEntry)) == 2
+
+
+def test_a_missing_pool_file_does_not_empty_the_database_pool(arena, db_url, db_session, monkeypatch):
+    monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); arena_store._stores.clear(); importer.write(db_session, importer.plan(str(arena)))
+    (arena / 'pool.json').unlink(); importer.write(db_session, importer.plan(str(arena))); assert 'p1' in arena_store.get().pool()

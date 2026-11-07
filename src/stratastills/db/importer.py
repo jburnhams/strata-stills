@@ -56,7 +56,7 @@ def plan(arena_dir, flags_dir=None):
         if fid not in known: problems.append(f'alert change for an unknown flag: {e}'); continue
         status = e.get('status') or (('fixed' if e['resolved'] else 'open') if 'resolved' in e else 'open' if 'pic' in e else None)
         flag_events.append(dict(flag_id=fid, at=float(e.get('t', 0)), status=status, note=e.get('note'), legacy_key=k, raw=e))
-    pool = _read_json(os.path.join(arena_dir, 'pool.json'), problems) or {}; var = (_read_json(os.path.join(arena_dir, 'variants.json'), problems) or {}).get('retired', [])
+    pool_raw = _read_json(os.path.join(arena_dir, 'pool.json'), problems); pool = pool_raw or {}; var = (_read_json(os.path.join(arena_dir, 'variants.json'), problems) or {}).get('retired', [])
     entries = [dict(pic=p, variant=n, file=e['file'], hash=e['hash'], key=e.get('key')) for p, vs in sorted(pool.items()) for n, e in sorted(vs.items())]
     pics = sorted({v['pic'] for v in votes} | {f['pic'] for f in flags} | set(pool)); variants = sorted({e['variant'] for e in entries} | {x for v in votes for x in (v['a'], v['b'])} | {f['variant'] for f in flags} | set(var))
     report_flags, reports_read = [], set()
@@ -65,7 +65,7 @@ def plan(arena_dir, flags_dir=None):
         if d is not None: reports_read.add(rep)
         for pic, f in sorted((d or {}).items()): report_flags.append(dict(report=rep, pic=pic, rating=f.get('rating') or '', reasons=f.get('reasons') or [], note=f.get('note') or '', status=f.get('status') or 'open', first_at=_time(f.get('first')), at=_time(f.get('at'))))
     counts = dict(arena_pic=len(pics), arena_variant=len(variants), arena_entry=len(entries), arena_vote=len(votes), arena_flag=len(flags), arena_flag_event=len(flag_events), report_flag=len(report_flags))
-    return dict(votes=votes, flags=flags, flag_events=flag_events, pics=pics, variants=variants, retired=set(var), entries=entries, report_flags=report_flags, reports_read=reports_read, problems=problems, counts=counts)
+    return dict(votes=votes, flags=flags, flag_events=flag_events, pics=pics, variants=variants, retired=set(var), entries=entries, pool_read=pool_raw is not None, report_flags=report_flags, reports_read=reports_read, problems=problems, counts=counts)
 
 
 def _checksum(keys): return hashlib.sha1('\n'.join(sorted(keys)).encode()).hexdigest()
@@ -81,11 +81,19 @@ def write(session, p):
     have_pics = have(ArenaPic, ArenaPic.name); add('arena_pic', [ArenaPic(name=n) for n in p['pics'] if n not in have_pics]); session.flush()
     have_var = have(ArenaVariant, ArenaVariant.name); add('arena_variant', [ArenaVariant(name=n, retired=n in p['retired']) for n in p['variants'] if n not in have_var])
     for v in session.scalars(select(ArenaVariant).where(ArenaVariant.name.in_(list(p['retired'])))): v.retired = True
-    have_e = {(a, b, c, d) for a, b, c, d in session.execute(select(ArenaEntry.pic, ArenaEntry.variant, ArenaEntry.hash, ArenaEntry.file))}
-    session.flush(); add('arena_entry', [ArenaEntry(pic=e['pic'], variant=e['variant'], file=e['file'], hash=e['hash'], key=e['key']) for e in p['entries'] if (e['pic'], e['variant'], e['hash'], e['file']) not in have_e])
-    planned = {(e['pic'], e['variant']): (e['hash'], e['file']) for e in p['entries']}; now = datetime.now(timezone.utc).replace(tzinfo=None)
-    for e in session.scalars(select(ArenaEntry).where(ArenaEntry.superseded_at.is_(None))):                      # a rebuilt picture replaces the old entry of its (pic, variant): the old one is kept, marked superseded
-        if (e.pic, e.variant) in planned and planned[(e.pic, e.variant)] != (e.hash, e.file): e.superseded_at = now
+    planned = {(e['pic'], e['variant']): e for e in p['entries']}; now = datetime.now(timezone.utc).replace(tzinfo=None); rows = {}
+    for e in session.scalars(select(ArenaEntry).order_by(ArenaEntry.id)): rows.setdefault((e.pic, e.variant), []).append(e)
+    session.flush(); new = []
+    for key, rs in rows.items():                                                                                 # the rebuilt pool is the authority: its entries are active, everything else is superseded (kept, never deleted)
+        want = planned.get(key) if p['pool_read'] else None
+        for e in rs:
+            same = want is not None and (e.hash, e.file) == (want['hash'], want['file'])
+            if p['pool_read']:
+                if same and e.superseded_at is not None and not any(x.superseded_at is None and (x.hash, x.file) == (e.hash, e.file) for x in rs): e.superseded_at = None      # a render that came back is active again
+                elif not same and e.superseded_at is None: e.superseded_at = now
+    for key, e in planned.items():
+        if not any((x.hash, x.file) == (e['hash'], e['file']) for x in rows.get(key, [])): new.append(ArenaEntry(pic=e['pic'], variant=e['variant'], file=e['file'], hash=e['hash'], key=e['key']))
+    add('arena_entry', new)
     have_v = have(ArenaVote, ArenaVote.legacy_key); add('arena_vote', [ArenaVote(**v) for v in p['votes'] if v['legacy_key'] not in have_v])
     for f in session.scalars(select(ArenaFlag).where(ArenaFlag.id.in_([f['id'] for f in p['flags']]))):          # current state follows the source on every run (a flag changed since the last import); history is append-only and deduplicated below
         for k, v in next(x for x in p['flags'] if x['id'] == f.id).items(): setattr(f, k, v)
