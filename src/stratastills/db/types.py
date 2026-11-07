@@ -14,7 +14,13 @@ class Vector(TypeDecorator):
     def load_dialect_impl(self, dialect):
         if dialect.name == 'postgresql':
             from pgvector.sqlalchemy import VECTOR
-            return dialect.type_descriptor(VECTOR(self.dim))
+
+            class PublicVector(VECTOR):
+                """The extension lives in schema `public` and omarchy_db migrates with search_path set to the app's schema alone (found 2026-11-07: 'type "vector" does not exist'), so the type is written schema-qualified in DDL."""
+                cache_ok = True
+
+                def get_col_spec(self, **kw): return 'public.' + super().get_col_spec(**kw).lower()
+            return dialect.type_descriptor(PublicVector(self.dim))
         return dialect.type_descriptor(sa.JSON())
 
     def process_bind_param(self, value, dialect):
