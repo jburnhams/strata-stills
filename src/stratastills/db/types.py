@@ -14,20 +14,8 @@ class Vector(TypeDecorator):
     def load_dialect_impl(self, dialect):
         if dialect.name == 'postgresql':
             from pgvector.sqlalchemy import VECTOR
-
-            class PublicVector(VECTOR):
-                """The extension lives in schema `public` and omarchy_db migrates with search_path set to the app's schema alone (found 2026-11-07: 'type "vector" does not exist'), so the type is written schema-qualified in DDL."""
-                cache_ok = True
-
-                def get_col_spec(self, **kw): return 'public.' + super().get_col_spec(**kw).lower()
-            return dialect.type_descriptor(PublicVector(self.dim))
+            return dialect.type_descriptor(VECTOR(self.dim))
         return dialect.type_descriptor(sa.JSON())
-
-    def compare_against_backend(self, dialect, conn_type):
-        """Alembic's drift check reflects the column as pgvector's VECTOR and would call it a type change from this wrapper (found on the real server, 2026-11-07): a vector column with the same dimension is no change. Elsewhere (JSON) the default comparison applies."""
-        if dialect.name != 'postgresql': return None
-        from pgvector.sqlalchemy import VECTOR
-        return isinstance(conn_type, VECTOR) and (conn_type.dim or None) == (self.dim or None)
 
     def process_bind_param(self, value, dialect):
         if value is None or dialect.name == 'postgresql': return value
