@@ -5,6 +5,7 @@ addopts = "-ra --timeout=300"
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]       # TestClient noise from the installed starlette; remove when the dependency moves on
 markers = [
     "integration: builds synthetic photos and runs the CLI / server (tests/integration)",
+    "pg: needs a real Postgres with pgvector (pytest --pg); skipped on the SQLite default",
     "slow: needs downloaded models; run manually or on a schedule",
 ]
 
@@ -25,3 +26,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E9", "F63", "F7", "F82"]
+
+[tool.omarchy-db]
+app = "photos"                                     # schema `photos` in the shared `omarchy` Postgres (jburnhams/database); the app runs on Postgres only, the unit tests run on SQLite
+models = "stratastills.db.models:Base"
+migrations = "migrations"
