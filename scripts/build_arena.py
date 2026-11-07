@@ -86,7 +86,7 @@ def main():
                 c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, pred=LK.predict(models, X[i:i + 1])[0], x=X[i], names=names, colour=TM.predict(tmodels, X[i:i + 1])[0], face=dict(box=fl[0]['box'], target=FT.face_target(fmodels, X[i], fl[0])) if fl else None)
                 d = os.path.join(root, 'img', sid); os.makedirs(d, exist_ok=True); entry = pool.get(sid, {})
                 for n in need:
-                    img = AV.VARIANTS[n](c); f = os.path.join(d, f'{n}.jpg'); cv2.imwrite(f, img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); entry[n] = dict(file=f'img/{sid}/{n}.jpg', hash=hashlib.sha1(open(f, 'rb').read()).hexdigest()[:16], key=keys[n])
+                    img = AV.VARIANTS[n](c); assert img.shape[:2] == fin.shape[:2], f'{sid}/{n}: {img.shape[:2]} is not the final\'s {fin.shape[:2]}: all versions must be on the same crop'; f = os.path.join(d, f'{n}.jpg'); cv2.imwrite(f, img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); entry[n] = dict(file=f'img/{sid}/{n}.jpg', hash=hashlib.sha1(open(f, 'rb').read()).hexdigest()[:16], key=keys[n])
                 pool[sid] = entry; save_json(pf, pool); say(f'  {sid}: {", ".join(need)} in {time.time() - t0:.0f} s ({len(pool)} pictures)')
     finally: shutil.rmtree(work, ignore_errors=True)
     say(f'pool: {len(pool)} pictures'); return 0
