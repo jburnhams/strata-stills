@@ -55,6 +55,11 @@ def report_flags_dir():
     return os.path.join(os.path.dirname(report_dir()), 'flags') if not os.environ.get('STRATASTILLS_REPORT_FLAGS') else os.path.abspath(os.path.expanduser(os.environ['STRATASTILLS_REPORT_FLAGS']))
 
 
+def database_url():
+    """The shared database (schema `photos`) the arena keeps its votes and flags in: STRATASTILLS_DATABASE_URL or `database_url` of the settings file. Unset = the arena uses its files (arena_store.py); a bare `photos` means omarchy_db's default connection for that app."""
+    return os.environ.get('STRATASTILLS_DATABASE_URL') or load().get('database_url') or None
+
+
 def arena_dir():
     """Where the rating arena keeps its pictures, pool and votes (`out/arena` by default; STRATASTILLS_ARENA moves it)."""
     return os.path.abspath(os.path.expanduser(os.environ.get('STRATASTILLS_ARENA') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'out', 'arena')))

@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stratastills import arena as AR, export as X, ingest, nsfw, pipeline as PL, preview, projects as P, settings
+from stratastills import arena as AR, arena_store, export as X, ingest, nsfw, pipeline as PL, preview, projects as P, settings
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 LANDING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'landing.html')
@@ -142,18 +142,13 @@ def create_app():
 
     ARENA_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'arena.html'); pending, arena_lock = {}, threading.Lock()
 
-    def arena_pool():
-        f = os.path.join(settings.arena_dir(), 'pool.json')
-        try: return json.load(open(f, encoding='utf8'))
-        except (OSError, ValueError): return {}
+    def arena_pool(): return arena_store.get().pool()
 
-    def arena_retired():
-        try: return set(json.load(open(os.path.join(settings.arena_dir(), 'variants.json'), encoding='utf8')).get('retired', []))
-        except (OSError, ValueError): return set()
+    def arena_retired(): return arena_store.get().retired()
 
-    def arena_votes(): return AR.load_votes(os.path.join(settings.arena_dir(), 'votes.jsonl'))
+    def arena_votes(): return arena_store.get().votes()
 
-    def arena_alert_events(): return AR.load_votes(os.path.join(settings.arena_dir(), 'alerts.jsonl'))      # same append-only JSON lines file format as the votes
+    def arena_alert_events(): return arena_store.get().alert_events()                                       # files or the database (arena_store.py)
 
     @app.get('/arena')
     def arena_slash(): return RedirectResponse('/arena/')
@@ -186,7 +181,7 @@ def create_app():
         if body.choice == 'skip': return dict(ok=True, skipped=True)
         if any(a.get('token') == body.token and not a['resolved'] for a in AR.alerts(arena_alert_events())): return dict(ok=True, skipped=True, alerted=True)       # a pair with an open alert is not a vote: one of its pictures is wrong
         if body.choice not in ('left', 'right', 'tie'): raise HTTPException(400, 'choice is left, right, tie or skip')
-        AR.append_vote(os.path.join(settings.arena_dir(), 'votes.jsonl'), dict(pic=q['pic'], a=q['a'], b=q['b'], winner={'left': 'a', 'right': 'b', 'tie': 'tie'}[body.choice], t=round(time.time(), 1), ms=body.ms))
+        arena_store.get().add_vote(dict(pic=q['pic'], a=q['a'], b=q['b'], winner={'left': 'a', 'right': 'b', 'tie': 'tie'}[body.choice], t=round(time.time(), 1), ms=body.ms))
         return dict(ok=True, votes=len(arena_votes()))
 
     ALERTS_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'alerts.html')
@@ -201,13 +196,13 @@ def create_app():
         if mine: return dict(ok=True, id=mine[0]['id'])
         var, other = (q['a'], q['b']) if body.side == 'left' else (q['b'], q['a']); votes = arena_votes()
         ev = dict(id=secrets.token_hex(5), token=body.token, pic=q['pic'], variant=var, other=other, side=body.side, note=body.note.strip()[:500], t=round(time.time(), 1), ms=body.ms, votes_on_pic=sum(v['pic'] == q['pic'] for v in votes), votes_on_variant=sum(v['pic'] == q['pic'] and var in (v['a'], v['b']) for v in votes))
-        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), ev); return dict(ok=True, id=ev['id'])
+        arena_store.get().add_alert_event(ev); return dict(ok=True, id=ev['id'])
 
     @app.post('/api/arena/alert/clear')
     def arena_alert_clear(body: AlertIn):
         """Undo the alert on one side of the pair on screen (the button was pressed again)."""
         mine = [a for a in AR.alerts(arena_alert_events()) if a.get('token') == body.token and a['side'] == body.side and not a['resolved']]
-        for a in mine: AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), dict(id=a['id'], resolved=True, t=round(time.time(), 1)))
+        for a in mine: arena_store.get().add_alert_event(dict(id=a['id'], resolved=True, t=round(time.time(), 1)))
         return dict(ok=True, cleared=len(mine))
 
     @app.get('/alerts')
@@ -237,16 +232,13 @@ def create_app():
         if body.note is not None: ev['note'] = body.note.strip()[:500]
         if body.status is not None: ev['status'] = body.status
         elif body.resolved is not None: ev['resolved'] = body.resolved
-        AR.append_vote(os.path.join(settings.arena_dir(), 'alerts.jsonl'), ev); return dict(ok=True)
+        arena_store.get().add_alert_event(ev); return dict(ok=True)
 
     @app.post('/api/arena/undo')
     def arena_undo():
-        f = os.path.join(settings.arena_dir(), 'votes.jsonl')
-        with arena_lock:
-            lines = open(f, encoding='utf8').read().splitlines() if os.path.exists(f) else []
-            if not lines: raise HTTPException(404, 'no vote to undo')
-            gone = lines.pop(); open(f, 'w', encoding='utf8').write(''.join(x + '\n' for x in lines))
-        return dict(undone=json.loads(gone), votes=len(lines))
+        with arena_lock: r = arena_store.get().undo()
+        if r is None: raise HTTPException(404, 'no vote to undo')
+        return dict(undone=r[0], votes=r[1])
 
     @app.get('/api/arena/ratings')
     def arena_ratings():
