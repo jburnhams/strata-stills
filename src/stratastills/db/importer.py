@@ -83,6 +83,9 @@ def write(session, p):
     for v in session.scalars(select(ArenaVariant).where(ArenaVariant.name.in_(list(p['retired'])))): v.retired = True
     have_e = {(a, b, c, d) for a, b, c, d in session.execute(select(ArenaEntry.pic, ArenaEntry.variant, ArenaEntry.hash, ArenaEntry.file))}
     session.flush(); add('arena_entry', [ArenaEntry(pic=e['pic'], variant=e['variant'], file=e['file'], hash=e['hash'], key=e['key']) for e in p['entries'] if (e['pic'], e['variant'], e['hash'], e['file']) not in have_e])
+    planned = {(e['pic'], e['variant']): (e['hash'], e['file']) for e in p['entries']}; now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for e in session.scalars(select(ArenaEntry).where(ArenaEntry.superseded_at.is_(None))):                      # a rebuilt picture replaces the old entry of its (pic, variant): the old one is kept, marked superseded
+        if (e.pic, e.variant) in planned and planned[(e.pic, e.variant)] != (e.hash, e.file): e.superseded_at = now
     have_v = have(ArenaVote, ArenaVote.legacy_key); add('arena_vote', [ArenaVote(**v) for v in p['votes'] if v['legacy_key'] not in have_v])
     for f in session.scalars(select(ArenaFlag).where(ArenaFlag.id.in_([f['id'] for f in p['flags']]))):          # current state follows the source on every run (a flag changed since the last import); history is append-only and deduplicated below
         for k, v in next(x for x in p['flags'] if x['id'] == f.id).items(): setattr(f, k, v)
