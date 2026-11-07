@@ -159,8 +159,20 @@ def anchor_face(bgr, box, target):
     return np.clip(out * 255 + 0.5, 0, 255).astype(np.uint8), dict(face_dL=round(dL, 1), face_chroma_gain=round(gC, 2), face_hue_turn=round(rot, 1))
 
 
-def apply_look(bgr, pred, cam, colour=None, face=None):
-    """`_apply_look`, then, when the picture has a face (`face` = dict(box=(x, y, w, h) as fractions, target=(L, a, b) predicted for the final)), the whole picture moved so that the face lands near its target (`anchor_face`)."""
+def _on_gpu():
+    """The look runs on the device (scripts/lr_gpu.py) when there is one; STRATASTILLS_GPU=0 (or STRATASTILLS_DEVICE=cpu) keeps the NumPy/OpenCV code above, the reference."""
+    import lr_gpu
+    return lr_gpu.use()
+
+
+def apply_look(bgr, pred, cam, colour=None, face=None, gpu=None):
+    """`_apply_look`, then, when the picture has a face (`face` = dict(box=(x, y, w, h) as fractions, target=(L, a, b) predicted for the final)), the whole picture moved so that the face lands near its target (`anchor_face`). On the device when there is one (`gpu` True/False forces it)."""
+    if gpu is None: gpu = _on_gpu()
+    if gpu:
+        import lr_gpu as G
+        out, did = G._apply_look(bgr, pred, cam, colour)
+        if face is not None: out, more = G.anchor_face(out, face['box'], face['target']); did = dict(did, **more)
+        return out, did
     out, did = _apply_look(bgr, pred, cam, colour)
     if face is not None: out, more = anchor_face(out, face['box'], face['target']); did = dict(did, **more)
     return out, did
