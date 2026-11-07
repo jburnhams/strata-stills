@@ -53,9 +53,10 @@ def prepare(pid, path):
     with _lock:
         j = _jobs.get(f)
         if j and j['state'] == 'running': return dict(j)
-        _jobs[f] = dict(state='running', text='developing the raw at full size (about a minute and a half, once)' if images.is_camera_raw(path) else 'decoding the picture (once)')
+        st = _jobs[f] = dict(state='running', text='developing the raw at full size (about a minute and a half, once)' if images.is_camera_raw(path) else 'decoding the picture (once)')
+    result = dict(st)                                                                              # copied before the thread starts: a small picture is decoded and its job removed (_build pops it) before this function returns, and reading _jobs[f] then raised KeyError (seen on a macOS runner)
     threading.Thread(target=_build, args=(pid, path, f), daemon=True).start()
-    return dict(_jobs[f])
+    return result
 
 
 def dims(path):

@@ -343,3 +343,26 @@ def test_dark_specks_are_dropped_alike_on_the_card_and_only_where_the_picture_is
     noisy, quiet = np.full((H, W), 8.0, np.float32), np.full((H, W), 1.0, np.float32)
     a = develop.drop_dark_specks(img, noisy); b = c(gpu.drop_dark_specks(g(img), g(noisy))); assert np.abs(a - b).max() < 1e-4
     assert abs(a[10, 10, 0] - 0.5) < 0.03 and a[30, 40, 0] > 0.75 and np.array_equal(develop.drop_dark_specks(img, quiet), np.clip(img, 0, 1))      # the dark speck lifted, the bright one kept, nothing done to a quiet picture
+
+
+@pytest.mark.parametrize('size', [(216, 300), (180, 252), (330, 460), (240, 336)])
+def test_lanczos4_resize_is_opencv_inter_lanczos4(size):
+    p = picture(7); ref = cv2.resize(p, (size[1], size[0]), interpolation=cv2.INTER_LANCZOS4); out = c(gpu.resize_cv_lanczos4(g(p), size))      # g() gives (3, H, W), c() brings it back to (H, W, 3)
+    assert out.shape == ref.shape and np.abs(out - ref).max() < 2e-5
+
+
+@pytest.mark.parametrize('size', [(120, 160), (60, 80), (101, 139), (79, 53)])
+def test_area_resize_is_opencv_inter_area(size):
+    p = picture(8); ref = cv2.resize(p, (size[1], size[0]), interpolation=cv2.INTER_AREA); out = c(gpu.resize_cv_area(g(p), size))
+    assert out.shape == ref.shape and np.abs(out - ref).max() < 2e-5
+
+
+def test_the_area_weights_are_built_in_float32_for_the_device():
+    w = gpu._area_weights(250, 60, gpu.dev()); assert w.dtype == gpu.torch_().float32 and abs(float(w.sum(1).mean()) - 1) < 1e-5
+
+
+def test_sharpen_can_leave_its_result_on_the_device():
+    from stratastills import detail
+    img = picture(9); f = np.linspace(0.001, 0.5, 64); m = np.clip(1 - 1.4 * f, 0.2, 1)
+    a = detail._sharpen_picture_gpu(img, f, m, 1.0, 1.0); t = detail._sharpen_picture_gpu(g(img), f, m, 1.0, 1.0, keep_on_device=True)
+    assert not isinstance(t, np.ndarray) and np.abs(c(t) - a).max() < 1e-6

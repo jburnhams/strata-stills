@@ -91,16 +91,17 @@ ROLLOFF_BRIGHT = (0.1, 0.3)     # a tighter roll-off for bright areas (walls, re
 BRIGHT_FROM, BRIGHT_SPAN = 0.60, 0.28
 
 
-def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
+def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto', keep_on_device=False):
     """The whole sharpening of an export: `sharpen` with the Wiener filter of the measured blur, but with the tighter roll-off (ROLLOFF_BRIGHT) blended in where the picture is bright (smoothed luminance from BRIGHT_FROM up over BRIGHT_SPAN, smoothstep), so the grain of bright walls is not lifted as it is in the dark and mid tones.
     `rgb` float32 HxWx3 0..1; `scale` is the output size over the native size (see sharpen_gain). Runs on the GPU (gpu.sharpen) when there is one and `backend` is 'auto' or 'gpu' (about 20 times faster); this CPU code is the reference."""
     import cv2
     from stratastills import gpu
     if backend == 'gpu' or (backend == 'auto' and gpu.available()):
-        try: return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount)
+        try: return _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount, keep_on_device)
         except Exception as e:
             if backend == 'gpu' or not gpu.is_oom(e): raise
         gpu.free()                                                                                                    # the card ran out of memory: the CPU does it
+    if not isinstance(rgb, np.ndarray): rgb = gpu.to_numpy(rgb)
     h, w = rgb.shape[:2]; mask = sharpen_mask(mtf_freq, mtf); base = sharpen(rgb, sharpen_gain(mtf_freq, mtf, (h, w), scale, amount=amount), overshoot=OVERSHOOT, mask=mask, knee=KNEE); y = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
     b = cv2.GaussianBlur(y, (0, 0), 6.0); k = np.clip((b - BRIGHT_FROM) / BRIGHT_SPAN, 0, 1); k = (k * k * (3 - 2 * k))[..., None]
     if float(k.max()) <= 0: return base
@@ -108,16 +109,18 @@ def sharpen_picture(rgb, mtf_freq, mtf, scale, amount=1.0, backend='auto'):
     return base * (1 - k) + alt * k
 
 
-def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount):
-    """sharpen_picture on the device: both filters and the brightness blend, the picture going over once and coming back once."""
+def _sharpen_picture_gpu(rgb, mtf_freq, mtf, scale, amount, keep_on_device=False):
+    """sharpen_picture on the device: both filters and the brightness blend, the picture going over once and coming back once. `rgb` may already be a (3, H, W) tensor on the device (it is sharpened in place); with `keep_on_device` the result stays there as a tensor for the next stage (resize and encode run on the card too, see pipeline.State)."""
     from stratastills import gpu
     with gpu.slot():                                                                                       # one device slot while the picture is on the card (several pictures may be in flight)
-        x = gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
+        x = rgb if not isinstance(rgb, np.ndarray) else gpu.to_gpu(rgb); h, w = x.shape[1:]; g = lambda ro: gpu.sharpen_gain(mtf_freq, mtf, (h, w), scale, NOISE_TERM, 4.0, amount, ro)
         mask = sharpen_mask(mtf_freq, mtf); d1 = gpu.sharpen_delta(x, g(ROLLOFF), OVERSHOOT, mask=mask, knee=KNEE); y = gpu.luma(x); k = gpu.smoothstep((gpu.gaussian(y, 6.0) - BRIGHT_FROM) / BRIGHT_SPAN); del y
         d2 = gpu.sharpen_delta(x, g(ROLLOFF_BRIGHT), OVERSHOOT, mask=mask, knee=KNEE) if float(k.max()) > 0 else None                  # the two filters' results, blended by brightness, one channel at a time (the whole picture of each would not fit a small card)
         for c in range(3):
             x[c] = (x[c] + d1).clamp_(0, 1) if d2 is None else (x[c] + d1).clamp_(0, 1) * (1 - k) + (x[c] + d2).clamp_(0, 1) * k
-        out = gpu.to_numpy(x); del x, d1, d2, k; gpu.free(); return out
+        out = x if keep_on_device else gpu.to_numpy(x); del x, d1, d2, k
+        if not keep_on_device: gpu.free()
+        return out
 
 
 KNEE = 0.03                    # 0: the sharpened luminance is clipped to the local range (+ OVERSHOOT); above 0 it is taken there smoothly, never more than KNEE beyond it (`limit`)
