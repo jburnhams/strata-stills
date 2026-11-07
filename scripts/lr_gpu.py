@@ -76,8 +76,8 @@ def interp(x, xp, fp):
 
 def _area_weights(n, m, device):
     """(m, n) matrix of cv2.INTER_AREA: output pixel i averages the input span [i * n / m, (i + 1) * n / m) with fractional weights at its two ends (torch's 'area' mode, adaptive pooling, uses whole-pixel windows instead and differs by up to 5 L on a quarter-size copy)."""
-    t = gpu.torch_(); sc = n / m; lo = t.arange(m, device=device, dtype=t.float64) * sc; hi = lo + sc; j = t.arange(n, device=device, dtype=t.float64)
-    w = (t.minimum(hi[:, None], j[None] + 1) - t.maximum(lo[:, None], j[None])).clamp_min(0); return (w / sc).float()
+    t = gpu.torch_(); sc = n / m; lo = t.arange(m, dtype=t.float64) * sc; hi = lo + sc; j = t.arange(n, dtype=t.float64)           # float64 on the CPU for the fractional ends (MPS has no float64), float32 on the device
+    w = (t.minimum(hi[:, None], j[None] + 1) - t.maximum(lo[:, None], j[None])).clamp_min(0); return (w / sc).float().to(device)
 
 
 def resize_area(x, size):
