@@ -149,11 +149,28 @@ def features(a):
         shutil.rmtree(tmp); print(f'batch {k // BATCH}: {len(keep)}/{len(batch)}', flush=True)
 
 
+_features = {}                                                                                                                                   # OUT -> the stacked feature batches, read once per process
+
+
 def load_features():
-    """(X, names, F, C, idx) over every batch: features, the finals' lightness and colour, and the catalogue row of each."""
+    """(X, names, F, C, idx) over every batch: features, the finals' lightness and colour, and the catalogue row of each. Read once per process, and kept stacked in one uncompressed file (`features_all.npz`, beside the batches, made again when a batch changes): 86 batches of small members took about 60-130 s to open and crc-check, the stacked file about a second."""
     import glob
-    parts = [np.load(p, allow_pickle=True) for p in sorted(glob.glob(os.path.join(OUT, 'features', 'b*.npz')))]
-    return (np.concatenate([p['X'] for p in parts]), [str(n) for n in parts[0]['names']], np.concatenate([p['F'] for p in parts]), np.concatenate([p['C'] for p in parts]), np.concatenate([p['idx'] for p in parts]))
+    files = sorted(glob.glob(os.path.join(OUT, 'features', 'b*.npz')))
+    sig = [(os.path.basename(p), os.stat(p).st_size, os.stat(p).st_mtime_ns) for p in files]
+    if _features.get(OUT, (None,))[0] == sig: return _features[OUT][1]
+    allf = os.path.join(OUT, 'features_all.npz'); out = None
+    if os.path.exists(allf):
+        try:
+            z = np.load(allf, allow_pickle=False)
+            if json.loads(str(z['sig'])) == [list(s) for s in sig]: out = (z['X'], [str(n) for n in z['names']], z['F'], z['C'], z['idx'])
+        except Exception: out = None
+    if out is None:
+        parts = [np.load(p, allow_pickle=True) for p in files]
+        out = (np.concatenate([p['X'] for p in parts]), [str(n) for n in parts[0]['names']], np.concatenate([p['F'] for p in parts]), np.concatenate([p['C'] for p in parts]), np.concatenate([p['idx'] for p in parts]))
+        try:
+            tmp = f'{allf}.{os.getpid()}.tmp.npz'; np.savez(tmp, sig=json.dumps(sig), X=out[0], names=np.array(out[1]), F=out[2], C=out[3], idx=out[4]); os.replace(tmp, allf)
+        except OSError: pass
+    _features[OUT] = (sig, out); return out
 
 
 SKIP_TAG = re.compile(r'(Offset|Length|Size$|Checksum|Thumbnail|Preview|File|Directory|ExifTool|ImageUniqueID|Version|Sequence|Count$|Bytes|Table|Padding|Binary|Data$|MakerNote|Comment|Software|Profile|Copyright|Artist|Description|Title|URL|DocumentID|InstanceID|OriginalDocument|Derived|History|Rating|Label|Keywords|SubSec|Date|Time(?!r)|Trailer|Index|Warning|Error)', re.I)
