@@ -34,7 +34,7 @@ def smear_rect(img, frac=0.3, floor=0.35, max_frac=0.08, margin=6):
         while b < lim and d[len(d) - 1 - b] < thr: b += 1
         return (a + margin if a >= 3 else 0), (b + margin if b >= 3 else 0)
     l, r = band(dx, w); t, b = band(dy, h); x0, y0, x1, y1 = l, t, w - r, h - b
-    cl, cr, ct, cb = corner_smear(img)                                                                   # a smear that covers only part of an edge (a corner wedge: the rotation leaves one corner without pixels) does not show in the whole-edge means above
+    cl, ct, cr, cb = corner_smear(img)                                                                   # a smear that covers only part of an edge (a corner wedge: the rotation leaves one corner without pixels) does not show in the whole-edge means above
     return max(x0, cl), max(y0, ct), min(x1, w - cr), min(y1, h - cb)
 
 
