@@ -3,7 +3,7 @@
 Two steps so that a run can be looked at first: `plan()` reads and parses the files and needs no database (counts, problems, the rows to write); `write()` puts the plan into a session in ONE transaction, skips what is already there (`legacy_key`, primary keys), then compares row counts and a checksum of the keys with the plan and rolls everything back on a mismatch. Run it twice: the second run writes nothing.
 Keys: a line's `legacy_key` is the SHA-1 of its canonical JSON (the Nth identical line gets `N:` in front), so the same line is the same row on every run. Arena pictures are named as the pool names them (report flags have their own picture ids and are not arena pictures) ('2023-01-11_DSC00010'); matching a name to a photo (SHA-256 of its raw) is a later step (`ArenaPic.photo_id` stays null here)."""
 import hashlib, json, os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
@@ -13,10 +13,13 @@ from .models import ArenaEntry, ArenaFlag, ArenaFlagEvent, ArenaPic, ArenaVarian
 REPORTS = ('neutral', 'auto')
 
 
-def _read_json(path):
+def _read_json(path, problems):
+    """The parsed file; None when it does not exist (these files are optional); a file that exists but cannot be read or parsed is a FATAL problem (write() refuses a plan that has one), not an empty source."""
+    if not os.path.exists(path): return None
     try:
         with open(path, encoding='utf8') as f: return json.load(f)
-    except (OSError, ValueError): return None
+    except (OSError, ValueError) as e:
+        problems.append(f'FATAL unreadable {path}: {e}'); return None
 
 
 def _keys(lines):
@@ -53,15 +56,16 @@ def plan(arena_dir, flags_dir=None):
         if fid not in known: problems.append(f'alert change for an unknown flag: {e}'); continue
         status = e.get('status') or (('fixed' if e['resolved'] else 'open') if 'resolved' in e else 'open' if 'pic' in e else None)
         flag_events.append(dict(flag_id=fid, at=float(e.get('t', 0)), status=status, note=e.get('note'), legacy_key=k, raw=e))
-    pool = _read_json(os.path.join(arena_dir, 'pool.json')) or {}; var = (_read_json(os.path.join(arena_dir, 'variants.json')) or {}).get('retired', [])
+    pool = _read_json(os.path.join(arena_dir, 'pool.json'), problems) or {}; var = (_read_json(os.path.join(arena_dir, 'variants.json'), problems) or {}).get('retired', [])
     entries = [dict(pic=p, variant=n, file=e['file'], hash=e['hash'], key=e.get('key')) for p, vs in sorted(pool.items()) for n, e in sorted(vs.items())]
     pics = sorted({v['pic'] for v in votes} | {f['pic'] for f in flags} | set(pool)); variants = sorted({e['variant'] for e in entries} | {x for v in votes for x in (v['a'], v['b'])} | {f['variant'] for f in flags} | set(var))
-    report_flags = []
+    report_flags, reports_read = [], set()
     for rep in REPORTS:
-        d = _read_json(os.path.join(flags_dir, f'{rep}.json')) if flags_dir else None
+        d = _read_json(os.path.join(flags_dir, f'{rep}.json'), problems) if flags_dir else None
+        if d is not None: reports_read.add(rep)
         for pic, f in sorted((d or {}).items()): report_flags.append(dict(report=rep, pic=pic, rating=f.get('rating') or '', reasons=f.get('reasons') or [], note=f.get('note') or '', status=f.get('status') or 'open', first_at=_time(f.get('first')), at=_time(f.get('at'))))
     counts = dict(arena_pic=len(pics), arena_variant=len(variants), arena_entry=len(entries), arena_vote=len(votes), arena_flag=len(flags), arena_flag_event=len(flag_events), report_flag=len(report_flags))
-    return dict(votes=votes, flags=flags, flag_events=flag_events, pics=pics, variants=variants, retired=set(var), entries=entries, report_flags=report_flags, problems=problems, counts=counts)
+    return dict(votes=votes, flags=flags, flag_events=flag_events, pics=pics, variants=variants, retired=set(var), entries=entries, report_flags=report_flags, reports_read=reports_read, problems=problems, counts=counts)
 
 
 def _checksum(keys): return hashlib.sha1('\n'.join(sorted(keys)).encode()).hexdigest()
@@ -69,6 +73,8 @@ def _checksum(keys): return hashlib.sha1('\n'.join(sorted(keys)).encode()).hexdi
 
 def write(session, p):
     """Write a plan in the session's transaction, skipping rows that exist, then verify: every planned vote/flag-event key and flag/pic/variant/report-flag key is in the database, and (for the tables this import owns) the counts match. Raises ImportMismatch (nothing committed, the session rolled back) otherwise; commits and returns {table: rows added} when it matches."""
+    fatal = [x for x in p['problems'] if x.startswith('FATAL')]
+    if fatal: raise ImportMismatch('refusing to import a plan with an unreadable source: ' + '; '.join(fatal))
     added = {}
     def have(model, col): return {r for (r,) in session.execute(select(col))}
     def add(name, rows): added[name] = len(rows); session.add_all(rows)
@@ -78,8 +84,16 @@ def write(session, p):
     have_e = {(a, b, c, d) for a, b, c, d in session.execute(select(ArenaEntry.pic, ArenaEntry.variant, ArenaEntry.hash, ArenaEntry.file))}
     session.flush(); add('arena_entry', [ArenaEntry(pic=e['pic'], variant=e['variant'], file=e['file'], hash=e['hash'], key=e['key']) for e in p['entries'] if (e['pic'], e['variant'], e['hash'], e['file']) not in have_e])
     have_v = have(ArenaVote, ArenaVote.legacy_key); add('arena_vote', [ArenaVote(**v) for v in p['votes'] if v['legacy_key'] not in have_v])
+    for f in session.scalars(select(ArenaFlag).where(ArenaFlag.id.in_([f['id'] for f in p['flags']]))):          # current state follows the source on every run (a flag changed since the last import); history is append-only and deduplicated below
+        for k, v in next(x for x in p['flags'] if x['id'] == f.id).items(): setattr(f, k, v)
     have_f = have(ArenaFlag, ArenaFlag.id); add('arena_flag', [ArenaFlag(**f) for f in p['flags'] if f['id'] not in have_f]); session.flush()
     have_fe = have(ArenaFlagEvent, ArenaFlagEvent.legacy_key); add('arena_flag_event', [ArenaFlagEvent(**e) for e in p['flag_events'] if e['legacy_key'] not in have_fe])
+    plan_r = {(r['report'], r['pic']): r for r in p['report_flags']}
+    for r in session.scalars(select(ReportFlag)):                                                                # the current state follows the source; a flag no longer in a report file that was read is marked removed, never deleted
+        if (r.report, r.pic) in plan_r:
+            for k, v in plan_r[(r.report, r.pic)].items(): setattr(r, k, v)
+            r.removed_at = None
+        elif r.report in p['reports_read'] and r.removed_at is None: r.removed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     have_r = {(a, b) for a, b in session.execute(select(ReportFlag.report, ReportFlag.pic))}; add('report_flag', [ReportFlag(**r) for r in p['report_flags'] if (r['report'], r['pic']) not in have_r]); session.flush()
     bad = []
     for name, model, col, want in (('arena_vote', ArenaVote, ArenaVote.legacy_key, [v['legacy_key'] for v in p['votes']]), ('arena_flag_event', ArenaFlagEvent, ArenaFlagEvent.legacy_key, [e['legacy_key'] for e in p['flag_events']]), ('arena_flag', ArenaFlag, ArenaFlag.id, [f['id'] for f in p['flags']]), ('arena_pic', ArenaPic, ArenaPic.name, p['pics'])):

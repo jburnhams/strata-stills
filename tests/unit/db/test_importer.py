@@ -50,3 +50,24 @@ def test_retired_variants_are_marked(arena, db_session):
 def test_the_source_files_are_not_touched(arena, db_session):
     a, f = arena; before = {n: (a / n).read_bytes() for n in os.listdir(a)}
     importer.write(db_session, importer.plan(a, f)); assert {n: (a / n).read_bytes() for n in os.listdir(a)} == before
+
+
+def test_a_rerun_follows_flags_changed_in_the_source(arena, db_session):
+    a, f = arena; importer.write(db_session, importer.plan(a, f))
+    with open(a / 'alerts.jsonl', 'a') as h: h.write(json.dumps(dict(id='f1', status='confirmed', t=9.0)) + '\n')
+    (f / 'auto.json').write_text(json.dumps({'p3': dict(flag=True, rating='good', reasons=[], note='ok', status='fixed')}), encoding='utf8')
+    added = importer.write(db_session, importer.plan(a, f)); db_session.expire_all()
+    assert added['arena_flag_event'] == 1 and db_session.get(ArenaFlag, 'f1').status == 'confirmed'      # history grows by the new change, the current state follows it
+    r = db_session.get(ReportFlag, ('auto', 'p3')); assert (r.rating, r.status, r.note) == ('good', 'fixed', 'ok')
+
+
+def test_a_report_flag_taken_off_is_marked_not_deleted(arena, db_session):
+    a, f = arena; importer.write(db_session, importer.plan(a, f)); (f / 'auto.json').write_text('{}', encoding='utf8')
+    importer.write(db_session, importer.plan(a, f)); assert db_session.get(ReportFlag, ('auto', 'p3')).removed_at is not None
+
+
+def test_an_unreadable_source_is_fatal_not_empty(arena, db_session):
+    a, f = arena; (a / 'pool.json').write_text('{ not json', encoding='utf8')
+    p = importer.plan(a, f); assert any(x.startswith('FATAL') for x in p['problems'])
+    with pytest.raises(importer.ImportMismatch): importer.write(db_session, p)
+    assert db_session.scalar(select(func.count()).select_from(ArenaVote)) == 0
