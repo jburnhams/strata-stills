@@ -291,6 +291,37 @@ def resize_linear(x, size, mode='bilinear'):
     return torch_().nn.functional.interpolate(x[None, None], size=size, mode=mode, align_corners=False)[0, 0]
 
 
+def _area_weights(n, m, device):
+    """(m, n) matrix of cv2.INTER_AREA for a reduction of n pixels to m: output pixel i averages the input span [i n/m, (i+1) n/m) with fractional weights at its ends. Built in float64 on the CPU (the ends are fractions; MPS has no float64) and moved as float32."""
+    t = torch_(); sc = n / m; lo = t.arange(m, dtype=t.float64) * sc; hi = lo + sc; j = t.arange(n, dtype=t.float64)
+    w = (t.minimum(hi[:, None], j[None] + 1) - t.maximum(lo[:, None], j[None])).clamp_min(0); return (w / sc).float().to(device)
+
+
+def resize_cv_area(img, size):
+    """cv2.resize(.., interpolation=cv2.INTER_AREA) of a (C, H, W) picture or a (H, W) plane to `size` = (h, w), a reduction in both directions: two matrix products (the torch 'area' mode of resize_area uses whole-pixel windows and differs from OpenCV by up to 5 % on non-integer ratios)."""
+    h, w = img.shape[-2:]; return _area_weights(h, size[0], img.device) @ img @ _area_weights(w, size[1], img.device).T
+
+
+def _lanczos4_taps(n_in, n_out, device):
+    """For each output pixel of a resize n_in -> n_out the 8 source indices (edge pixels repeated) and the Lanczos4 weights, as cv2.resize with INTER_LANCZOS4 computes them: source position (x + 0.5) n_in / n_out - 0.5, taps at floor - 3 .. floor + 4, weights sinc-windowed (a = 4) and normalised to sum 1."""
+    t = torch_(); inv = n_in / n_out; fx = (t.arange(n_out, dtype=t.float64) + 0.5) * inv - 0.5; sx = fx.floor(); f = fx - sx; k = t.arange(-3, 5, dtype=t.float64)[None]
+    d = f[:, None] - k; pd = math.pi * d; safe = d.abs() > 1e-12
+    w = t.where(safe, t.sin(pd) * t.sin(pd / 4) / (pd * pd / 4).clamp_min(1e-300), t.ones_like(d)); w = w / w.sum(1, keepdim=True)
+    idx = (sx[:, None] + k).long().clamp(0, n_in - 1); return idx.to(device), w.float().to(device)
+
+
+def resize_cv_lanczos4(img, size):
+    """cv2.resize(.., interpolation=cv2.INTER_LANCZOS4) of a (C, H, W) picture to `size` = (h, w), up or down: eight taps per output pixel along rows, then along columns, summed one tap at a time so that the working buffers stay the size of the picture."""
+    c, h, w = img.shape; ih, iw = _lanczos4_taps(h, size[0], img.device), _lanczos4_taps(w, size[1], img.device)
+    x = None
+    for k in range(8):
+        part = img[:, :, iw[0][:, k]] * iw[1][:, k]; x = part if x is None else x + part
+    y = None
+    for k in range(8):
+        part = x[:, ih[0][:, k], :] * ih[1][:, k][None, :, None]; y = part if y is None else y + part
+    return y
+
+
 def apply_lut(x, lut, chunk=1 << 24):
     """`x` (any shape, values 0..1) through the lookup table `lut` (n,) with linear interpolation (np.interp over linspace(0, 1, n)); done in pieces so the index tensors stay small."""
     t = torch_(); n = lut.numel(); flat = x.reshape(-1); out = t.empty_like(flat)

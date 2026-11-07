@@ -94,3 +94,14 @@ def test_a_16_bit_tiff_is_readable(tmp_path):
     p = tmp_path / 'a.tif'; a = np.zeros((40, 60, 3), np.uint16); a[..., 0] = 65535; tifffile.imwrite(p, a, photometric='rgb')
     im = images.load(str(p)); assert im.shape == (40, 60, 3) and im[0, 0].tolist() == [0, 0, 255]                          # BGR: red
     g = tmp_path / 'g.tif'; tifffile.imwrite(g, np.full((20, 30), 40000, np.uint16)); assert images.load(str(g)).shape == (20, 30, 3)
+
+
+def test_prepare_returns_its_status_even_when_the_job_finishes_at_once(proj, monkeypatch):
+    """The background job of a small picture can be finished (and removed from the table) before prepare() returns: it must answer 'running' from what it recorded, not look the job up again (a KeyError on a fast runner)."""
+    import os, threading
+    pid, sid = proj; iid = P.item_id(sid, 'A_0001'); path = P.get_item(pid, iid)['variants'][0]['path']
+    class Instant:
+        def __init__(self, target, args, daemon): self.target, self.args = target, args
+        def start(self): self.target(*self.args)                                                                       # the job runs to the end inside start()
+    monkeypatch.setattr(threading, 'Thread', Instant); fullres._jobs.clear()
+    r = fullres.prepare(pid, path); assert r['state'] == 'running' and os.path.exists(fullres.cache_file(pid, path)) and fullres.status(pid, path)['state'] == 'ready'

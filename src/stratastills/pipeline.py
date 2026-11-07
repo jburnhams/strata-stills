@@ -106,14 +106,27 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 2, sharpen=7, encode=2)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 3, sharpen=7, encode=3)[stage]
 
 
 class State:
     """What flows through the stages of one run."""
     def __init__(self, pid, iid, item, variant, say):
         self.pid, self.iid, self.item, self.variant, self.say = pid, iid, item, variant, say
-        self.path = variant['path']; self.rgb = None; self.native = None; self.scale = 1.0; self._res = None; self.rec = dict(steps=[]); self.quality = None; self.file = None; self.analysis = None
+        self.path = variant['path']; self._rgb = None; self.dev = None; self.final_hw = None; self.native = None; self.scale = 1.0; self._res = None; self.rec = dict(steps=[]); self.quality = None; self.file = None; self.analysis = None
+
+    @property
+    def rgb(self):
+        """The picture as a float32 (H, W, 3) array. From resize on it may live on the card instead (`dev`, a (3, H, W) tensor: resize, sharpen and the JPEG encoder then hand it on without a trip to the CPU and back); asking for the array downloads it once."""
+        if self._rgb is None and self.dev is not None: self._rgb = gpu.to_numpy(self.dev)
+        return self._rgb
+
+    @rgb.setter
+    def rgb(self, v): self._rgb = v; self.dev = None
+
+    def set_dev(self, t): self.dev = t; self._rgb = None
+
+    def hw(self): return tuple(self.dev.shape[1:]) if self.dev is not None else tuple(self._rgb.shape[:2]) if self._rgb is not None else self.final_hw
 
     @property
     def res(self):
@@ -181,13 +194,28 @@ def run_resize(st, p):
     else: ow, oh = (out_long, max(1, round(h * out_long / w))) if w >= h else (max(1, round(w * out_long / h)), out_long)
     st.scale = max(ow, oh) / long_native; st.rec['size'] = dict(long_side=max(ow, oh), why=why)
     if (ow, oh) != (w, h):
-        st.say('resizing'); st.rgb = cv2.resize(st.rgb, (ow, oh), interpolation=cv2.INTER_LANCZOS4 if st.scale > 0.5 else cv2.INTER_AREA); st.rec['steps'].append(f'resized to {ow}x{oh}')
+        st.say('resizing'); _resize(st, ow, oh); st.rec['steps'].append(f'resized to {ow}x{oh}')
+
+
+def _resize(st, ow, oh):
+    """Resize the picture to ow x oh: Lanczos (OpenCV's 8 taps) above half size, area averaging below. On the card (gpu.resize_cv_lanczos4 / resize_cv_area, equal to OpenCV's to 1e-6) when the picture is already there (`st.dev`); otherwise OpenCV on the CPU, the reference, which is faster than sending the full-size array over just to resize it (measured on the RTX 3060: 0.08-0.24 s for 6000 px against 0.2-0.3 s with the upload and download, the PCIe copy of a 290 MB float picture being the cost; the card only wins when develop hands its result over without leaving it). The resized picture then goes to the card once, small, for sharpen and encode."""
+    lanczos = st.scale > 0.5
+    if st.dev is not None:
+        try:
+            with gpu.slot(): st.set_dev(gpu.resize_cv_lanczos4(st.dev, (oh, ow)) if lanczos else gpu.resize_cv_area(st.dev, (oh, ow))); return
+        except Exception as e:
+            if not gpu.is_oom(e): raise
+            gpu.free()
+    st.rgb = cv2.resize(st.rgb, (ow, oh), interpolation=cv2.INTER_LANCZOS4 if lanczos else cv2.INTER_AREA)
 
 
 def run_sharpen(st, p):
     res = st.res
     if not res.get('ok'): st.rec['steps'].append('not sharpened: too little texture to measure the blur'); return
-    st.say('sharpening to the measured blur'); st.rgb = detail.sharpen_picture(st.rgb, np.array(res['freq']), np.array(res['mtf']), st.scale, amount=p['amount']); st.rec['steps'].append(f"sharpened with the Wiener filter of the measured MTF (amount {p['amount']:g})")
+    st.say('sharpening to the measured blur'); out = detail.sharpen_picture(st.dev if st.dev is not None else st.rgb, np.array(res['freq']), np.array(res['mtf']), st.scale, amount=p['amount'], keep_on_device=gpu.available())
+    if isinstance(out, np.ndarray): st.rgb = out
+    else: st.set_dev(out)
+    st.rec['steps'].append(f"sharpened with the Wiener filter of the measured MTF (amount {p['amount']:g})")
 
 
 def run_encode(st, p, out_base):
@@ -197,7 +225,7 @@ def run_encode(st, p, out_base):
             st.say('choosing the JPEG quality'); quality, qi = jpeg_quality.choose_quality(X.to_u8(st.rgb)); st.rec['quality_info'] = qi
             st.rec['steps'].append(f"JPEG quality {quality} chosen automatically (error {qi.get('rms')} against a target of {qi.get('target')} grey levels; the picture's own noise is {qi.get('sigma')})")
         else: quality = int(p['quality']); st.rec['steps'].append(f'JPEG quality {quality} as asked')
-    out = out_base + ('.tif' if fmt == 'tiff' else '.jpg'); st.say('writing'); X.write_picture(out, st.rgb, fmt, quality, X._exif_of(st.item)); st.file = out; st.quality = quality
+    out = out_base + ('.tif' if fmt == 'tiff' else '.jpg'); st.say('writing'); st.final_hw = st.hw(); X.write_picture(out, st.dev if st.dev is not None and fmt == 'jpeg' else st.rgb, fmt, quality, X._exif_of(st.item)); st.file = out; st.quality = quality; st.dev = None
 
 
 # ---- configs and presets --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -356,7 +384,7 @@ def generate(pid, iid, variant=None, preset=None, options=None, stages=None, pro
         a1 = gpu.allocations(); timing.append(dict(stage=s['stage'], seconds=round(time.perf_counter() - t0, 2), gpu=None if a0 is None or a1 is None else a1 > a0))
         if on_stage: on_stage(s['stage'], state)
     rec = dict(state.rec, version=1, key=key, created=dt.datetime.now().astimezone().isoformat(timespec='seconds'), item=iid, stem=item['stem'], source_variant=v['id'], source=v['path'], preset=preset, stages=st, summary=summary(st),
-               output=[int(state.rgb.shape[1]), int(state.rgb.shape[0])], file=state.file, bytes=os.path.getsize(state.file), format=st[-1]['format'], quality=state.quality, existing=False)
+               output=[int(state.hw()[1]), int(state.hw()[0])], file=state.file, bytes=os.path.getsize(state.file), format=st[-1]['format'], quality=state.quality, existing=False)
     with open(base + '.json', 'w') as f: json.dump(rec, f, indent=1)
     return rec
 
