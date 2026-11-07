@@ -10,17 +10,22 @@ main{max-width:1000px;margin:0 auto;padding:24px 16px}h1{font-size:20px;margin:0
 dl{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:6px 0;font-size:13px}dt{color:var(--mut)}dd{margin:0;word-break:break-all}
 button{padding:6px 12px;border:0;border-radius:6px;background:var(--acc);color:#fff;cursor:pointer}textarea,select{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}textarea{width:100%;box-sizing:border-box}.row{display:flex;gap:8px;margin-top:6px;align-items:center}button.l{background:transparent;color:var(--acc);border:1px solid var(--line)}
 @media(max-width:640px){.a{flex-direction:column}.ims{flex:none}}
+#lb{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:zoom-out}#lb img{max-width:100vw;max-height:calc(100vh - 28px);object-fit:contain}#lb div{color:#ccc;font-size:13px;padding:6px}.ims img{cursor:zoom-in}
 </style></head><body><main>
 <h1>Arena flags: problems with our versions</h1><div class="mut" id="info"></div><div id="list"></div>
 </main><script>
 const $=id=>document.getElementById(id);
+let lb=null;
+function show(imgs,k){if(!lb){lb=document.createElement('div');lb.id='lb';lb.onclick=()=>{lb.remove();lb=null};document.body.append(lb)}
+  const i=new Image();i.src=imgs[k].src;const c=document.createElement('div');c.textContent=imgs[k].alt+(imgs.length>1?'  (click to close, left/right or space to switch, Esc to close)':'');lb.replaceChildren(i,c);lb.imgs=imgs;lb.k=k}
+document.addEventListener('keydown',e=>{if(!lb)return;if(e.key==='Escape'){lb.remove();lb=null}else if(['ArrowLeft','ArrowRight',' '].includes(e.key)){e.preventDefault();show(lb.imgs,(lb.k+1)%lb.imgs.length)}});
 async function api(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.status);return r.json()}
 function row(k,v){const d=document.createDocumentFragment(),a=document.createElement('dt'),b=document.createElement('dd');a.textContent=k;b.textContent=v;d.append(a,b);return d}
 async function load(){
   const j=await api('../api/alerts'),open=j.alerts.filter(a=>!a.resolved).length;
   $('info').innerHTML=j.alerts.length+' flags, '+open+' open (open and investigating flags keep that version of that picture out of the arena; fixed = we think so, look at the newest picture and set confirmed or reopen). <a href="../arena/">Back to the arena</a>';
   $('list').replaceChildren(...j.alerts.map(a=>{const c=document.createElement('div');c.className='a'+(a.resolved?' done':'');
-    const im=document.createElement('div');im.className='ims';for(const [v,l] of [[null,a.variant+' (newest)'],['lightroom','lightroom final']]){const f=document.createElement('figure'),i=new Image();i.loading='lazy';i.src='../api/alerts/image/'+a.id+(v?'?variant='+v:'');const c=document.createElement('figcaption');c.textContent=l;f.append(i,c);im.append(f)}const d=document.createElement('div');
+    const im=document.createElement('div');im.className='ims';for(const [v,l] of [[null,a.variant+' (newest)'],['lightroom','lightroom final']]){const f=document.createElement('figure'),i=new Image();i.loading='lazy';i.alt=l;i.onclick=()=>show([...im.querySelectorAll('img')],[...im.querySelectorAll('img')].indexOf(i));i.src='../api/alerts/image/'+a.id+(v?'?variant='+v:'');const c=document.createElement('figcaption');c.textContent=l;f.append(i,c);im.append(f)}const d=document.createElement('div');
     const h=document.createElement('b');h.textContent=a.pic+' / '+a.variant;const dl=document.createElement('dl');
     for(const [k,v] of [['when',new Date(a.t*1000).toLocaleString()],['shown',a.side+', against '+a.other],['time on pair',(a.ms/1000).toFixed(1)+' s'],['votes',a.votes_on_pic+' on the picture, '+a.votes_on_variant+' involving this version'],['file',a.pool?a.pool.file:'(gone from the pool)'],['hash / key',a.pool?(a.pool.hash+' / '+(a.pool.key||'')):''],['status',a.status]])dl.append(row(k,v));
     const t=document.createElement('textarea');t.rows=2;t.placeholder='What is wrong? (the reason)';t.value=a.note||'';
