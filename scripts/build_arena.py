@@ -17,7 +17,7 @@ LOOK = ['lr_look.py', 'lr_tmodel.py', 'lr_ftarget.py', 'lr_fit.py']
 def code_key(name):
     """A version is made again when its own function, the brightness helper or (for the automatic ones) the look code changed, not when another version did."""
     import inspect
-    h = hashlib.sha1(name.encode()); h.update(b'framing 3'); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
+    h = hashlib.sha1(name.encode()); h.update(b'framing 4'); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
     if name in ('camera', 'neutral'): h.update(inspect.getsource(AV.match_brightness).encode())
     if name in ('camera', 'neutral') or name.startswith('auto'): h.update(inspect.getsource(AV.auto1).encode())
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())
@@ -33,7 +33,24 @@ def smear_rect(img, frac=0.3, floor=0.35, max_frac=0.08, margin=6):
         b = 0
         while b < lim and d[len(d) - 1 - b] < thr: b += 1
         return (a + margin if a >= 3 else 0), (b + margin if b >= 3 else 0)
-    l, r = band(dx, w); t, b = band(dy, h); return l, t, w - r, h - b
+    l, r = band(dx, w); t, b = band(dy, h); x0, y0, x1, y1 = l, t, w - r, h - b
+    cl, cr, ct, cb = corner_smear(img)                                                                   # a smear that covers only part of an edge (a corner wedge: the rotation leaves one corner without pixels) does not show in the whole-edge means above
+    return max(x0, cl), max(y0, ct), min(x1, w - cr), min(y1, h - cb)
+
+
+def corner_smear(img, thr=0.8, run=10, min_frac=0.03, max_frac=0.08, margin=6):
+    """(left, top, right, bottom) widths to cut for smears that cover only part of an edge: along the edge-to-centre direction, columns (or rows) whose last `run` or more pixels hardly change (max abs difference of neighbours < `thr` grey levels in every channel; real, even dark, noisy pixels change by several). Counted only when at least `min_frac` of the edge's columns do it (so a few flat columns of a dark picture do not), then cut by the deepest one found (capped at `max_frac`) plus `margin`."""
+    a = img.astype(np.float32)
+    def edge(a):                                                                                       # the bottom edge of a (H, W, C)
+        d = np.abs(np.diff(a, axis=0)).max(2) < thr; h, w = d.shape; lim = int(max_frac * h)
+        n = np.zeros(w, int); alive = np.ones(w, bool)
+        for k in range(1, lim + 1): alive &= d[h - k]; n += alive
+        hit = n >= run
+        if hit.mean() < min_frac: return 0
+        depth = int(n[hit].max()); zone = a[h + 1 - depth:]                                          # smooth sky also hardly changes along the edge: a smear is told by the columns differing from each other (streaks), which smooth content does not
+        if np.abs(np.diff(zone, axis=1)).max(2).mean() < 2.0: return 0
+        return min(depth + margin, lim)
+    return edge(a.transpose(1, 0, 2)[::-1]), edge(a[::-1]), edge(a.transpose(1, 0, 2)), edge(a)
 
 
 def order(rows, idx, G, test, seed):
