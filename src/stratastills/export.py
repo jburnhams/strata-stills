@@ -64,10 +64,51 @@ def _exif_of(item):
     return None
 
 
+def _app_segments(exif, icc):
+    """The JPEG application segments Pillow writes for `exif` (the Exif block, starting 'Exif\\0\\0') and `icc` (the profile, split into APP2 chunks of at most 65519 bytes): bytes to put after the JFIF segment."""
+    out = b''
+    if exif:
+        if not exif.startswith(b'Exif\0\0'): exif = b'Exif\0\0' + exif
+        out += b'\xff\xe1' + (len(exif) + 2).to_bytes(2, 'big') + exif
+    if icc:
+        chunks = [icc[i:i + 65519] for i in range(0, len(icc), 65519)]
+        for k, c in enumerate(chunks, 1): body = b'ICC_PROFILE\0' + bytes([k, len(chunks)]) + c; out += b'\xff\xe2' + (len(body) + 2).to_bytes(2, 'big') + body
+    return out
+
+
+NVJPEG_MIN_PIXELS = 10_000_000       # below this Pillow is as fast or faster (measured on the RTX 3060: a 2.6 MP picture 0.06 s with Pillow, 0.23 s with nvJPEG, whose fixed cost is about 0.2 s; 13 MP 0.31 s against 0.25 s, 16 MP 0.47 s against 0.25 s)
+
+
+def encode_jpeg_gpu(rgb, quality, exif=None, icc=None):
+    """The picture (float 0..1: a (H, W, 3) array, or a (3, H, W) tensor on the device) as JPEG bytes made by the card's encoder (nvJPEG through torchvision: 4:4:4, no Huffman optimisation, so a file about 1 % larger than Pillow's `optimize`, and decoded pixels within 3 levels of Pillow's at the same quality), with the Exif and ICC segments put after the JFIF one. None when the picture is under NVJPEG_MIN_PIXELS, there is no CUDA card, torchvision or nvJPEG, STRATASTILLS_NVJPEG=0, or anything fails: the caller writes with Pillow (the reference)."""
+    if os.environ.get('STRATASTILLS_NVJPEG', '1').strip().lower() in ('0', 'false', 'off', 'no'): return None
+    try:
+        from stratastills import gpu
+        shape = rgb.shape[-2:] if not isinstance(rgb, np.ndarray) else rgb.shape[:2]
+        if shape[0] * shape[1] < NVJPEG_MIN_PIXELS or not gpu.available() or gpu.dev().type != 'cuda': return None
+        from torchvision.io import encode_jpeg
+        t = gpu.torch_()
+        with gpu.slot():
+            x = rgb if isinstance(rgb, t.Tensor) else gpu.to_gpu(rgb)
+            u8 = (x.clamp(0, 1) * 255 + 0.5).to(t.uint8).contiguous(); data = bytes(encode_jpeg(u8, quality=int(quality)).cpu().numpy().tobytes()); del u8
+        if data[:2] != b'\xff\xd8': return None
+        i = 2
+        if data[2:4] == b'\xff\xe0': i = 4 + int.from_bytes(data[4:6], 'big')                                              # after the JFIF segment
+        return data[:i] + _app_segments(exif, icc) + data[i:]
+    except Exception:
+        return None
+
+
 def write_picture(path, rgb, fmt, quality=95, exif=None):
-    """Write the float picture: 16 bit TIFF, or JPEG at `quality` (an int; 'auto' is chosen by the caller from the 8-bit picture, see jpeg_quality)."""
+    """Write the float picture (an array, or for a JPEG also a (3, H, W) tensor on the device): 16 bit TIFF, or JPEG at `quality` (an int; 'auto' is chosen by the caller from the 8-bit picture, see jpeg_quality). The JPEG is made by the card's encoder when there is one (encode_jpeg_gpu), else by Pillow, the reference."""
     from PIL import Image, ImageFile
     ImageFile.MAXBLOCK = max(ImageFile.MAXBLOCK, 1 << 27)                                 # with optimize=True Pillow fails ("Suspension not allowed here") when the encoder's buffer is smaller than the file
+    if fmt != 'tiff':
+        data = encode_jpeg_gpu(rgb, quality, exif, _icc())
+        if data is not None:
+            with open(path, 'wb') as f: f.write(data)
+            return
+    if not isinstance(rgb, np.ndarray): from stratastills import gpu; rgb = gpu.to_numpy(rgb)
     if fmt == 'tiff':
         import tifffile
         icc = _icc(); tifffile.imwrite(path, (np.clip(rgb, 0, 1) * 65535 + 0.5).astype(np.uint16), photometric='rgb', compression='deflate', extratags=[(34675, 7, len(icc), icc, True)])
