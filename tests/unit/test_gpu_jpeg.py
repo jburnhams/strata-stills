@@ -34,9 +34,9 @@ def test_small_pictures_and_the_off_switch_use_pillow(tmp_path, monkeypatch):
 
 
 def test_the_card_encoder_writes_a_jpeg_close_to_pillows(tmp_path, monkeypatch):
-    t = gpu.torch_()
+    pytest.importorskip('torch'); pytest.importorskip('torchvision'); t = gpu.torch_()                                   # the other tests of this file need no torch
     if not t.cuda.is_available(): pytest.skip('no CUDA')
-    pytest.importorskip('torchvision'); gpu.use('cuda')
+    gpu.use('cuda')
     try:
         monkeypatch.setattr(X, 'NVJPEG_MIN_PIXELS', 0); img = rgb(256, 320, 3); a = str(tmp_path / 'gpu.jpg'); X.write_picture(a, img, 'jpeg', 95)
         monkeypatch.setenv('STRATASTILLS_NVJPEG', '0'); b = str(tmp_path / 'cpu.jpg'); X.write_picture(b, img, 'jpeg', 95)
@@ -52,7 +52,7 @@ def state():
 
 
 def test_the_picture_may_live_on_the_card_and_comes_back_when_asked():
-    gpu.use('cpu')
+    pytest.importorskip('torch'); gpu.use('cpu')
     try:
         st = state(); a = rgb(); st.rgb = a; assert st.dev is None and st.hw() == (96, 128)
         st.set_dev(gpu.to_gpu(a)); assert st._rgb is None and st.hw() == (96, 128) and np.array_equal(st.rgb, a)                  # downloaded on demand
@@ -63,7 +63,7 @@ def test_the_picture_may_live_on_the_card_and_comes_back_when_asked():
 
 def test_resize_on_the_card_equals_opencv_and_the_cpu_route_is_the_default():
     import cv2
-    gpu.use('cpu')
+    pytest.importorskip('torch'); gpu.use('cpu')
     try:
         a = rgb(120, 160); st = state(); st.rgb = a; st.scale = 0.75; PL._resize(st, 120, 90); assert st.dev is None and st.rgb.shape == (90, 120, 3)   # on the host: OpenCV
         ref = cv2.resize(a, (120, 90), interpolation=cv2.INTER_LANCZOS4); assert np.array_equal(st.rgb, ref)
