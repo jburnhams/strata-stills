@@ -64,22 +64,16 @@ def _detect(bgr):
     return _detector(bgr)
 
 
-def _cache_file(): return os.path.join(home(), 'nsfw_cache.json')
+def _store():
+    from stratastills import nsfw_store
+    return nsfw_store.get()                         # the files (default) or, once settings.database_url() is set, schema `photos` (nsfw_store.py)
 
 
 def _load():
     global _loaded, _cache
     with _lock:
         if _loaded: return
-        try: _cache = json.load(open(_cache_file()))
-        except (OSError, ValueError): _cache = {}
-        _loaded = True
-
-
-def _save():
-    os.makedirs(home(), exist_ok=True); tmp = f'{_cache_file()}.{os.getpid()}.{threading.get_ident()}.tmp'
-    with open(tmp, 'w') as f: json.dump(_cache, f)
-    os.replace(tmp, _cache_file())
+        _cache = _store().load(); _loaded = True
 
 
 def reset():
@@ -104,47 +98,40 @@ def score(path):
         for d in _detect(bgr) or []:
             if d.get('class') in EXPOSED and float(d.get('score', 0)) > best[0]: best = (float(d['score']), d['class'])
         res = best
-    with _lock: _cache[k] = list(res); _save()
+    with _lock: _cache[k] = list(res); _store().put(k, list(res), _cache)
     return res
 
 
-def _allowed_file(): return os.path.join(home(), 'nsfw_allowed.json')
-
-
 def _allowed():
-    try: return json.load(open(_allowed_file()))
-    except (OSError, ValueError): return {}
+    """The keys of the cache the person has cleared (a set; scripts test `_key(path) in _allowed()`)."""
+    _load(); return _store().allowed_among(list(_cache))
 
 
 def allow(path, yes=True):
     """Review decision: let this picture (as it is now: size and time stamp) through the filter, or put it back (yes=False)."""
-    with _lock:
-        a = _allowed(); k = _key(path)
-        if yes: a[k] = int(time.time())
-        else: a.pop(k, None)
-        os.makedirs(home(), exist_ok=True); tmp = f'{_allowed_file()}.{os.getpid()}.{threading.get_ident()}.tmp'
-        with open(tmp, 'w') as f: json.dump(a, f)
-        os.replace(tmp, _allowed_file())
+    with _lock: _store().set_allowed(_key(path), yes)
 
 
 def flagged(path, thr=None):
     """None if the picture may be used, else {'path', 'score', 'class', 'threshold'}. Always None with the filter off, and for a picture the person cleared on the review page (`allow`)."""
     if not enabled(): return None
     thr = threshold() if thr is None else thr; s, c = score(path)
-    if s >= thr and _key(path) in _allowed(): return None
+    if s >= thr and _store().allowed_among([_key(path)]): return None
     return dict(path=path, score=round(s, 3), cls=c, threshold=thr) if s >= thr else None
 
 
 def review():
     """Every picture the cache has seen that scores at or above the threshold, for the review page: [{path, score, cls, allowed}] by score, highest first. Files that changed or went are not listed."""
-    _load(); thr = threshold(); al = _allowed(); out = []
+    _load(); thr = threshold(); out = []
     for k, (sc, cls) in list(_cache.items()):
         model, _, rest = k.partition('|')
         if model != MODEL or sc < thr: continue
         path, size, mt = rest.rsplit('|', 2)
         try: cur = _key(path)
         except OSError: continue
-        if cur == k: out.append(dict(path=path, score=round(sc, 3), cls=cls, allowed=k in al))
+        if cur == k: out.append(dict(path=path, score=round(sc, 3), cls=cls, allowed=False))
+    al = _store().allowed_among([r['path'] and _key(r['path']) for r in out])                                  # one lookup for all flagged pictures
+    for r in out: r['allowed'] = _key(r['path']) in al
     return sorted(out, key=lambda r: -r['score'])
 
 
@@ -155,9 +142,7 @@ def _record(info):
     try:
         from loguru import logger; logger.warning('nudity filter: skipped {path} ({cls} {score} >= {threshold})', **info)
     except ImportError: print('nudity filter: skipped {path} ({cls} {score} >= {threshold})'.format(**info), file=sys.stderr)
-    try:
-        os.makedirs(home(), exist_ok=True)
-        with open(os.path.join(home(), 'nsfw_skipped.jsonl'), 'a', encoding='utf8') as f: f.write(json.dumps(dict(info, t=int(time.time()), reason='nudity')) + '\n')
+    try: _store().record_skip(dict(info, t=int(time.time()), reason='nudity'))
     except OSError: pass
 
 
