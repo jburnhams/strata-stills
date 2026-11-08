@@ -196,6 +196,7 @@ class ProjectSource(Base):
     root: Mapped[str] = mapped_column(sa.String(64))
     relpath: Mapped[str]
     added: Mapped[datetime | None] = mapped_column(default=None)
+    original_path: Mapped[str | None] = mapped_column(default=None)                  # the path as the project stored it (a Windows UNC path, say); root + relpath is where it is on this machine
     __table_args__ = (UniqueConstraint('project_id', 'root', 'relpath'),)
 
 
