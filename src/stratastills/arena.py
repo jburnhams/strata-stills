@@ -4,7 +4,7 @@ Pure logic (no server, no images): pair choice, Elo and Bradley-Terry ratings. T
 
 Pool: {picture: {variant: {'file': relative path, 'hash': str}}}; a picture is offered only with the variants it has, and two variants whose pictures are identical (same hash) are never paired (a picture with no face gets the same pixels from two variants that differ only for faces).
 Vote: {'pic', 'a', 'b' (variants as shown left and right), 'winner': 'a' | 'b' | 'tie', 't' (unix time), 'ms' (time to decide)}."""
-import json, math, os, random
+import json, math, os, random, re
 
 START = 1500.0
 K = 24.0
@@ -103,9 +103,9 @@ def head_to_head(votes, retired=()):
     return t
 
 
-def pick_pair(pool, votes, rng, retired=(), want=None, blocked=()):
-    """Choose what to show next: a picture and two of its variants (-> (picture, left, right), left and right already shuffled), or None when nothing can be offered. Pictures with the fewest votes come first (spreading the votes over the whole pool), then among a picture's pairs the one whose variants have been compared the least in total, ties broken at random; `want` (a set of variant names) limits pairs to those containing one of them (a new variant being tested)."""
-    seen = {}; pool = {pic: {n: e for n, e in vs.items() if (pic, n) not in blocked} for pic, vs in pool.items()}                  # a variant with an open alert is not offered
+def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None):
+    """Choose what to show next: a picture and two of its variants (-> (picture, left, right), left and right already shuffled), or None when nothing can be offered. Pictures with the fewest votes come first (spreading the votes over the whole pool), then among a picture's pairs the one whose variants have been compared the least in total, ties broken at random; `want` (a set of variant names) limits pairs to those containing one of them (a new variant being tested); `only` (a set of picture names, a named set such as the hard cases) limits the pictures."""
+    seen = {}; pool = {pic: {n: e for n, e in vs.items() if (pic, n) not in blocked} for pic, vs in pool.items() if only is None or pic in only}                  # a variant with an open alert is not offered
     for v in votes: seen[v['pic']] = seen.get(v['pic'], 0) + 1
     pair_n = {}
     for v in votes: k = frozenset((v['a'], v['b'])); pair_n[k] = pair_n.get(k, 0) + 1
@@ -117,3 +117,12 @@ def pick_pair(pool, votes, rng, retired=(), want=None, blocked=()):
     low = min(seen.get(p, 0) for p, _ in pics); cand = [(p, ps) for p, ps in pics if seen.get(p, 0) == low]; pic, pairs = cand[rng.randrange(len(cand))]
     best = min(pair_n.get(frozenset(p), 0) for p in pairs); a, b = rng.choice([p for p in pairs if pair_n.get(frozenset(p), 0) == best])
     return (pic, a, b) if rng.random() < 0.5 else (pic, b, a)
+
+
+def load_set(root, name):
+    """The picture names of the named set `<arena dir>/sets/<name>.json` (a JSON list of names, or an object with 'pics'), or None for no name. Sets live beside the pool and are private like it (the names are the person's shoots); an unknown or malformed name is a ValueError."""
+    if not name: return None
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', name): raise ValueError(f'bad set name {name!r}')
+    f = os.path.join(root, 'sets', f'{name}.json')
+    if not os.path.isfile(f): raise ValueError(f'no arena set {name!r}')
+    d = json.load(open(f, encoding='utf8')); return set(d['pics'] if isinstance(d, dict) else d)

@@ -1,5 +1,5 @@
 """Make the pictures of the rating arena (/arena/ on the server): for pictures from shoots the models were not trained on, every version in scripts/arena_variants.py (the person's Lightroom final, our neutral picture, auto1, auto2 ...), all on the final's framing, at DISPLAY px on the long side, into out/arena/img/<picture>/<version>.jpg, with out/arena/pool.json listing them (the server reads it as it grows, so voting can start before this finishes).
-  python scripts/build_arena.py [--n 60] [--seed 7] [--redo auto3] [--retire NAME] [--unretire NAME]
+  python scripts/build_arena.py [--n 60] [--seed 7] [--redo auto3] [--pic 2017-08-19_DSC04866] [--retire NAME] [--unretire NAME]
 Pictures are taken round-robin over the held-out shoots in a fixed random order, so the pool covers the whole range and a later run continues where this one stopped. Resumable and incremental: a version is made again only when its code (arena_variants.py, lr_look.py ...) changed or with --redo; a new version in VARIANTS is made for every picture already in the pool. Needs the pictures' neutral develops (cached in out/cache/ by build_lr_report.py, made here when missing: 20-40 s each).
 PRIVATE: your own pictures, never public."""
 import argparse, hashlib, json, os, sys, tempfile, time, shutil, types
@@ -63,7 +63,7 @@ def save_json(path, obj):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--n', type=int, default=60, help='how many pictures to have in the pool at the end'); ap.add_argument('--seed', type=int, default=7)
-    ap.add_argument('--redo', action='append', default=[]); ap.add_argument('--retire', action='append', default=[]); ap.add_argument('--unretire', action='append', default=[]); ap.add_argument('--rebuild', action='store_true')
+    ap.add_argument('--redo', action='append', default=[]); ap.add_argument('--pic', action='append', default=[], help='make every version of this picture again (repeatable)'); ap.add_argument('--retire', action='append', default=[]); ap.add_argument('--unretire', action='append', default=[]); ap.add_argument('--rebuild', action='store_true')
     ap.add_argument('--serial', action='store_true', help='one picture after the other in this thread (the reference the scheduler is compared with)'); ap.add_argument('--gpu-workers', type=int, help='chunks developed at a time (default 2; gpu.slot() keeps the card memory in bounds; STRATASTILLS_ARENA_GPU_WORKERS)'); ap.add_argument('--cpu-workers', type=int, help='workers making versions besides (default: half the cores, at most 6; STRATASTILLS_ARENA_CPU_WORKERS)'); ap.add_argument('--chunk', type=int, default=3, help='pictures per neutral develop job')
     a = ap.parse_args(); root = settings.arena_dir(); os.makedirs(os.path.join(root, 'img'), exist_ok=True); say = lambda m: print(m, flush=True)
     vf = os.path.join(root, 'variants.json'); var = json.load(open(vf)) if os.path.exists(vf) else {'retired': []}
@@ -75,7 +75,7 @@ def main():
     gone = [k for k in pool if k not in valid]
     if gone: pool = {k: v for k, v in pool.items() if k in valid}; save_json(pf, pool); say(f'dropped {len(gone)} pictures from the pool: no longer in the dataset (the nudity filter flags them): {gone}')           # votes on them stay in votes.jsonl but the server no longer offers them
     for i, sid in order(rows, idx, G, test, a.seed):
-        have = pool.get(sid, {}); need = [n for n in AV.VARIANTS if n in a.redo or n not in have or have[n].get('key') != keys[n]]
+        have = pool.get(sid, {}); need = [n for n in AV.VARIANTS if n in a.redo or sid in a.pic or n not in have or have[n].get('key') != keys[n]]
         if sid in pool or len(pool) + len([t for t in todo if t[1] not in pool]) < a.n:
             if need: todo.append((i, sid, need))
     say(f'{len(pool)} pictures in the pool; {len(todo)} to make or update')

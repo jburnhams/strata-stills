@@ -78,6 +78,8 @@ def test_the_arena_offers_blind_pairs_records_votes_and_rates(client, tmp_path, 
     q = client.get('/api/arena/next').json(); assert client.post('/api/arena/vote', json=dict(token=q['token'], choice='sideways')).status_code == 400
     r = client.get('/api/arena/ratings').json(); assert r['votes'] == 1 and {v['name'] for v in r['variants']} == {'lr', 'auto1'} and r['head_to_head'][0]['ties'] == 0
     assert client.post('/api/arena/undo').json()['votes'] == 0 and client.post('/api/arena/undo').status_code == 404
+    (arena / 'sets').mkdir(); (arena / 'sets' / 'hard.json').write_text('["p1"]'); (arena / 'sets' / 'none.json').write_text('["p9"]')
+    assert client.get('/api/arena/next?set=hard').status_code == 200 and client.get('/api/arena/next?set=none').status_code == 404 and client.get('/api/arena/next?set=missing').status_code == 404
 
 
 def test_arena_alerts_hide_a_version_until_resolved_and_are_listed_with_metadata(client, tmp_path, monkeypatch):

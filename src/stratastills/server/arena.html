@@ -21,7 +21,8 @@ main{flex:1;min-height:0;display:flex;gap:6px;padding:0 6px 6px}
 const $=id=>document.getElementById(id);let cur=null,nxt=null,t0=0,busy=false;
 async function get(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.status);return r.json()}
 const pre=p=>new Promise(res=>{let n=0;const d=()=>{if(++n==2)res()};for(const s of [p.left,p.right]){const i=new Image();i.onload=i.onerror=d;i.src=s}});
-async function fetchNext(){const p=await get('../api/arena/next');await pre(p);return p}
+const Q=(()=>{const u=new URLSearchParams(location.search),o=new URLSearchParams();for(const k of ['set','want'])if(u.get(k))o.set(k,u.get(k));const q=o.toString();return q?'?'+q:''})();
+async function fetchNext(){const p=await get('../api/arena/next'+Q);await pre(p);return p}
 async function show(){
   try{cur=nxt||await fetchNext();nxt=null}catch(e){$('m').hidden=true;$('msg').hidden=false;$('msg').textContent=String(e.message||e);return}
   resetAlerts();$('msg').hidden=true;$('m').hidden=false;$('li').src=cur.left;$('ri').src=cur.right;t0=Date.now();$('cnt').textContent=cur.votes+' votes, '+cur.pool+' pictures';

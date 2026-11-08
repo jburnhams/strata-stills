@@ -71,12 +71,22 @@ def neutral(raws, work, say, rebuild=False):
 
 
 def turn_to_ref(c, ref):
-    """`c` turned a quarter if its landscape/portrait does not match `ref`'s (a crop cannot swap them, so Lightroom turned the picture, and some raws, the NEX-5N's among them, say Orientation 1 regardless: squeezing the frame to `ref`'s shape would distort it). Which way: the one whose features register on `ref` (the catalogue's own orientation is not in the exported files); `c` itself when neither does."""
-    if (c.shape[1] > c.shape[0]) == (ref.shape[1] > ref.shape[0]): return c
+    """`c` turned the way it lies in `ref` (Lightroom may have turned the picture, and some raws, the NEX-5N's among them, say Orientation 1 regardless). When the landscape/portrait of the two differ, a crop cannot explain it, so `c` must be turned a quarter; when either is (nearly) square, the shapes say nothing and `c` as it is competes with both quarter-turns. Which: the candidate whose features register on `ref` without a further turn (the catalogue's own orientation is not in the exported files), else the one whose coarse structure matches best (soft or heavily cropped pictures do not register)."""
+    sq = lambda x: abs(np.log(x.shape[1] / x.shape[0])) < 0.05
+    if not (sq(c) or sq(ref)) and (c.shape[1] > c.shape[0]) == (ref.shape[1] > ref.shape[0]): return c
     H, W = ref.shape[:2]; k = 1500 / max(W, H); g = lambda x: cv2.cvtColor(cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
-    cands = [cv2.rotate(c, r) for r in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)]; reg = [BR.register(g(ref), g(x), inliers=True) for x in cands]
-    score = [n if M is not None and abs(M[0, 0] - 1) <= 0.08 and abs(M[1, 0]) <= 0.05 else 0 for M, n in reg]                      # register allows any rotation: a candidate it lays on `ref` only by another half-turn is the wrong way up
-    return cands[int(score[1] > score[0])] if max(score) >= 20 else c
+    cands = [cv2.rotate(c, r) for r in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)]
+    if sq(c) or sq(ref): cands = [c] + cands
+    reg = [BR.register(g(ref), g(x), inliers=True) for x in cands]
+    score = [n if M is not None and abs(M[0, 0] - 1) <= 0.08 and abs(M[1, 0]) <= 0.05 else 0 for M, n in reg]                      # register allows any rotation: a candidate it lays on `ref` only by another turn is the wrong way up
+    if max(score) >= 20: return cands[int(np.argmax(score))]
+    return cands[int(np.argmax([structure_corr(g(ref), g(x)) for x in cands]))]
+
+
+def structure_corr(a, b, n=64):
+    """Correlation of the coarse edges (Laplacian of a blurred n x n copy) of two gray pictures of one size: about 1 for the same picture, about 0 for one turned a quarter."""
+    e = lambda x: (lambda y: (y - y.mean()) / (y.std() + 1e-6))(cv2.Laplacian(cv2.GaussianBlur(cv2.resize(x, (n, n), interpolation=cv2.INTER_AREA).astype(np.float32), (0, 0), 1.5), cv2.CV_32F))
+    return float((e(a) * e(b)).mean())
 
 
 def to_final(im, row, orientation, ref, with_rect=False):

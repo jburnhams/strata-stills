@@ -43,3 +43,13 @@ def test_pick_pair_spreads_over_pictures_skips_identical_pictures_and_hides_the_
 def test_votes_round_trip_through_the_file(tmp_path):
     f = str(tmp_path / 'a' / 'votes.jsonl'); arena.append_vote(f, dict(pic='p', a='x', b='y', winner='a', t=1)); open(f, 'a').write('{"half')
     assert arena.load_votes(f) == [dict(pic='p', a='x', b='y', winner='a', t=1)] and arena.load_votes(f + '.none') == []
+
+
+def test_pick_pair_only_offers_pictures_of_the_named_set_and_load_set_reads_it(tmp_path):
+    import json, pytest
+    e = lambda h: dict(file='x', hash=h); pool = {p: {'auto1': e(p + '1'), 'lightroom': e(p + '2')} for p in ('p1', 'p2', 'p3')}; rng = random.Random(1)
+    assert {arena.pick_pair(pool, [], rng, only={'p2'})[0] for _ in range(20)} == {'p2'} and arena.pick_pair(pool, [], rng, only={'nope'}) is None
+    (tmp_path / 'sets').mkdir(); (tmp_path / 'sets' / 'hard.json').write_text(json.dumps(['p1', 'p3'])); (tmp_path / 'sets' / 'obj.json').write_text(json.dumps({'pics': ['p2']}))
+    assert arena.load_set(str(tmp_path), 'hard') == {'p1', 'p3'} and arena.load_set(str(tmp_path), 'obj') == {'p2'} and arena.load_set(str(tmp_path), '') is None
+    for bad in ('missing', '../x'):
+        with pytest.raises(ValueError): arena.load_set(str(tmp_path), bad)
