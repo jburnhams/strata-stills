@@ -67,10 +67,13 @@ def plan(hashed, meta, roots, read_text=None):
         srt = None
         if g.get('.srt') and len(g['.srt']) == 1:
             try: srt = parse_srt(read_text(g['.srt'][0]['path']))
-            except OSError as e: problems.append(f'{key[2]}: SRT unreadable ({e})')
-            if srt is None: problems.append(f'{key[2]}: no frames in the SRT')
+            except OSError as e: problems.append(f'FATAL {key[2]}: SRT unreadable ({e})')
+            if srt is None and not any(x.startswith(f'FATAL {key[2]}: SRT') for x in problems): problems.append(f'FATAL {key[2]}: no frames in the SRT')
         tags = tags_of.get(mp4[0]['sha256'])
-        if tags is None: problems.append(f'{key[2]}: no exiftool record for the MP4')
+        if tags is None: problems.append(f'FATAL {key[2]}: no exiftool record for the MP4 (a metadata row written without it would stay incomplete)')
+        same = next((v for v in videos if v['sha256'] == mp4[0]['sha256']), None)
+        if same is not None:                                                               # identical MP4 bytes under another path: one photo, every path a file row
+            same['files'] += files; problems.append(f'{key[2]}: same MP4 bytes as {same["stem"]}, one photo with both paths'); continue
         videos.append(dict(key=key, stem=key[2], sha256=mp4[0]['sha256'], files=files, tags=tags or {}, srt=srt, meta=columns(tags or {}, srt)))
     counts = dict(photo=len(videos), file=sum(len(v['files']) for v in videos), analysis=sum(1 for v in videos if v['srt']), problems=len(problems))
     return dict(videos=videos, problems=problems, counts=counts)
@@ -92,7 +95,7 @@ def write(session, p):
     if fatal: raise VideoMismatch('refusing to write a plan with a FATAL problem: ' + '; '.join(fatal))
     shas = [v['sha256'] for v in p['videos']]; ids = {}
     for c in _chunks(shas): ids.update({s: i for s, i in session.execute(select(Photo.sha256, Photo.id).where(Photo.sha256.in_(c)))})
-    new = [Photo(sha256=v['sha256'], stem=v['stem'], kind='video') for v in p['videos'] if v['sha256'] not in ids]; session.add_all(new); session.flush(); ids.update({x.sha256: x.id for x in new})
+    new = list({v['sha256']: Photo(sha256=v['sha256'], stem=v['stem'], kind='video') for v in p['videos'] if v['sha256'] not in ids}.values()); session.add_all(new); session.flush(); ids.update({x.sha256: x.id for x in new})
     by_path = {}
     for c in _chunks({f['relpath'] for v in p['videos'] for f in v['files']}):
         for f in session.scalars(select(File).where(File.relpath.in_(c))): by_path.setdefault((f.root, f.relpath), []).append(f)

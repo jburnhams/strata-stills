@@ -52,3 +52,29 @@ def test_write_is_idempotent_and_keeps_the_telemetry(db_session):
     assert {(f.role, f.tag, f.sha256) for f in s.scalars(select(File))} == {('video', None, A), ('sidecar', 'srt', B), ('sidecar', 'lrf', C)} and all(f.current for f in s.scalars(select(File)))
     a = s.scalars(select(Analysis)).one(); assert (a.kind, a.input_key, a.data['frames'], a.data['columns']['iso']) == ('dji_srt', B, 2, [340.0, 400.0]) and a.file_id is not None
     assert s.scalar(select(func.count()).select_from(PhotoMeta)) == 1 and s.scalars(select(PhotoMeta)).one().dji['srt_frames'] == 2
+
+
+def test_a_missing_exiftool_record_or_srt_gap_is_fatal_and_nothing_is_written(db_session):
+    p = V.plan(recs(), [], [ROOT], read_text=lambda path: SRT)
+    assert any(x.startswith('FATAL') and 'no exiftool record' in x for x in p['problems']) and p['counts']['problems'] >= 1
+    with pytest.raises(V.VideoMismatch): V.write(db_session, p)
+    q = V.plan(recs(), [dict(sha256=A, tags=TAGS)], [ROOT], read_text=lambda path: 'no frames here')
+    assert any(x.startswith('FATAL') and 'no frames' in x for x in q['problems']) and db_session.scalar(select(func.count()).select_from(Photo)) == 0
+
+    def boom(path): raise OSError('gone')
+    assert any(x.startswith('FATAL') and 'unreadable' in x for x in V.plan(recs(), [dict(sha256=A, tags=TAGS)], [ROOT], read_text=boom)['problems'])
+
+
+def test_identical_mp4_bytes_under_two_paths_are_one_photo_with_two_files(db_session):
+    d = f'{ROOT}/20250402 - Hazelmere'; r = recs()[:3] + [dict(path=f'{d}/DJI_copy.MP4', sha256=A, size=10, mtime_ns=5)]
+    p = V.plan(r, [dict(sha256=A, tags=TAGS)], [ROOT], read_text=lambda path: SRT)
+    assert p['counts']['photo'] == 1 and p['counts']['file'] == 4 and not any(x.startswith('FATAL') for x in p['problems'])
+    assert V.write(db_session, p) == dict(photo=1, file=4, photo_meta=1, analysis=1) and db_session.scalar(select(func.count()).select_from(Photo)) == 1
+
+
+def test_hash_to_jsonl_writes_absolute_paths(tmp_path, monkeypatch):
+    import importlib.util, json, os
+    spec = importlib.util.spec_from_file_location('h2j', os.path.join(os.path.dirname(__file__), '..', '..', '..', 'scripts', 'hash_to_jsonl.py')); h2j = importlib.util.module_from_spec(spec); spec.loader.exec_module(h2j)
+    (tmp_path / 'd').mkdir(); (tmp_path / 'd' / 'a.mp4').write_bytes(b'x'); monkeypatch.chdir(tmp_path); monkeypatch.setattr(h2j, 'lower_priority', lambda: None)
+    monkeypatch.setattr('sys.argv', ['hash_to_jsonl.py', 'out.jsonl', 'd']); assert h2j.main() == 0
+    assert os.path.isabs(json.loads(open(tmp_path / 'out.jsonl').readline())['path'])

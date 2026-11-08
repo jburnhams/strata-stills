@@ -1,6 +1,6 @@
 """SHA-256 of files into a resumable JSONL (the format of scripts/load_hashes.py: path, sha256, size, mtime_ns), read-only, at nice 15 and idle I/O. For files that are not the raws of the catalogue (videos and their sidecars, say); the raws' own job was scripts/hash_new.py.
   python scripts/hash_to_jsonl.py OUT.jsonl FOLDER [FOLDER ...] [--ext .mp4,.lrf,.srt] [--recursive]
-Resumable: paths already in OUT are skipped. The extension test is case-insensitive."""
+The folders are made absolute (the importers compare with absolute source roots). Resumable: paths already in OUT are skipped. The extension test is case-insensitive."""
 import argparse, hashlib, json, os, shutil, subprocess, sys
 
 
@@ -30,7 +30,7 @@ def files(folders, exts, recursive):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('out'); ap.add_argument('folders', nargs='+'); ap.add_argument('--ext', default='.mp4,.lrf,.srt'); ap.add_argument('--recursive', action='store_true')
-    a = ap.parse_args(); exts = {e if e.startswith('.') else '.' + e for e in a.ext.lower().split(',')}; done = set()
+    a = ap.parse_args(); a.folders = [os.path.abspath(os.path.expanduser(f)) for f in a.folders]; exts = {e if e.startswith('.') else '.' + e for e in a.ext.lower().split(',')}; done = set()
     if os.path.exists(a.out):
         for ln in open(a.out, encoding='utf8'):
             try: done.add(json.loads(ln)['path'])
