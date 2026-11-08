@@ -72,10 +72,10 @@ class PhotoMeta(Base):
     gps_lat: Mapped[float | None] = mapped_column(default=None)
     gps_lon: Mapped[float | None] = mapped_column(default=None)
     gps_alt: Mapped[float | None] = mapped_column(default=None)
-    dji: Mapped[dict | None] = mapped_column(sa.JSON, default=None)                 # meta.dji_fields (gimbal, flight attitude, relative altitude ...)
+    dji: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)                 # meta.dji_fields (gimbal, flight attitude, relative altitude ...)
     is_nadir: Mapped[bool | None] = mapped_column(default=None)
-    exif_raw: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
-    xmp_raw: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
+    exif_raw: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
+    xmp_raw: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
     read_at: Mapped[datetime] = _now()
 
 
@@ -93,7 +93,7 @@ class Analysis(Base):
     file_id: Mapped[int | None] = mapped_column(ForeignKey('file.id'), default=None)
     score: Mapped[float | None] = mapped_column(default=None)
     label: Mapped[str | None] = mapped_column(default=None)
-    data: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
+    data: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
     created_at: Mapped[datetime] = _now()
     __table_args__ = (UniqueConstraint('photo_id', 'kind', 'producer', 'producer_version', 'input_key'),)
 
@@ -109,7 +109,7 @@ class Detection(Base):
     w: Mapped[float]
     h: Mapped[float]
     score: Mapped[float | None] = mapped_column(default=None)
-    data: Mapped[dict | None] = mapped_column(sa.JSON, default=None)                 # e.g. the face's median Lab in the camera preview and in the final
+    data: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)                 # e.g. the face's median Lab in the camera preview and in the final
     person_id: Mapped[int | None] = mapped_column(default=None)                      # reserved for people identities
 
 
@@ -151,8 +151,8 @@ class LightroomEdit(Base):
     id: Mapped[int] = mapped_column(primary_key=True, init=False)
     photo_id: Mapped[int] = mapped_column(ForeignKey('photo.id'), index=True)
     final_file_id: Mapped[int | None] = mapped_column(ForeignKey('file.id'), default=None)
-    settings: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
-    crop: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
+    settings: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
+    crop: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
     error: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = _now()
 
@@ -168,14 +168,14 @@ class Render(Base):
     kind: Mapped[str] = mapped_column(sa.String(16))                                 # generated | preview | detail | arena
     variant: Mapped[str | None] = mapped_column(default=None)
     preset: Mapped[str | None] = mapped_column(default=None)
-    stages: Mapped[list | None] = mapped_column(sa.JSON, default=None)
+    stages: Mapped[list | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
     summary: Mapped[str | None] = mapped_column(default=None)
     out_w: Mapped[int | None] = mapped_column(default=None)
     out_h: Mapped[int | None] = mapped_column(default=None)
     bytes: Mapped[int | None] = mapped_column(sa.BigInteger, default=None)
     quality: Mapped[int | None] = mapped_column(default=None)
     path: Mapped[str | None] = mapped_column(default=None)
-    info: Mapped[dict | None] = mapped_column(sa.JSON, default=None)                 # the rest of the sidecar JSON as written
+    info: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)                 # the rest of the sidecar JSON as written
     created_at: Mapped[datetime] = _now()
     __table_args__ = (UniqueConstraint('kind', 'cache_key'),)
 
@@ -269,7 +269,7 @@ class ArenaVote(Base):
     voter: Mapped[str | None] = mapped_column(default=None)
     undone_at: Mapped[datetime | None] = mapped_column(default=None)
     legacy_key: Mapped[str | None] = mapped_column(sa.String(40), unique=True, default=None)
-    raw: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
+    raw: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
 
 
 class ArenaFlag(Base):
@@ -299,7 +299,7 @@ class ArenaFlagEvent(Base):
     status: Mapped[str | None] = mapped_column(default=None)
     note: Mapped[str | None] = mapped_column(default=None)
     legacy_key: Mapped[str | None] = mapped_column(sa.String(40), unique=True, default=None)
-    raw: Mapped[dict | None] = mapped_column(sa.JSON, default=None)
+    raw: Mapped[dict | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
 
 
 class ReportFlag(Base):
@@ -308,7 +308,7 @@ class ReportFlag(Base):
     report: Mapped[str] = mapped_column(sa.String(32), primary_key=True)
     pic: Mapped[str] = mapped_column(primary_key=True)
     rating: Mapped[str] = mapped_column(sa.String(16), server_default='', default='')
-    reasons: Mapped[list | None] = mapped_column(sa.JSON, default=None)
+    reasons: Mapped[list | None] = mapped_column(sa.JSON(none_as_null=True), default=None)
     note: Mapped[str] = mapped_column(server_default='', default='')
     status: Mapped[str] = mapped_column(sa.String(16), server_default='open', default='open')
     first_at: Mapped[datetime | None] = mapped_column(default=None)
