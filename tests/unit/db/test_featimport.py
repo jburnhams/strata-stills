@@ -35,7 +35,8 @@ def test_plan_proves_the_order_and_names_every_column():
 
 def test_a_matrix_in_the_wrong_order_is_fatal_and_so_is_an_unproven_idx():
     p = F.plan(CAT, H, TAGS, arrays(iso=(400, 100)), KEYS); assert any(x.startswith('FATAL') and 'row order' in x for x in p['problems']) and p['counts']['clip_labels'] == 0
-    a = arrays(); a['fit']['idx'] = np.array([1, 0]); q = F.plan(CAT, H, TAGS, a, KEYS); assert any(x.startswith('FATAL') and 'fit.npz' in x for x in q['problems'])
+    a = arrays(); a['fit']['idx'] = np.array([0, 7]); q = F.plan(CAT, H, TAGS, a, KEYS); assert any(x.startswith('FATAL') and 'fit.npz' in x and 'outside' in x for x in q['problems'])
+    a = arrays(); a['clip']['idx'] = np.array([1, 1]); assert any('appears twice' in x for x in F.plan(CAT, H, TAGS, a, KEYS)['problems'])
 
 
 def test_write_is_idempotent_and_a_regenerated_file_is_a_new_row(db_session):
@@ -44,3 +45,24 @@ def test_write_is_idempotent_and_a_regenerated_file_is_a_new_row(db_session):
     assert s.scalar(select(func.count()).select_from(Analysis)) == 10
     assert F.write(s, F.plan(CAT, H, TAGS, arrays(), dict(KEYS, **{'meta.npz': 'new'})))['exif_features'] == 2 and s.scalar(select(func.count()).select_from(Analysis).where(Analysis.kind == 'exif_features')) == 4
     with pytest.raises(F.FeatureMismatch): F.write(s, F.plan(CAT, H, TAGS, arrays(iso=(400, 100)), KEYS))
+
+
+def test_each_matrix_is_read_through_its_own_row_map():
+    a = arrays(); a['features'].update(idx=np.array([1, 0]), X=a['features']['X'][::-1].copy(), F=a['features']['F'][::-1].copy(), C=a['features']['C'][::-1].copy())          # features rows in the order of their idx; meta stays in catalogue order
+    a['clip'].update(idx=np.array([1]), labels=np.array([[.5, .5]], np.float32))                                                                                              # clip has only catalogue row 1
+    a['fit'].update(idx=np.array([1, 0]), params=a['fit']['params'][::-1].copy() * np.array([[1], [2]], np.float32), decoded=a['fit']['decoded'], before=a['fit']['before'], after=a['fit']['after'])
+    p = F.plan(CAT, H, TAGS, a, KEYS); assert p['counts']['problems'] == 0, p['problems']
+    by = lambda kind: {r['sha256']: r['data'] for r in p['rows'][kind]}
+    assert by('exif_features')['a' * 64]['values'][0] == 100.0 and by('exif_features')['b' * 64]['values'][0] == 400.0                                                     # meta row c is catalogue row c
+    assert by('look_features')['a' * 64]['values'][1] == 8.0 and by('look_features')['b' * 64]['values'][1] == pytest.approx(2.8)                                          # features row i is catalogue row idx[i]
+    assert list(by('clip_labels')) == ['b' * 64] and p['counts']['clip_labels'] == 1                                                                                          # a photo the matrix has no row for gets no row
+    assert by('lr_fit')['b' * 64]['params'] == [1.0, 1.0, 1.0] and by('lr_fit')['a' * 64]['params'] == [2.0, 2.0, 2.0]
+
+
+def test_a_row_that_cannot_be_checked_is_fatal_not_skipped():
+    tags = dict(TAGS); del tags[CAT[2]['raw']]                                                            # no exiftool record for the second picture
+    p = F.plan(CAT, H, tags, arrays(), KEYS); assert any(x.startswith('FATAL') and 'no exiftool record' in x for x in p['problems']) and p['counts']['clip_labels'] == 0
+    a = arrays(); a['meta']['M'][1][0] = np.nan                                                          # one side absent, the other present: a mismatch, not a skip
+    assert any(x.startswith('FATAL') and 'differ' in x for x in F.plan(CAT, H, TAGS, a, KEYS)['problems'])
+    t2 = dict(TAGS); t2[CAT[2]['raw']] = dict(TAGS[CAT[2]['raw']], **{'ExifIFD:ISO': None}); b = arrays(); b['meta']['M'][1][0] = np.nan; b['features']['X'][1][0] = np.nan     # the second picture has no ISO on either side: agreed; the other rows and columns still prove the order
+    assert F.plan(CAT, H, t2, b, KEYS)['counts']['problems'] == 0
