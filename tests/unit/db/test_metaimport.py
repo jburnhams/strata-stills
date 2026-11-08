@@ -37,3 +37,15 @@ def test_write_is_idempotent_leaves_existing_rows_and_needs_the_photos(db_sessio
     assert M.write(s, p) == dict(photo_meta=2, already=0) and M.write(s, p) == dict(photo_meta=0, already=2)
     m = s.scalars(select(PhotoMeta).where(PhotoMeta.make == 'SONY')).one(); assert m.exif_raw['IFD0:Model'] == 'NEX-5N' and m.xmp_raw == {'XMP-xmp:Rating': 3} and s.scalar(select(func.count()).select_from(PhotoMeta)) == 2
     m.make = 'EDITED'; s.commit(); assert M.write(s, p)['photo_meta'] == 0 and s.get(PhotoMeta, m.photo_id).make == 'EDITED'                         # a rerun does not overwrite
+
+
+def test_gps_is_signed_from_the_refs_or_the_composite():
+    c = M.columns({'GPS:GPSLatitude': 33.9, 'GPS:GPSLatitudeRef': 'S', 'GPS:GPSLongitude': 18.4, 'GPS:GPSLongitudeRef': 'W', 'GPS:GPSAltitude': 12.5, 'GPS:GPSAltitudeRef': 1})
+    assert (c['gps_lat'], c['gps_lon'], c['gps_alt']) == (-33.9, -18.4, -12.5)
+    n = M.columns({'GPS:GPSLatitude': 51.5, 'GPS:GPSLatitudeRef': 'N', 'GPS:GPSLongitude': 0.12, 'GPS:GPSLongitudeRef': 'E', 'GPS:GPSAltitude': 80.2, 'GPS:GPSAltitudeRef': 0}); assert (n['gps_lat'], n['gps_lon'], n['gps_alt']) == (51.5, 0.12, 80.2)
+    comp = M.columns({'Composite:GPSLatitude': -33.9, 'Composite:GPSLongitude': -18.4, 'Composite:GPSAltitude': -12.5, 'GPS:GPSLatitude': 33.9}); assert (comp['gps_lat'], comp['gps_lon'], comp['gps_alt']) == (-33.9, -18.4, -12.5)
+
+
+def test_an_exiftool_error_record_makes_no_row():
+    p = M.plan([dict(sha256=A, tags={'ExifTool:Error': 'File format error'}, path='/bad'), dict(sha256=B, tags=SONY, path='/ok')])
+    assert p['counts']['photo_meta'] == 1 and p['counts']['problems'] == 1 and 'error' in p['problems'][0] and p['rows'][0]['sha256'] == B

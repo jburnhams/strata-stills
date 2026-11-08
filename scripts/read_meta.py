@@ -16,6 +16,9 @@ def lower_priority():
     except OSError: pass
 
 
+def is_error(tags): return any(k.endswith(':Error') or k == 'Error' for k in tags)
+
+
 def run_exiftool(paths):
     """{path: {tag: value}} for a batch; a file exiftool could not read is missing from the result."""
     with tempfile.NamedTemporaryFile('w', suffix='.args', delete=False, encoding='utf8') as f: f.write('\n'.join(paths) + '\n'); name = f.name
@@ -34,7 +37,9 @@ def main():
     lower_priority(); done = set()
     if os.path.exists(a.out):
         for ln in open(a.out, encoding='utf8'):
-            try: done.add(json.loads(ln)['path'])
+            try:
+                r = json.loads(ln)
+                if not is_error(r.get('tags') or {}): done.add(r['path'])          # an error record from an earlier run is retried (the file is only ever appended to)
             except (ValueError, KeyError): pass
     todo = []
     for ln in open(a.hashes, encoding='utf8'):
@@ -48,7 +53,7 @@ def main():
             chunk = todo[i:i + a.batch]; tags = run_exiftool([r['path'] for r in chunk])
             for r in chunk:
                 t = tags.get(r['path'])
-                if t is None: bad += 1; print('no metadata:', r['path'], file=sys.stderr); continue
+                if t is None or is_error(t): bad += 1; print('no metadata:', r['path'], (t or {}).get('ExifTool:Error', ''), file=sys.stderr); continue
                 o.write(json.dumps(dict(path=r['path'], sha256=r['sha256'], size=r['size'], mtime_ns=r['mtime_ns'], tags=t), ensure_ascii=False) + '\n'); n += 1
             o.flush()
     print(f'read {n}, unreadable {bad}, already done {len(done)}'); return 0
