@@ -23,3 +23,6 @@ projects/
 
 # real photos for working on the candidate sets (scripts/copy_candidates.py): never committed
 /candidates
+
+# pip install -e . build output
+*.egg-info/
