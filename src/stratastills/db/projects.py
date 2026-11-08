@@ -74,16 +74,18 @@ class DbStore:
     # ---- the choices ---------------------------------------------------------------------------------------------------------------------------------------
     def _sources(self, s, p):
         from .models import ProjectSource
-        return [(x.root, x.relpath, x.original_path) for x in s.scalars(select(ProjectSource).where(ProjectSource.project_id == p.id))]
+        return [(x.root, x.relpath, x.original_path) for x in s.scalars(select(ProjectSource).where(ProjectSource.project_id == p.id).order_by(ProjectSource.id))]
 
     def _photo(self, s, sources, iid):
-        """The photo an item id names: the raw file named <stem>.* in one of the project's source folders, exactly one."""
+        """The photo an item id names: the CURRENT raw file named <stem>.* in the item's own source folder, exactly one photo. The item's source is the one whose id (the sha1 prefix) the item carries; an id made elsewhere (the prefix matches none of this machine's) names a source only in a one-source project. An item with no such photo stays file-only (None)."""
+        from stratastills import projects as P
         from .models import File, Photo
-        stem = iid.partition('~')[2]
+        sid, _, stem = iid.partition('~')
         if not stem: return None
+        mine = [x for x in sources if P.source_id(x[2] or x[1]) == sid] or (list(sources) if len(sources) == 1 else [])
         out = set()
-        for root, rel, _ in sources:
-            for f in s.scalars(select(File).where(File.root == root, File.role == 'raw', File.relpath.like(f'{rel}/{stem}.%'))):
+        for root, rel, _ in mine:
+            for f in s.scalars(select(File).where(File.root == root, File.role == 'raw', File.current.is_(True), File.relpath.like(f'{rel}/{stem}.%'))):
                 if os.path.splitext(os.path.basename(f.relpath))[0] == stem and os.path.dirname(f.relpath) == rel and f.photo_id: out.add(f.photo_id)
         return s.get(Photo, next(iter(out))) if len(out) == 1 else None
 
@@ -96,10 +98,11 @@ class DbStore:
             if p is None: return out
             sources = self._sources(s, p)
             for c in s.scalars(select(ItemChoice).where(ItemChoice.project_id == p.id)):
-                ph = s.get(Photo, c.photo_id); f = s.scalars(select(File).where(File.photo_id == ph.id, File.role == 'raw')).first()
-                src = next(((r, rel, orig) for r, rel, orig in sources if f and f.root == r and os.path.dirname(f.relpath) == rel), None)
-                if src is None: continue
-                out.setdefault(P.item_id(P.source_id(src[2] or src[1]), ph.stem), {})['primary'] = c.primary_variant               # the id the app asks for on this machine
+                ph = s.get(Photo, c.photo_id)
+                for f in s.scalars(select(File).where(File.photo_id == ph.id, File.role == 'raw', File.current.is_(True))):                    # only the photo's current files: a superseded version names nothing
+                    for r, rel, orig in sources:
+                        if f.root == r and os.path.dirname(f.relpath) == rel and os.path.splitext(os.path.basename(f.relpath))[0] == ph.stem:
+                            out.setdefault(P.item_id(P.source_id(orig or rel), ph.stem), {})['primary'] = c.primary_variant                       # the id the app asks for on this machine
         return out
 
     def write_state(self, pid, folder, d):

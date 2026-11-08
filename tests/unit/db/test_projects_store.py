@@ -64,3 +64,35 @@ def test_the_projects_api_runs_on_the_database(tmp_path, db_url, monkeypatch):
         P.add_source(pid, str(drone)); assert len(P.load(pid)['sources']) == 2
         assert [p['id'] for p in P.list_projects()] == [pid]
     finally: projects_store._stores.clear()
+
+
+def _two_sources(tmp_path, db_url):
+    from omarchy_db import connect, session
+    drone = tmp_path / 'drone'; (drone / 'a').mkdir(parents=True); (drone / 'b').mkdir(); folder = tmp_path / 'projects' / 'p1'; folder.mkdir(parents=True)
+    st = DbStore(db_url, roots=[str(drone)])
+    with session(connect(db_url)) as s:
+        hashes.write(s, hashes.plan([dict(path=str(drone / 'b' / 'S1.DNG'), sha256='b' * 64, size=1, mtime_ns=1)], [str(drone)]))                  # S1 exists only in source b
+    doc = dict(DOC, sources=[dict(path=str(drone / 'a'), added='2026-10-22T03:10:41'), dict(path=str(drone / 'b'), added='2026-10-22T03:10:41')])
+    st.write_doc('p1', str(folder), doc); return st, str(folder), str(drone)
+
+
+def test_an_item_is_matched_in_its_own_source_only(tmp_path, db_url):
+    st, folder, drone = _two_sources(tmp_path, db_url); sa, sb = P.source_id(os.path.join(drone, 'a')), P.source_id(os.path.join(drone, 'b'))
+    st.write_state('p1', folder, {P.item_id(sa, 'S1'): {'primary': 'jpeg'}, P.item_id(sb, 'S1'): {'primary': 'raw'}})                                  # S1 in source a is NOT imported; in b it is
+    with st._session() as s: assert [c.primary_variant for c in s.scalars(select(ItemChoice))] == ['raw']                                           # the choice for a/S1 did not land on b's photo
+    assert st.read_state('p1', folder) == {P.item_id(sa, 'S1'): {'primary': 'jpeg'}, P.item_id(sb, 'S1'): {'primary': 'raw'}}                         # a/S1 comes from the file only; a/S1 is not overwritten by b's choice
+
+
+def test_a_raw_present_at_two_paths_and_a_superseded_version(tmp_path, db_url):
+    from omarchy_db import connect, session
+    st, folder, drone = _two_sources(tmp_path, db_url); sb = P.source_id(os.path.join(drone, 'b')); iid = P.item_id(sb, 'S1')
+    with session(connect(db_url)) as s:
+        hashes.write(s, hashes.plan([dict(path=os.path.join(drone, 'a', 'S1.DNG'), sha256='b' * 64, size=1, mtime_ns=1), dict(path=os.path.join(drone, 'zz', 'S1.DNG'), sha256='b' * 64, size=1, mtime_ns=1)], [drone]))      # the same raw also at other paths (one outside the project)
+    st.write_state('p1', folder, {iid: {'primary': 'jpeg'}})
+    with st._session() as s: assert s.scalar(select(func.count()).select_from(ItemChoice)) == 1 and st.read_state('p1', folder)[iid] == {'primary': 'jpeg'}
+    from omarchy_db import connect as c2, session as s2
+    with s2(c2(db_url)) as s: hashes.write(s, hashes.plan([dict(path=os.path.join(drone, 'b', 'S1.DNG'), sha256='c' * 64, size=2, mtime_ns=2)], [drone]))   # b/S1 changed: a new photo, the old file version is no longer current
+    st.write_state('p1', folder, {iid: {'primary': 'raw'}})
+    state = st.read_state('p1', folder)
+    assert state[iid] == {'primary': 'raw'}                                                                                                          # the new selection is not reverted by the old photo's choice
+    with st._session() as s: assert sorted(c.primary_variant for c in s.scalars(select(ItemChoice))) == ['jpeg', 'raw']
