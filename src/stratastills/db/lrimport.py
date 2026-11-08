@@ -63,7 +63,7 @@ def plan_nsfw(cache, catalogue, hashed, roots):
 
 def plan_faces(catalogue, faces, hashed):
     """{pictures: [{sha256, faces: [...]}], problems, counts}; faces.json keys are indexes into filtered_rows()."""
-    rows = filtered_rows(catalogue); pics, problems, n = [], [], 0
+    rows = filtered_rows(catalogue); pics, problems, n, seen, dup = [], [], 0, set(), 0                       # two raws with one hash are one photo: the first row in catalogue order wins, later ones are skipped and counted
     if len(faces) != len(rows): problems.append(f'FATAL faces.json has {len(faces)} entries but the filtered catalogue {len(rows)}: the order cannot be trusted')
     else:
         for k, fl in faces.items():
@@ -71,18 +71,20 @@ def plan_faces(catalogue, faces, hashed):
             except (ValueError, IndexError): problems.append(f'FATAL face key {k!r} is not an index of the catalogue'); continue
             sha = hashed.get(row.get('raw'))
             if sha is None: problems.append(f'{row.get("raw")}: raw not hashed'); continue
-            pics.append(dict(sha256=sha, faces=fl)); n += len(fl)
-    return dict(pictures=pics, problems=problems, counts=dict(analysis=len(pics), detection=n, problems=len(problems)))
+            if sha in seen: dup += 1; problems.append(f'{row.get("raw")}: duplicate photo, skipped'); continue
+            seen.add(sha); pics.append(dict(sha256=sha, faces=fl)); n += len(fl)
+    return dict(pictures=pics, problems=problems, counts=dict(analysis=len(pics), detection=n, duplicate_photo_skipped=dup, problems=len(problems)))
 
 
 def plan_embeddings(catalogue, clip, hashed, model=CLIP_MODEL):
     """{vectors: [{sha256, vector}], problems, counts}; clip = {'idx': [...], 'pca': [[...], ...]} (numpy arrays or lists)."""
-    rows = filtered_rows(catalogue); vecs, problems = [], []
+    rows = filtered_rows(catalogue); vecs, problems, seen, dup = [], [], set(), 0
     for i, ix in enumerate(clip['idx']):
         row = rows[int(ix)] if 0 <= int(ix) < len(rows) else None; sha = hashed.get(row.get('raw')) if row else None
         if sha is None: problems.append(f'embedding {i}: no hashed raw'); continue
-        vecs.append(dict(sha256=sha, vector=[float(x) for x in clip['pca'][i]]))
-    return dict(vectors=vecs, model=model, problems=problems, counts=dict(embedding=len(vecs), problems=len(problems)))
+        if sha in seen: dup += 1; problems.append(f'embedding {i}: duplicate photo, skipped'); continue
+        seen.add(sha); vecs.append(dict(sha256=sha, vector=[float(x) for x in clip['pca'][i]]))
+    return dict(vectors=vecs, model=model, problems=problems, counts=dict(embedding=len(vecs), duplicate_photo_skipped=dup, problems=len(problems)))
 
 
 def _check(p):
@@ -98,18 +100,27 @@ def _photo_ids(session, shas):
     return ids
 
 
-def _files(session, keys, ids_of_sha):
-    """{(root, relpath, size, mtime_ns): id}: existing rows, the missing ones created with role 'final' (photo set from `ids_of_sha[key]`)."""
-    have = {}
+def _files(session, keys, photo_of):
+    """{(root, relpath, size, mtime_ns): id}: existing rows, the missing ones created with role 'final' (photo from `photo_of[key]`). Per (root, relpath) exactly one version stays current: the newest (mtime_ns, then id) across the rows already there AND the new ones; the others are history and keep their own results. Returns (ids, number created)."""
+    by_path = {}
     for c in _chunks({k[1] for k in keys}):
-        for f in session.scalars(select(File).where(File.relpath.in_(c))): have[(f.root, f.relpath, f.size, f.mtime_ns)] = f.id
-    now = datetime.now(timezone.utc).replace(tzinfo=None); new = [File(root=k[0], relpath=k[1], size=k[2], mtime_ns=k[3], photo_id=ids_of_sha[k], role='final', current=True, last_seen=now) for k in keys if k not in have]
-    session.add_all(new); session.flush(); have.update({(f.root, f.relpath, f.size, f.mtime_ns): f.id for f in new}); return have, len(new)
+        for f in session.scalars(select(File).where(File.relpath.in_(c))): by_path.setdefault((f.root, f.relpath), []).append(f)
+    have = {(f.root, f.relpath, f.size, f.mtime_ns): f for fs in by_path.values() for f in fs}; now = datetime.now(timezone.utc).replace(tzinfo=None)
+    new = [File(root=k[0], relpath=k[1], size=k[2], mtime_ns=k[3], photo_id=photo_of[k], role='final', current=True, last_seen=now) for k in keys if k not in have]
+    session.add_all(new); session.flush()
+    for f in new: by_path.setdefault((f.root, f.relpath), []).append(f); have[(f.root, f.relpath, f.size, f.mtime_ns)] = f
+    for k in {(k[0], k[1]) for k in keys}:
+        rows = by_path[k]; keep = max(rows, key=lambda x: (x.mtime_ns, x.id))
+        for f in rows: f.current = f is keep
+    session.flush(); return {k: f.id for k, f in have.items()}, len(new)
 
 
 def write_lightroom(session, p):
     _check(p); ids = _photo_ids(session, [e['sha256'] for e in p['edits']]); keys = {e['file']: ids[e['sha256']] for e in p['edits']}; fids, nfile = _files(session, keys, keys)
-    have = {(e.photo_id, e.final_file_id) for e in session.scalars(select(LightroomEdit))}; new = [LightroomEdit(photo_id=ids[e['sha256']], final_file_id=fids[e['file']], settings=e['settings'], crop=e['crop'], error=e['error']) for e in p['edits'] if (ids[e['sha256']], fids[e['file']]) not in have]
+    have = {(e.photo_id, e.final_file_id) for e in session.scalars(select(LightroomEdit))}; new = []
+    for e in p['edits']:
+        k = (ids[e['sha256']], fids[e['file']])
+        if k not in have: have.add(k); new.append(LightroomEdit(photo_id=k[0], final_file_id=k[1], settings=e['settings'], crop=e['crop'], error=e['error']))
     session.add_all(new); session.flush(); got = {(e.photo_id, e.final_file_id) for e in session.scalars(select(LightroomEdit))}
     if not {(ids[e['sha256']], fids[e['file']]) for e in p['edits']} <= got: session.rollback(); raise ImportMismatch('lightroom_edit: a planned row is missing after the write')
     session.commit(); return dict(lightroom_edit=len(new), file=nfile)
@@ -117,7 +128,10 @@ def write_lightroom(session, p):
 
 def write_nsfw(session, p):
     _check(p); ids = _photo_ids(session, [r['sha256'] for r in p['results']]); keys = {r['file']: ids[r['sha256']] for r in p['results']}; fids, nfile = _files(session, keys, keys)
-    have = {(r.file_id, r.model) for r in session.scalars(select(NsfwResult))}; new = [NsfwResult(file_id=fids[r['file']], model=r['model'], score=r['score'], label=r['label']) for r in p['results'] if (fids[r['file']], r['model']) not in have]
+    have = {(r.file_id, r.model) for r in session.scalars(select(NsfwResult))}; new = []
+    for r in p['results']:
+        k = (fids[r['file']], r['model'])
+        if k not in have: have.add(k); new.append(NsfwResult(file_id=k[0], model=k[1], score=r['score'], label=r['label']))
     session.add_all(new); session.flush(); got = {(r.file_id, r.model) for r in session.scalars(select(NsfwResult))}
     if not {(fids[r['file']], r['model']) for r in p['results']} <= got: session.rollback(); raise ImportMismatch('nsfw_result: a planned row is missing after the write')
     session.commit(); return dict(nsfw_result=len(new), file=nfile)
@@ -127,6 +141,7 @@ def write_faces(session, p):
     _check(p); ids = _photo_ids(session, [x['sha256'] for x in p['pictures']]); have = {a.photo_id for a in session.scalars(select(Analysis).where(Analysis.kind == 'faces', Analysis.producer == FACES_PRODUCER))}; nd = 0; made = []
     for x in p['pictures']:
         if ids[x['sha256']] in have: continue
+        have.add(ids[x['sha256']])
         a = Analysis(photo_id=ids[x['sha256']], kind='faces', producer=FACES_PRODUCER, producer_version='', input_key='', score=max(f['score'] for f in x['faces']) if x['faces'] else None, label=str(len(x['faces'])), data=dict(count=len(x['faces']))); session.add(a); made.append((a, x))
     session.flush()
     for a, x in made:
@@ -139,7 +154,10 @@ def write_faces(session, p):
 def write_embeddings(session, p):
     _check(p); ids = _photo_ids(session, [v['sha256'] for v in p['vectors']]); model = p['model']
     have = {e.photo_id for e in session.scalars(select(Embedding).where(Embedding.model == model, Embedding.detection_id.is_(None)))}
-    new = [Embedding(photo_id=ids[v['sha256']], model=model, vector=v['vector']) for v in p['vectors'] if ids[v['sha256']] not in have]; session.add_all(new); session.flush()
+    new = []
+    for v in p['vectors']:
+        if ids[v['sha256']] not in have: have.add(ids[v['sha256']]); new.append(Embedding(photo_id=ids[v['sha256']], model=model, vector=v['vector']))
+    session.add_all(new); session.flush()
     got = {e.photo_id for e in session.scalars(select(Embedding).where(Embedding.model == model, Embedding.detection_id.is_(None)))}
     if not {ids[v['sha256']] for v in p['vectors']} <= got: session.rollback(); raise ImportMismatch('embedding: a planned row is missing after the write')
     session.commit(); return dict(embedding=len(new))
