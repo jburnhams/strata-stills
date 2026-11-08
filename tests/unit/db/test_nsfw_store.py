@@ -59,7 +59,7 @@ def test_the_database_store_also_keeps_the_files_fresh_and_counts_unconfigured_r
 
 def test_the_filter_runs_on_the_database(tmp_path, db_url, monkeypatch, db_session_for=None):
     d = tmp_path / 'shoot'; d.mkdir(); make_jpeg(str(d / 'A.jpg'), w=200, h=150, seed=1)
-    monkeypatch.setenv('STRATASTILLS_NSFW', '1'); monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); monkeypatch.setenv('STRATASTILLS_SOURCES', str(d)); nsfw_store._stores.clear(); nsfw.reset()
+    monkeypatch.setenv('STRATASTILLS_NSFW', '1'); monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); monkeypatch.setenv('STRATASTILLS_DB_READS', 'nsfw'); monkeypatch.setenv('STRATASTILLS_SOURCES', str(d)); nsfw_store._stores.clear(); nsfw.reset()
     calls = []; nsfw.set_detector(lambda bgr: calls.append(1) or [dict(score=0.9, **{'class': 'BUTTOCKS_EXPOSED'})])
     try:
         p = str(d / 'A.jpg'); hit = nsfw.flagged(p); assert hit and hit['cls'] == 'BUTTOCKS_EXPOSED' and len(calls) == 1
@@ -68,3 +68,11 @@ def test_the_filter_runs_on_the_database(tmp_path, db_url, monkeypatch, db_sessi
         from omarchy_db import connect, session
         with session(connect(db_url)) as s: assert s.scalar(select(func.count()).select_from(NsfwResult)) == 1 and s.scalar(select(func.count()).select_from(File)) == 1
     finally: nsfw.set_detector(None); nsfw.reset(); nsfw_store._stores.clear()
+
+
+def test_a_database_url_alone_does_not_switch_the_filter(tmp_path, db_url, monkeypatch):
+    monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); monkeypatch.delenv('STRATASTILLS_DB_READS', raising=False); nsfw_store._stores.clear()
+    assert nsfw_store.get().kind == 'files'                                                                       # the arena has its own switch; a read path needs its own entry in db_reads
+    monkeypatch.setenv('STRATASTILLS_DB_READS', 'nsfw,projects'); assert nsfw_store.get().kind == 'database'
+    monkeypatch.delenv('STRATASTILLS_DATABASE_URL'); assert nsfw_store.get().kind == 'files'
+    nsfw_store._stores.clear()
