@@ -49,3 +49,9 @@ def test_gps_is_signed_from_the_refs_or_the_composite():
 def test_an_exiftool_error_record_makes_no_row():
     p = M.plan([dict(sha256=A, tags={'ExifTool:Error': 'File format error'}, path='/bad'), dict(sha256=B, tags=SONY, path='/ok')])
     assert p['counts']['photo_meta'] == 1 and p['counts']['problems'] == 1 and 'error' in p['problems'][0] and p['rows'][0]['sha256'] == B
+
+
+def test_missing_json_is_sql_null_not_json_null(db_session):
+    s = db_session; hashes.write(s, hashes.plan([dict(path='/r/a.ARW', sha256=A, size=1, mtime_ns=1)], ['/r']))
+    M.write(s, M.plan([dict(sha256=A, tags={'IFD0:Make': 'X'}, path='/a')]))                                                                      # no XMP, no DJI group
+    assert s.scalar(select(func.count()).select_from(PhotoMeta).where(PhotoMeta.dji.is_(None), PhotoMeta.xmp_raw.is_(None))) == 1
