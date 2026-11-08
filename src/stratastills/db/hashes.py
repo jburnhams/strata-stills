@@ -39,7 +39,7 @@ def read_jsonl(path, problems):
 
 def plan(records, roots, problems=None):
     """{files: [row dicts], photos: {sha256: stem}, duplicates: {sha256: [paths]}, problems, counts}. Reads only."""
-    problems = list(problems or []); labels = root_labels(roots); files, photos, paths, seen = [], {}, {}, set()
+    problems = list(problems or []); labels = root_labels(roots); files, photos, paths, seen = [], {}, {}, {}   # seen: key -> sha256 of the first record with that key
     for r in records:
         sha = str(r['sha256']).lower()
         if len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha): problems.append(f'{r["path"]}: not a SHA-256'); continue
@@ -47,9 +47,9 @@ def plan(records, roots, problems=None):
         if hit is None: problems.append(f'{r["path"]}: under none of the source roots'); continue
         root, rel = hit[0], hit[1].replace(os.sep, '/'); key = (root, rel, r['size'], r['mtime_ns'])
         if key in seen:
-            if any(f['sha256'] != sha for f in files if (f['root'], f['relpath'], f['size'], f['mtime_ns']) == key): problems.append(f'{r["path"]}: two different hashes for the same size and mtime, first one kept')
+            if seen[key] != sha: problems.append(f'{r["path"]}: two different hashes for the same size and mtime, first one kept')
             continue
-        seen.add(key); files.append(dict(root=root, relpath=rel, size=r['size'], mtime_ns=r['mtime_ns'], sha256=sha, role='raw'))
+        seen[key] = sha; files.append(dict(root=root, relpath=rel, size=r['size'], mtime_ns=r['mtime_ns'], sha256=sha, role='raw'))
         photos.setdefault(sha, os.path.splitext(os.path.basename(rel))[0]); paths.setdefault(sha, set()).add((root, rel))
     dups = {s: sorted(f'{a}:{b}' for a, b in ps) for s, ps in paths.items() if len(ps) > 1}
     counts = dict(files=len(files), photos=len(photos), duplicate_hashes=len(dups), duplicate_files=sum(len(v) for v in dups.values()), roots=sorted({f['root'] for f in files}))
@@ -79,9 +79,10 @@ def write(session, p):
         new_files.append(File(root=f['root'], relpath=f['relpath'], size=f['size'], mtime_ns=f['mtime_ns'], photo_id=ids[f['sha256']], role='raw', sha256=f['sha256'], current=True, last_seen=now))
     session.add_all(new_files); session.flush()
     superseded = 0                                                                                            # per path exactly one version is current: the newest (mtime_ns, then id) across the rows already there AND the new ones, the others stay as history
-    touched = {(f.root, f.relpath) for f in new_files}
-    for k in touched:
-        rows = by_path.get(k, []) + [f for f in new_files if (f.root, f.relpath) == k]
+    added = {}                                                                                                # new rows grouped by path once (a scan of new_files per path is quadratic: 7 minutes for 21k files)
+    for f in new_files: added.setdefault((f.root, f.relpath), []).append(f)
+    for k, mine in added.items():
+        rows = by_path.get(k, []) + mine
         keep = max(rows, key=lambda x: (x.mtime_ns, x.id or 0))
         for f in rows:
             if f is keep: f.current = True
@@ -90,11 +91,13 @@ def write(session, p):
     for c in _chunks(p['photos']):
         got = {s for (s,) in session.execute(select(Photo.sha256).where(Photo.sha256.in_(c)))}
         if got != set(c): bad.append(f'photo: {len(set(c) - got)} planned hash(es) missing after the write')
-    keys = {(f['root'], f['relpath'], f['size'], f['mtime_ns']): f['sha256'] for f in p['files']}
-    for c in _chunks({k[1] for k in keys}):
+    keys = {}                                                                                                 # relpath -> {(root, relpath, size, mtime_ns): sha256}; each chunk checks only its own paths
+    for f in p['files']: keys.setdefault(f['relpath'], {})[(f['root'], f['relpath'], f['size'], f['mtime_ns'])] = f['sha256']
+    for c in _chunks(keys):
         got = {(f.root, f.relpath, f.size, f.mtime_ns): f.sha256 for f in session.scalars(select(File).where(File.relpath.in_(c)))}
-        for k, sha in keys.items():
-            if k[1] in c and got.get(k) != sha: bad.append(f'file {k[0]}:{k[1]}: row missing or hash differs after the write')
+        for rp in c:
+            for k, sha in keys[rp].items():
+                if got.get(k) != sha: bad.append(f'file {k[0]}:{k[1]}: row missing or hash differs after the write')
     n = session.scalar(select(func.count()).select_from(Photo))
     if n < len(p['photos']): bad.append(f'photo: {n} rows for {len(p["photos"])} planned')
     if bad: session.rollback(); raise HashMismatch('; '.join(bad[:20]))
