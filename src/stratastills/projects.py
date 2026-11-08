@@ -135,15 +135,20 @@ def generated_dir(pid, iid, root=None):
     return os.path.join(folder(pid, root), GENERATED, iid.replace('/', '_'))
 
 
+def read_sidecar(pid, iid, key, root=None):
+    """The record of a generated picture (the sidecar JSON), or None."""
+    return _store().read_sidecar(pid, folder(pid, root), iid, key, [x['path'] for x in load(pid, root)['sources']])
+
+
+def save_sidecar(pid, iid, key, rec, root=None):
+    """Keep the record of a generated picture (the picture itself is already a file in generated_dir)."""
+    _store().write_sidecar(pid, folder(pid, root), iid, key, rec)
+
+
 def generated_variants(pid, iid, root=None):
     """The variants the app has made for an item, oldest first, in the same shape as a source file's: {id: 'gen-<key>', label, path, kind: 'generated', ext, key, preset, stages, summary, created, output, bytes, quality}. Only those whose picture file still exists."""
-    d = generated_dir(pid, iid, root); out = []
-    if not os.path.isdir(d): return out
-    for n in sorted(os.listdir(d)):
-        if not n.endswith('.json'): continue
-        try: r = json.load(open(os.path.join(d, n)))
-        except (OSError, ValueError): continue
-        if not os.path.exists(r.get('file', '')): continue
+    out = []
+    for r in _store().generated(pid, folder(pid, root), iid, [x['path'] for x in load(pid, root)['sources']]):
         w, h = r['output']; ext = os.path.splitext(r['file'])[1].lower()
         out.append(dict(id='gen-' + r['key'], label=f"Generated {w}×{h}", path=r['file'], kind='generated', ext=ext, key=r['key'], preset=r.get('preset'), stages=r.get('stages'), summary=r.get('summary'), created=r.get('created'), output=r['output'], bytes=r.get('bytes'), quality=r.get('quality')))
     return sorted(out, key=lambda v: v['created'] or '')

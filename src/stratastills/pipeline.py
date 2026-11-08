@@ -373,8 +373,8 @@ def generate(pid, iid, variant=None, preset=None, options=None, stages=None, pro
     say = progress or (lambda t: None); st = resolve(preset, options, stages)
     item = P.get_item(pid, iid); v = source_variant(item, variant); key = stage_key(iid, v['id'], st); d = P.generated_dir(pid, iid); base = os.path.join(d, key)
     if any(g['kind'] == 'generated' and g.get('key') == key for g in item['variants']):
-        try: r = json.load(open(base + '.json')); r['existing'] = True; return r
-        except (OSError, ValueError): pass
+        r = P.read_sidecar(pid, iid, key)
+        if r is not None: return dict(r, existing=True)
     state = State(pid, iid, item, v, say); runners = dict(develop=run_develop, level=run_level, resize=run_resize, sharpen=run_sharpen)
     timing = state.rec['timing'] = []                                                                                  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
     for s in st:
@@ -385,7 +385,7 @@ def generate(pid, iid, variant=None, preset=None, options=None, stages=None, pro
         if on_stage: on_stage(s['stage'], state)
     rec = dict(state.rec, version=1, key=key, created=dt.datetime.now().astimezone().isoformat(timespec='seconds'), item=iid, stem=item['stem'], source_variant=v['id'], source=v['path'], preset=preset, stages=st, summary=summary(st),
                output=[int(state.hw()[1]), int(state.hw()[0])], file=state.file, bytes=os.path.getsize(state.file), format=st[-1]['format'], quality=state.quality, existing=False)
-    with open(base + '.json', 'w') as f: json.dump(rec, f, indent=1)
+    P.save_sidecar(pid, iid, key, rec)
     return rec
 
 

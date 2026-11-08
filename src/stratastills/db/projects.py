@@ -119,3 +119,37 @@ class DbStore:
                     else: s.add(ItemChoice(project_id=p.id, photo_id=ph.id, primary_variant=v['primary']))
                 s.commit()
         self.files.write_state(pid, folder, d)
+
+    # ---- the generated variants ----------------------------------------------------------------------------------------------------------------------------
+    def generated(self, pid, folder, iid, sources=()):
+        """The sidecar records of the item's generated pictures: the `render` rows of the item's photo (the whole sidecar is in `info`, the picture's path is relative to the project folder), with the files' records for any key the database does not have (an item not imported yet). Only records whose picture file exists."""
+        from .models import Project, Render
+        recs = {r['key']: r for r in self.files.generated(pid, folder, iid, sources)}
+        with self._session() as s:
+            p = s.scalars(select(Project).where(Project.slug == pid)).first()
+            ph = self._photo(s, self._sources(s, p), iid) if p is not None else None
+            if ph is not None:
+                for r in s.scalars(select(Render).where(Render.photo_id == ph.id, Render.kind == 'generated').order_by(Render.id)):
+                    rec = dict(r.info or {}, key=r.cache_key); f = os.path.join(folder, *(r.path or '').split('/')) if r.path else rec.get('file', '')
+                    if not os.path.exists(f) and not os.path.exists(rec.get('file', '')): continue
+                    rec['file'] = f if os.path.exists(f) else rec['file']; recs[r.cache_key] = rec                                          # the database wins; the picture is found beside the project
+        return list(recs.values())
+
+    def read_sidecar(self, pid, folder, iid, key, sources=()):
+        return next((r for r in self.generated(pid, folder, iid, sources) if r.get('key') == key), None)
+
+    def write_sidecar(self, pid, folder, iid, key, rec):
+        from .models import Project, Render
+        with self._session() as s:
+            p = s.scalars(select(Project).where(Project.slug == pid)).first()
+            ph = self._photo(s, self._sources(s, p), iid) if p is not None else None
+            if ph is not None:                                                                                                          # an item with no photo in the database keeps its sidecar in the file only
+                out = rec.get('output') or [None, None]; f = rec.get('file') or ''
+                path = os.path.relpath(f, folder).replace(os.sep, '/') if f and os.path.abspath(f).startswith(os.path.abspath(folder) + os.sep) else f'generated/{iid.replace("/", "_")}/{os.path.basename(f.replace(chr(92), "/"))}'
+                r = s.scalars(select(Render).where(Render.kind == 'generated', Render.cache_key == key)).first()
+                vals = dict(photo_id=ph.id, variant=rec.get('source_variant'), preset=rec.get('preset'), stages=rec.get('stages'), summary=rec.get('summary'), out_w=out[0], out_h=out[1], bytes=rec.get('bytes'), quality=rec.get('quality'), path=path, info=rec)
+                if r is None: s.add(Render(cache_key=key, kind='generated', **vals))
+                else:
+                    for k, v in vals.items(): setattr(r, k, v)
+                s.commit()
+        self.files.write_sidecar(pid, folder, iid, key, rec)                                                                              # dual-write: the file stays a fresh backup

@@ -96,3 +96,37 @@ def test_a_raw_present_at_two_paths_and_a_superseded_version(tmp_path, db_url):
     state = st.read_state('p1', folder)
     assert state[iid] == {'primary': 'raw'}                                                                                                          # the new selection is not reverted by the old photo's choice
     with st._session() as s: assert sorted(c.primary_variant for c in s.scalars(select(ItemChoice))) == ['jpeg', 'raw']
+
+
+def _gen_files(folder, item, key, source, file_field=None):
+    d = os.path.join(folder, 'generated', item); os.makedirs(d, exist_ok=True); open(os.path.join(d, key + '.jpg'), 'wb').write(b'x')
+    rec = dict(key=key, item=item, source=source, output=[100, 50], file=file_field or os.path.join(d, key + '.jpg'), created='2026-01-01T00:00:00', preset='best', stages=[{'stage': 'develop'}], summary='s', bytes=1, quality=90, source_variant='raw')
+    json.dump(rec, open(os.path.join(d, key + '.json'), 'w')); return rec
+
+
+def test_contract_generated_variants_and_sidecars(env):
+    st, folder, root, kind = env; src = os.path.join(root, 'shoot'); st.write_doc('p1', folder, dict(DOC, sources=[dict(path=src, added='2026-10-22T03:10:41')]))
+    iid = P.item_id(P.source_id(src), 'S1'); new = P.item_id(P.source_id(src), 'NEW')                                                                  # S1 is a photo in the database, NEW is not
+    assert st.generated('p1', folder, iid, [src]) == []
+    st.write_sidecar('p1', folder, iid, 'k1', _gen_files(folder, iid, 'k1', src + '/S1.DNG')); st.write_sidecar('p1', folder, new, 'k2', _gen_files(folder, new, 'k2', src + '/NEW.DNG'))
+    assert [r['key'] for r in st.generated('p1', folder, iid, [src])] == ['k1'] and [r['key'] for r in st.generated('p1', folder, new, [src])] == ['k2']
+    assert st.read_sidecar('p1', folder, iid, 'k1', [src])['output'] == [100, 50] and st.read_sidecar('p1', folder, iid, 'nope', [src]) is None
+    if kind == 'db':
+        from stratastills.db.models import Render
+        with st._session() as s: assert [(r.cache_key, r.out_w, r.path) for r in s.scalars(select(Render))] == [('k1', 100, f'generated/{iid}/k1.jpg')]            # only the item with a photo is in the database
+
+
+def test_the_database_finds_outputs_made_on_another_machine_and_the_projects_api_shows_them(tmp_path, db_url, monkeypatch):
+    from omarchy_db import connect, session
+    from stratastills.db.models import Render
+    drone = tmp_path / 'drone'; (drone / 'shoot').mkdir(parents=True); pr = tmp_path / 'projects'; folder = pr / 'p1'; folder.mkdir(parents=True)
+    with session(connect(db_url)) as s: hashes.write(s, hashes.plan([dict(path=str(drone / 'shoot' / 'S1.DNG'), sha256='a' * 64, size=1, mtime_ns=1)], [str(drone)]))
+    src = str(drone / 'shoot'); st = DbStore(db_url, roots=[str(drone)]); st.write_doc('p1', str(folder), dict(DOC, sources=[dict(path=src, added='2026-10-22T03:10:41')]))
+    win = '4069159d~S1'; rec = _gen_files(str(folder), win, 'k1', src + '\\S1.DNG', file_field='C:\\Code\\projects\\p1\\generated\\4069159d~S1\\k1.jpg')                 # made elsewhere: another id, a Windows path
+    with session(connect(db_url)) as s:
+        from stratastills.db.models import Photo
+        ph = s.scalars(select(Photo)).one(); s.add(Render(photo_id=ph.id, cache_key='k1', kind='generated', out_w=100, out_h=50, path=f'generated/{win}/k1.jpg', info=rec)); s.commit()
+    got = st.generated('p1', str(folder), P.item_id(P.source_id(src), 'S1'), [src]); assert [r['key'] for r in got] == ['k1'] and got[0]['file'] == str(folder / 'generated' / win / 'k1.jpg')
+    monkeypatch.setenv('STRATASTILLS_PROJECTS', str(pr)); monkeypatch.setenv('STRATASTILLS_SOURCES', str(drone)); monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); monkeypatch.setenv('STRATASTILLS_DB_READS', 'projects'); projects_store._stores.clear()
+    try: assert [v['key'] for v in P.generated_variants('p1', P.item_id(P.source_id(src), 'S1'))] == ['k1']
+    finally: projects_store._stores.clear()
