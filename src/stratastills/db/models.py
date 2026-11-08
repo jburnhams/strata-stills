@@ -143,6 +143,7 @@ class NsfwDecision(Base):
     photo_id: Mapped[int] = mapped_column(ForeignKey('photo.id'), primary_key=True)
     allowed: Mapped[bool]
     decided_at: Mapped[datetime] = _now()
+    file_id: Mapped[int | None] = mapped_column(ForeignKey('file.id'), default=None)    # the file version (size, time stamp) the decision was made on; one decision per photo, the latest one
 
 
 class LightroomEdit(Base):

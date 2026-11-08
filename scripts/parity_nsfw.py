@@ -4,13 +4,14 @@
 import argparse, json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from stratastills import nsfw, nsfw_store, settings
+from stratastills.db.nsfw import DbStore
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--url', default=settings.database_url() or 'photos'); ap.add_argument('--extra-root', action='append', default=[])
     a = ap.parse_args(); roots = list(settings.source_roots()) + [os.path.expanduser(r) for r in a.extra_root]
-    files = nsfw_store.FileStore(); db = nsfw_store.DbStore(a.url, roots=roots)
-    fc, dc = files.load(), db.load(); ok = True
+    files = nsfw_store.FileStore(); db = DbStore(a.url, roots=roots)
+    fc, dc = files.load(), db.load_db(); ok = True                                                      # the database's own entries against the files'
     only_f, only_d = sorted(set(fc) - set(dc)), sorted(set(dc) - set(fc)); diff = sorted(k for k in set(fc) & set(dc) if (float(fc[k][0]), str(fc[k][1] or '')) != (float(dc[k][0]), str(dc[k][1] or '')))
     print(json.dumps(dict(cache=dict(file=len(fc), database=len(dc), equal=len(set(fc) & set(dc)) - len(diff), only_in_file=len(only_f), only_in_database=len(only_d), different_values=len(diff), unresolved_database_rows=db.unresolved), samples=dict(only_in_file=only_f[:3], only_in_database=only_d[:3], different=diff[:3])), indent=1))
     ok &= not (only_f or only_d or diff)
