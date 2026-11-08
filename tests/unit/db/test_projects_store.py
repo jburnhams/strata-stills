@@ -130,3 +130,17 @@ def test_the_database_finds_outputs_made_on_another_machine_and_the_projects_api
     monkeypatch.setenv('STRATASTILLS_PROJECTS', str(pr)); monkeypatch.setenv('STRATASTILLS_SOURCES', str(drone)); monkeypatch.setenv('STRATASTILLS_DATABASE_URL', db_url); monkeypatch.setenv('STRATASTILLS_DB_READS', 'projects'); projects_store._stores.clear()
     try: assert [v['key'] for v in P.generated_variants('p1', P.item_id(P.source_id(src), 'S1'))] == ['k1']
     finally: projects_store._stores.clear()
+
+
+def test_a_photo_shared_by_two_projects_does_not_lend_one_its_renders(tmp_path, db_url):
+    from omarchy_db import connect, session
+    from stratastills.db.models import Photo, Render
+    drone = tmp_path / 'drone'; (drone / 'shoot').mkdir(parents=True); fa, fb = tmp_path / 'projects' / 'a', tmp_path / 'projects' / 'b'; fa.mkdir(parents=True); fb.mkdir(parents=True)
+    with session(connect(db_url)) as s: hashes.write(s, hashes.plan([dict(path=str(drone / 'shoot' / 'S1.DNG'), sha256='a' * 64, size=1, mtime_ns=1)], [str(drone)]))
+    src = str(drone / 'shoot'); st = DbStore(db_url, roots=[str(drone)]); iid = P.item_id(P.source_id(src), 'S1')
+    for pid, fo in (('a', fa), ('b', fb)): st.write_doc(pid, str(fo), dict(DOC, sources=[dict(path=src, added='2026-10-22T03:10:41')]))
+    rec = _gen_files(str(fa), iid, 'k1', src + '/S1.DNG')                                                                  # project a made k1 (the picture is in a's folder)
+    with session(connect(db_url)) as s:
+        ph = s.scalars(select(Photo)).one(); s.add(Render(photo_id=ph.id, cache_key='k1', kind='generated', out_w=100, out_h=50, path=f'generated/{iid}/k1.jpg', info=rec)); s.commit()
+    assert [r['key'] for r in st.generated('a', str(fa), iid, [src])] == ['k1']
+    assert st.generated('b', str(fb), iid, [src]) == []                                                                    # b has the same photo, but not the picture

@@ -53,3 +53,22 @@ def test_a_record_whose_picture_is_nowhere_is_skipped_and_sidecars_round_trip(tm
     _gen(f, iid, 'gone', UNC + '\\S1.DNG', picture=False); assert st.generated('p', f, iid, [UNC]) == []
     d = os.path.join(f, 'generated', iid); open(os.path.join(d, 'k2.tif'), 'wb').write(b'x')
     st.write_sidecar('p', f, iid, 'k2', dict(key='k2', file=os.path.join(d, 'k2.tif'), output=[1, 2], source=UNC + '\\S1.DNG')); assert [r['key'] for r in st.generated('p', f, iid, [UNC])] == ['k2']
+
+
+def test_migrated_outputs_and_a_new_local_variant_are_both_visible_even_with_an_empty_local_folder(tmp_path):
+    from stratastills import projects as P
+    f = str(tmp_path); win = '4069159d~S1'; local = P.item_id(P.source_id(UNC), 'S1'); st = projects_store.FileStore()
+    _gen(f, win, 'old', UNC + '\\S1.DNG', file_field='C:\\Code\\x\\old.jpg')
+    os.makedirs(os.path.join(f, 'generated', local))                                                          # a failed encode left an empty local folder
+    assert [r['key'] for r in st.generated('p', f, local, [UNC])] == ['old']
+    _gen(f, local, 'new', UNC + '\\S1.DNG'); assert sorted(r['key'] for r in st.generated('p', f, local, [UNC])) == ['new', 'old']            # the local one is added to the migrated one, not instead of it
+    _gen(f, local, 'old', UNC + '\\S1.DNG'); assert [r['file'] for r in st.generated('p', f, local, [UNC]) if r['key'] == 'old'] == [os.path.join(f, 'generated', local, 'old.jpg')]    # same key: the local record wins
+
+
+def test_a_sub_folders_outputs_are_not_the_parents(tmp_path):
+    from stratastills import projects as P
+    f = str(tmp_path); st = projects_store.FileStore(); child = UNC + '\\sub'
+    _gen(f, '1111~S1', 'kc', child + '\\S1.DNG', file_field='C:\\gone\\kc.jpg')                                  # made from shoot/sub/S1.DNG
+    _gen(f, '2222~S1', 'kp', UNC + '\\S1.DNG', file_field='C:\\gone\\kp.jpg')                                   # made from shoot/S1.DNG
+    parent, sub = P.item_id(P.source_id(UNC), 'S1'), P.item_id(P.source_id(child), 'S1')
+    assert [r['key'] for r in st.generated('p', f, parent, [UNC, child])] == ['kp'] and [r['key'] for r in st.generated('p', f, sub, [UNC, child])] == ['kc']

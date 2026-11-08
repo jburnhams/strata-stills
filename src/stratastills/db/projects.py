@@ -130,9 +130,12 @@ class DbStore:
             ph = self._photo(s, self._sources(s, p), iid) if p is not None else None
             if ph is not None:
                 for r in s.scalars(select(Render).where(Render.photo_id == ph.id, Render.kind == 'generated').order_by(Render.id)):
-                    rec = dict(r.info or {}, key=r.cache_key); f = os.path.join(folder, *(r.path or '').split('/')) if r.path else rec.get('file', '')
-                    if not os.path.exists(f) and not os.path.exists(rec.get('file', '')): continue
-                    rec['file'] = f if os.path.exists(f) else rec['file']; recs[r.cache_key] = rec                                          # the database wins; the picture is found beside the project
+                    rec = dict(r.info or {}, key=r.cache_key); f = os.path.join(folder, *(r.path or '').split('/')) if r.path else ''
+                    own = os.path.abspath(folder) + os.sep; recorded = rec.get('file') or ''
+                    if f and os.path.exists(f): rec['file'] = f
+                    elif recorded and os.path.abspath(recorded).startswith(own) and os.path.exists(recorded): pass                                  # only a picture inside THIS project's folder: the same photo can be in other projects, whose renders share the row
+                    else: continue
+                    recs[r.cache_key] = rec                                                                                                  # the database wins
         return list(recs.values())
 
     def read_sidecar(self, pid, folder, iid, key, sources=()):
