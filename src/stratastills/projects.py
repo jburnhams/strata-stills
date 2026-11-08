@@ -30,17 +30,19 @@ def folder(pid, root=None):
     return p
 
 
+def _store():
+    from stratastills import projects_store
+    return projects_store.get()                     # the files (default) or, switched on in settings, schema `photos` (projects_store.py)
+
+
 def load(pid, root=None):
-    f = os.path.join(folder(pid, root), FILE)
-    try: d = json.load(open(f))
-    except (OSError, ValueError): raise ProjectError(f'no project {pid!r}')
+    d = _store().read_doc(pid, folder(pid, root))
+    if not isinstance(d, dict): raise ProjectError(f'no project {pid!r}')
     d.setdefault('sources', []); d['id'] = pid; return d
 
 
 def _save(doc, root=None):
-    d = folder(doc['id'], root); tmp = os.path.join(d, FILE + '.tmp')
-    with open(tmp, 'w') as f: json.dump({k: v for k, v in doc.items() if k != 'id'}, f, indent=1)
-    os.replace(tmp, os.path.join(d, FILE)); return doc
+    _store().write_doc(doc['id'], folder(doc['id'], root), {k: v for k, v in doc.items() if k != 'id'}); return doc
 
 
 def create(name, sources=(), group=None, root=None):
@@ -163,15 +165,10 @@ def _source(pid, sid, root=None):
 
 
 def load_state(pid, root=None):
-    try: d = json.load(open(os.path.join(folder(pid, root), STATE)))
-    except (OSError, ValueError): d = {}
-    return d if isinstance(d, dict) else {}
+    d = _store().read_state(pid, folder(pid, root)); return d if isinstance(d, dict) else {}
 
 
-def _save_state(pid, d, root=None):
-    p = os.path.join(folder(pid, root), STATE); tmp = p + '.tmp'
-    with open(tmp, 'w') as f: json.dump(d, f, indent=1)
-    os.replace(tmp, p)
+def _save_state(pid, d, root=None): _store().write_state(pid, folder(pid, root), d)
 
 
 def default_primary(shot):
