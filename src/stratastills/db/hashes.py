@@ -102,3 +102,12 @@ def write(session, p):
     if n < len(p['photos']): bad.append(f'photo: {n} rows for {len(p["photos"])} planned')
     if bad: session.rollback(); raise HashMismatch('; '.join(bad[:20]))
     session.commit(); return dict(photo=len(new_photos), file=len(new_files), superseded=superseded)
+
+
+def keep_newest_current(rows):
+    """Of the versions of ONE path (File objects, old and new) exactly one stays current: the newest (mtime_ns, then id); the others are history. Returns how many were switched off."""
+    keep = max(rows, key=lambda x: (x.mtime_ns, x.id or 0)); off = 0
+    for f in rows:
+        if f is keep: f.current = True
+        elif f.current: f.current = False; off += 1
+    return off
