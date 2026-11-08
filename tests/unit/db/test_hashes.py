@@ -63,3 +63,16 @@ def test_an_older_record_loaded_after_a_newer_one_leaves_one_current_row_the_new
     rows = list(db_session.scalars(select(File).order_by(File.mtime_ns)))
     assert [(f.sha256, f.current) for f in rows] == [(A, False), (B, True)]
     assert hashes.write(db_session, hashes.plan([rec(r / 'a.ARW', A, 10, 1)], [r])) == dict(photo=0, file=0, superseded=0)
+
+
+def test_a_load_bigger_than_a_chunk_stays_fast_and_correct(roots, db_session):
+    """The verification used to rescan every planned file for every path (quadratic: 7 minutes for 21k files); 3 chunks of paths must write, verify and rerun in a blink, and a changed file among them still supersedes only its own path."""
+    import time
+    r, d = roots; n = 3 * hashes.CHUNK + 7
+    recs = [rec(r / f'y{i // 100}' / f'DSC{i:05d}.ARW', f'{i:064x}', size=i + 1, mtime=i + 1) for i in range(n)]
+    t = time.perf_counter(); assert hashes.write(db_session, hashes.plan(recs, [r, d])) == dict(photo=n, file=n, superseded=0); took = time.perf_counter() - t
+    assert took < 60
+    assert hashes.write(db_session, hashes.plan(recs, [r, d])) == dict(photo=0, file=0, superseded=0)
+    changed = [dict(recs[5], sha256='f' * 64, mtime_ns=999)]
+    assert hashes.write(db_session, hashes.plan(changed, [r, d])) == dict(photo=1, file=1, superseded=1)
+    assert db_session.scalar(select(func.count()).select_from(File).where(File.current.is_(True))) == n
