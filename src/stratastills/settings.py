@@ -60,6 +60,13 @@ def database_url():
     return os.environ.get('STRATASTILLS_DATABASE_URL') or load().get('database_url') or None
 
 
+def db_reads():
+    """The app's read paths that use the database once `database_url` is set, besides the arena (which uses it as soon as the URL is set): a set of names ('nsfw', ...) from STRATASTILLS_DB_READS (comma separated) or `db_reads` of the settings file. Empty by default, so merging a read path (or a nightly restart) never switches it by itself: each is switched on deliberately, one at a time."""
+    v = os.environ.get('STRATASTILLS_DB_READS')
+    if v is None: v = load().get('db_reads') or []
+    return {x.strip() for x in (v.split(',') if isinstance(v, str) else v) if str(x).strip()}
+
+
 def arena_dir():
     """Where the rating arena keeps its pictures, pool and votes (`out/arena` by default; STRATASTILLS_ARENA moves it)."""
     return os.path.abspath(os.path.expanduser(os.environ.get('STRATASTILLS_ARENA') or os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'out', 'arena')))
