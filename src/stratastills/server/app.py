@@ -7,7 +7,7 @@ GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&s
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 import json, os, random, re, secrets, threading, time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -157,8 +157,10 @@ def create_app():
     def arena_page(): return open(ARENA_PAGE, encoding='utf8').read()
 
     @app.get('/api/arena/next')
-    def arena_next(want: str = ''):
-        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, set(want.split(',')) if want else None, AR.open_alerts(arena_alert_events()))
+    def arena_next(want: str = '', set_name: str = Query('', alias='set')):
+        try: only = AR.load_set(settings.arena_dir(), set_name)
+        except ValueError as e: raise HTTPException(404, str(e))
+        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, {w for w in want.split(',') if w} or None, AR.open_alerts(arena_alert_events()), only)
         if not pick: raise HTTPException(404, 'nothing to rate yet: make the pictures with scripts/build_arena.py')
         pic, a, b = pick; token = secrets.token_urlsafe(9)
         with arena_lock:

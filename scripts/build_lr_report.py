@@ -76,7 +76,15 @@ def turn_to_ref(c, ref):
     H, W = ref.shape[:2]; k = 1500 / max(W, H); g = lambda x: cv2.cvtColor(cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
     cands = [cv2.rotate(c, r) for r in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)]; reg = [BR.register(g(ref), g(x), inliers=True) for x in cands]
     score = [n if M is not None and abs(M[0, 0] - 1) <= 0.08 and abs(M[1, 0]) <= 0.05 else 0 for M, n in reg]                      # register allows any rotation: a candidate it lays on `ref` only by another half-turn is the wrong way up
-    return cands[int(score[1] > score[0])] if max(score) >= 20 else c
+    if max(score) >= 20: return cands[int(score[1] > score[0])]
+    s = [structure_corr(g(ref), g(x)) for x in cands]                                                                                  # neither registers (soft or heavily cropped pictures): the shapes still say it was turned, so pick the way whose coarse structure matches; returning `c` unturned squeezed it into the final's frame on its side
+    return cands[int(s[1] > s[0])]
+
+
+def structure_corr(a, b, n=64):
+    """Correlation of the coarse edges (Laplacian of a blurred n x n copy) of two gray pictures of one size: about 1 for the same picture, about 0 for one turned a quarter."""
+    e = lambda x: (lambda y: (y - y.mean()) / (y.std() + 1e-6))(cv2.Laplacian(cv2.GaussianBlur(cv2.resize(x, (n, n), interpolation=cv2.INTER_AREA).astype(np.float32), (0, 0), 1.5), cv2.CV_32F))
+    return float((e(a) * e(b)).mean())
 
 
 def to_final(im, row, orientation, ref, with_rect=False):
