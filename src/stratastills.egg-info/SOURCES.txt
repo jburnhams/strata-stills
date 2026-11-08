@@ -41,7 +41,7 @@ src/stratastills.egg-info/top_level.txt
 src/stratastills/db/__init__.py
 src/stratastills/db/hashes.py
 src/stratastills/db/importer.py
-src/stratastills/db/lrimport.py
+src/stratastills/db/mapping.py
 src/stratastills/db/models.py
 src/stratastills/db/store.py
 src/stratastills/db/types.py
