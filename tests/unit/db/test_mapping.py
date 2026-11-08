@@ -18,7 +18,7 @@ RECORDS = [rec('2018/2018-05-28/DSC08525.ARW', 'a'), rec('2016/2016-04-28/DSC085
            rec('2018/2018-06-16 Title/DSC08694.ARW', 'c'),                                          # exact (a titled folder)
            rec('2016/2016-07-24/DSC09723.ARW', 'd'), rec('2018/2018-09-29/DSC09723.ARW', 'e'),     # stem within 3 days of one of them only
            rec('2019/2019-01-01/DSC00001.ARW', 'f'), rec('2019/2019-01-02/DSC00001.ARW', 'g')]    # two raws near one name: ambiguous
-CATALOGUE = [dict(raw=f'{ROOT}/2018/2018-05-28/DSC08525.ARW', final='/p/2018/2018-05-26 - Trip/DSC08525.jpg')]
+CATALOGUE = [dict(raw=f'{ROOT}/2018/2018-05-28/DSC08525.ARW', final='/p/2018/2018-05-26 - Trip/DSC08525-Edit.jpg')]          # a suffixed export: the arena names it after the RAW's stem
 
 
 def test_the_rules_in_order_and_nothing_is_guessed():
@@ -51,3 +51,9 @@ def test_write_fills_empty_links_once_and_never_overwrites(db_session):
 def test_write_refuses_when_the_hashes_are_not_loaded(db_session):
     db_session.add(ArenaPic(name='2018-06-16_DSC08694')); db_session.commit()
     with pytest.raises(mapping.MappingMismatch): mapping.write(db_session, mapping.plan(['2018-06-16_DSC08694'], RECORDS, CATALOGUE, [ROOT]))
+
+
+def test_arena_name_follows_build_arena_and_reads_windows_paths():
+    assert mapping.arena_name('/p/2018/2018-05-26 - Trip/DSC08525-Edit.jpg', '/r/2018/2018-05-28/DSC08525.ARW') == '2018-05-26_DSC08525'
+    assert mapping.arena_name('D:\\Photos\\2018\\2018-05-26 - Trip\\DSC08525.jpg', 'D:\\raw\\2018\\2018-05-28\\DSC08525.ARW') == '2018-05-26_DSC08525'
+    assert mapping.arena_name('/p/Misc/Selected/DSC1.jpg', '/r/x/DSC1.ARW') is None and mapping.arena_name(None, '/r/x.ARW') is None

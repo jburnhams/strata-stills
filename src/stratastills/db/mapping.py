@@ -2,10 +2,10 @@
 
 Rules, in this order; the first that gives exactly ONE raw wins, anything else stays unmapped and is listed (never guessed):
 1. exact: the raw sits in a folder `<root>/<year>/<date>[ title]/<stem>.<ext>` whose date and stem are the name's;
-2. catalogue: the Lightroom catalogue's `final` (the export, in a folder `<date> - title`) has the name's date and stem, and its `raw` was hashed;
+2. catalogue: the Lightroom catalogue pairs an export in a folder `<date> - title` with a raw; the arena names that pair `<folder date>_<the RAW's stem>` (scripts/build_arena.py::order), and the raw was hashed;
 3. window: exactly one raw with that stem has a folder date within 3 days of the name's (a capture date that is not the import folder's).
 Two raws for one name at a step = ambiguous (reported, not mapped). `plan()` needs no database; `write()` fills only NULL foreign keys of existing rows in one transaction, verifies, and never overwrites a link that is already set (a different one is reported as a conflict)."""
-import datetime as D, json, os, re
+import datetime as D, os, posixpath, re
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -15,10 +15,16 @@ from .models import ArenaPic, Photo
 
 WINDOW_DAYS = 3
 NAME = re.compile(r'^(\d{4}-\d{2}-\d{2})_(.+)$')
-FINAL = re.compile(r'/(\d{4}-\d{2}-\d{2})[^/]*/([^/]+)\.[^./]+$')
 
 
 class MappingMismatch(Exception): pass
+
+
+def arena_name(final, raw):
+    """The name the arena gives a catalogue pair (scripts/build_arena.py::order): the first 10 characters of the export's folder name + the RAW's stem (not the export's: 'DSC08525-Edit.jpg' still names '..._DSC08525'), spaces removed. Separators of either kind (the catalogue is built on Windows too)."""
+    if not final or not raw: return None
+    folder = posixpath.basename(posixpath.dirname(final.replace('\\', '/'))); stem = posixpath.splitext(posixpath.basename(raw.replace('\\', '/')))[0]
+    return f'{folder[:10]}_{stem}'.replace(' ', '') if NAME.match(f'{folder[:10]}_{stem}') else None
 
 
 def build_index(records, catalogue, roots):
@@ -35,8 +41,8 @@ def build_index(records, catalogue, roots):
                     except ValueError: pass
                 break
     for r in catalogue:
-        m = FINAL.search(r.get('final') or '')
-        if m and r.get('raw') in hashed: by_final[f'{m.group(1)}_{m.group(2)}'].add(r['raw'])
+        key = arena_name(r.get('final'), r.get('raw'))
+        if key and r.get('raw') in hashed: by_final[key].add(r['raw'])
     return dict(hashed=hashed, by_name=by_name, by_stem=by_stem, by_final=by_final)
 
 
