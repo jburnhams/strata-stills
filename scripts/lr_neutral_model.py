@@ -123,13 +123,28 @@ if __name__ == '__main__':
 
 NET_FILE = os.path.join(D.ROOT, 'out', 'cache', 'lr-neutral-net.pt')
 _net = {}
+import threading
+_net_lock = threading.Lock()                                                                                                          # build_arena makes versions in several threads: loading and running the network one at a time (two threads at once gave flat, NaN-filled pictures)
 
 
 def predict_params(neu_bgr, x):
     """The 19 transform parameters the saved network (`eval --save`) predicts for our neutral picture `neu_bgr` (uint8 BGR, laid on the final's crop like the training thumbs) with the feature row `x` (lr_look.load order). The network is loaded once per process."""
     import cv2
+    with _net_lock: return _predict_params(neu_bgr, x)
+
+
+def _predict_params(neu_bgr, x):
+    import cv2
     if 'net' not in _net:
         z = torch.load(NET_FILE, map_location=DEV, weights_only=False); net = Net(len(z['mu']), z['typical']).to(DEV); net.load_state_dict(z['state']); net.eval(); _net.update(net=net, mu=z['mu'], sd=z['sd'])
     t = cv2.resize(neu_bgr, (D.THUMB, D.THUMB), interpolation=cv2.INTER_AREA)[..., ::-1].copy(); img = torch.from_numpy(t).permute(2, 0, 1)[None].float().to(DEV) / 255
     xs = torch.from_numpy(np.nan_to_num((np.asarray(x, np.float64) - _net['mu']) / _net['sd']).clip(-5, 5).astype(np.float32))[None].to(DEV)
-    with torch.no_grad(): return _net['net'](img, xs)[0].cpu().numpy()
+    with torch.no_grad(): out = _net['net'](img, xs)[0].cpu().numpy()
+    if 'lo' not in _net: q = np.load(os.path.join(D.OUT, 'nfit.npz'))['params']; _net.update(lo=np.percentile(q, 0.5, 0), hi=np.percentile(q, 99.5, 0))
+    return np.clip(out, _net['lo'], _net['hi'])                                                                                                  # an unusual picture (features far outside training) can get a transform no edit ever had (cast -21, hue 26 degrees, a near-white curve): each parameter is held to the range the per-pair fits span (0.5-99.5 %)
+
+
+def typical_params():
+    """The median per-pair neutral fit: the person's typical edit, the fallback when the network's transform would flatten a picture."""
+    if 'typical' not in _net: _net['typical'] = np.median(np.load(os.path.join(D.OUT, 'nfit.npz'))['params'], 0).astype(np.float32)
+    return _net['typical']
