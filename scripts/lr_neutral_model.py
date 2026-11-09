@@ -119,3 +119,17 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('step', choices=['fit', 'eval']); ap.add_argument('--steps', type=int, default=400); ap.add_argument('--epochs', type=int, default=12)
     ap.add_argument('--no-cnn', action='store_true'); ap.add_argument('--cam', action='store_true', help='also a network that sees the camera preview beside our neutral'); ap.add_argument('--save', action='store_true'); ap.add_argument('--share', type=float, default=0.1)
     a = ap.parse_args(); {'fit': fit, 'eval': evaluate}[a.step](a)
+
+
+NET_FILE = os.path.join(D.ROOT, 'out', 'cache', 'lr-neutral-net.pt')
+_net = {}
+
+
+def predict_params(neu_bgr, x):
+    """The 19 transform parameters the saved network (`eval --save`) predicts for our neutral picture `neu_bgr` (uint8 BGR, laid on the final's crop like the training thumbs) with the feature row `x` (lr_look.load order). The network is loaded once per process."""
+    import cv2
+    if 'net' not in _net:
+        z = torch.load(NET_FILE, map_location=DEV, weights_only=False); net = Net(len(z['mu']), z['typical']).to(DEV); net.load_state_dict(z['state']); net.eval(); _net.update(net=net, mu=z['mu'], sd=z['sd'])
+    t = cv2.resize(neu_bgr, (D.THUMB, D.THUMB), interpolation=cv2.INTER_AREA)[..., ::-1].copy(); img = torch.from_numpy(t).permute(2, 0, 1)[None].float().to(DEV) / 255
+    xs = torch.from_numpy(np.nan_to_num((np.asarray(x, np.float64) - _net['mu']) / _net['sd']).clip(-5, 5).astype(np.float32))[None].to(DEV)
+    with torch.no_grad(): return _net['net'](img, xs)[0].cpu().numpy()
