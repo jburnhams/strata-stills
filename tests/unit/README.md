@@ -20,7 +20,7 @@ Fast and isolated: synthetic arrays and tiny generated images; no real photos, n
 
 - A fake DNG for `develop.develop` is built by `synthetic_dng(monkeypatch, ...)` in `test_gpu.py` (a LibRaw-like uint16 picture plus the tags of a real Mini 4 Pro file); real files are never read.
 - Equivalence tests give a mean and a 99.9th-percentile bound, not exact equality (float32 on different devices); keep the bounds as tight as the test passes with.
-- Tests that need torch use `pytest.importorskip('torch')` (CI installs the CPU build; a developer without it runs the NumPy tests only).
+- Tests that need torch import it at the top and fail when it is missing: CI installs the CPU build (see pyproject.toml, dev group), a developer installs it with scripts/setup_torch.py.
 
 ## Known issues
 

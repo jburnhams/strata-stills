@@ -11,86 +11,136 @@ What it does:
   3. repairs a clashing cuDNN: pip puts the cuDNN of CUDA 12 and of CUDA 13 (nvidia-cudnn-cu12, nvidia-cudnn-cu13) in the SAME folder, so having both leaves one with the other's files. A GTX 1050 with the CUDA 13 cuDNN (9.24, which has no kernels for it) failed every convolution ('unable to find an engine'), which made the learned denoise 3 times slower and the whole GPU path run out of memory; the one that does not belong to the torch is removed and the right one put back;
   4. probes the result in a fresh process (a kernel and a cuDNN convolution in float32 and half on the card) and, if that fails, goes down the ladder to the next older plan (cu128 -> cu126 <2.10).
 Run it again after changing the card, or when `stratastills doctor` says cuDNN is off. Everything but the probe is skipped with --check; --dry-run prints the commands. Standard library only."""
-import argparse, glob, json, os, platform, re, subprocess, sys
 
-INDEX = 'https://download.pytorch.org/whl/'
-PLANS = {                                              # name: (pip index suffix or None for PyPI, torch requirement, the CUDA major of its cuDNN or None)
-    'cu128': ('cu128', 'torch', 12),
-    'cu126': ('cu126', 'torch<2.10', 12),
-    'rocm64': ('rocm6.4', 'torch<2.10', None),         # AMD: 2.9.1+rocm6.4 is the build tried on a Radeon 780M (gfx1103) with the override below; the wheel bundles ROCm (about 15 GB installed)
-    'cpu': ('cpu', 'torch', None),
-    'mac': (None, 'torch', None),
+import argparse
+import glob
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+
+INDEX = "https://download.pytorch.org/whl/"
+PLANS = {  # name: (pip index suffix or None for PyPI, torch requirement, the CUDA major of its cuDNN or None)
+    "cu128": ("cu128", "torch", 12),
+    "cu126": ("cu126", "torch<2.10", 12),
+    "rocm64": (
+        "rocm6.4",
+        "torch<2.10",
+        None,
+    ),  # AMD: 2.9.1+rocm6.4 is the build tried on a Radeon 780M (gfx1103) with the override below; the wheel bundles ROCm (about 15 GB installed)
+    "cpu": ("cpu", "torch", None),
+    "mac": (None, "torch", None),
 }
-LADDER = ['cu128', 'cu126']
+LADDER = ["cu128", "cu126"]
 
 
 def gpus():
     """[(name, (major, minor))] of the NVIDIA cards nvidia-smi sees (empty when there is no nvidia-smi or no card)."""
-    try: out = subprocess.run(['nvidia-smi', '--query-gpu=name,compute_cap', '--format=csv,noheader'], capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError): return []
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
     cards = []
     for line in out.splitlines():
-        name, _, cc = line.rpartition(',')
-        m = re.match(r'\s*(\d+)\.(\d+)', cc)
-        if name and m: cards.append((name.strip(), (int(m.group(1)), int(m.group(2)))))
+        name, _, cc = line.rpartition(",")
+        m = re.match(r"\s*(\d+)\.(\d+)", cc)
+        if name and m:
+            cards.append((name.strip(), (int(m.group(1)), int(m.group(2)))))
     return cards
 
 
 # gfx_target_version (major*10000 + minor*100 + step, as in /sys/class/kfd) -> the HSA_OVERRIDE_GFX_VERSION that makes ROCm's prebuilt kernels run on it. Only the RDNA3 chips below gfx1100 need one (tried: gfx1103, the 780M);
 # gfx1100 (RX 7900) and newer have kernels of their own. Duplicated in src/stratastills/gpu.py (this script is standard library only).
-AMD_OVERRIDE = {110001: '11.0.0', 110002: '11.0.0', 110003: '11.0.0'}
+AMD_OVERRIDE = {110001: "11.0.0", 110002: "11.0.0", 110003: "11.0.0"}
 
 
-def amd_chips(root='/sys/class/kfd/kfd/topology/nodes'):
+def amd_chips(root="/sys/class/kfd/kfd/topology/nodes"):
     """[gfx_target_version] of the AMD GPUs the kernel's compute driver (KFD) lists; empty off Linux, or without the amdgpu driver. The CPU node reports 0."""
     out = []
-    for f in sorted(glob.glob(os.path.join(root, '*', 'properties'))):
-        try: props = dict(l.split(None, 1) for l in open(f).read().splitlines() if ' ' in l)
-        except OSError: continue
-        v = int(props.get('gfx_target_version', '0').strip() or 0)
-        if v and props.get('vendor_id', '').strip() == '4098': out.append(v)
+    for f in sorted(glob.glob(os.path.join(root, "*", "properties"))):
+        try:
+            props = dict(l.split(None, 1) for l in open(f).read().splitlines() if " " in l)
+        except OSError:
+            continue
+        v = int(props.get("gfx_target_version", "0").strip() or 0)
+        if v and props.get("vendor_id", "").strip() == "4098":
+            out.append(v)
     return out
 
 
 def amd_env(chips):
     """{'HSA_OVERRIDE_GFX_VERSION': ...} when one of the chips needs it and the user has not set it, else {}."""
     for v in chips:
-        if v in AMD_OVERRIDE and 'HSA_OVERRIDE_GFX_VERSION' not in os.environ: return {'HSA_OVERRIDE_GFX_VERSION': AMD_OVERRIDE[v]}
+        if v in AMD_OVERRIDE and "HSA_OVERRIDE_GFX_VERSION" not in os.environ:
+            return {"HSA_OVERRIDE_GFX_VERSION": AMD_OVERRIDE[v]}
     return {}
 
 
 def choose(cards, system, amd=()):
     """(plan name, why) from the NVIDIA cards, the OS (platform.system()) and the AMD chips (gfx_target_version list)."""
-    if system == 'Darwin': return 'mac', 'macOS: the PyPI wheel has the Metal (MPS) backend'
-    if not cards and system == 'Linux' and amd and max(amd) >= 100300: return 'rocm64', f'AMD GPU (gfx{max(amd) // 10000}{max(amd) // 100 % 100:x}{max(amd) % 100:x}) and no NVIDIA card: torch 2.9 with ROCm 6.4'
-    if not cards: return 'cpu', 'no NVIDIA card found (nvidia-smi) and no AMD GPU (KFD): the CPU wheel'
-    low = min(cc for _, cc in cards); names = ', '.join(n for n, _ in cards)
-    if low < (7, 5): return 'cu126', f'{names}: compute capability {low[0]}.{low[1]} is under 7.5, so torch 2.9 with CUDA 12.6 (the newest with kernels for it)'
-    return 'cu128', f'{names}: compute capability {low[0]}.{low[1]}: the newest torch, CUDA 12.8 (the first build for RTX 50 / sm_120)'
+    if system == "Darwin":
+        return "mac", "macOS: the PyPI wheel has the Metal (MPS) backend"
+    if not cards and system == "Linux" and amd and max(amd) >= 100300:
+        return (
+            "rocm64",
+            f"AMD GPU (gfx{max(amd) // 10000}{max(amd) // 100 % 100:x}{max(amd) % 100:x}) and no NVIDIA card: torch 2.9 with ROCm 6.4",
+        )
+    if not cards:
+        return "cpu", "no NVIDIA card found (nvidia-smi) and no AMD GPU (KFD): the CPU wheel"
+    low = min(cc for _, cc in cards)
+    names = ", ".join(n for n, _ in cards)
+    if low < (7, 5):
+        return (
+            "cu126",
+            f"{names}: compute capability {low[0]}.{low[1]} is under 7.5, so torch 2.9 with CUDA 12.6 (the newest with kernels for it)",
+        )
+    return (
+        "cu128",
+        f"{names}: compute capability {low[0]}.{low[1]}: the newest torch, CUDA 12.8 (the first build for RTX 50 / sm_120)",
+    )
 
 
 def pip(py, *args, dry=False):
-    cmd = [py, '-m', 'pip', *args]; print('$', ' '.join(cmd), flush=True)
-    if dry: return 0
+    cmd = [py, "-m", "pip", *args]
+    print("$", " ".join(cmd), flush=True)
+    if dry:
+        return 0
     return subprocess.run(cmd).returncode
 
 
 def installed(py, prefix):
     """{name: version} of the pip packages whose name starts with `prefix`."""
-    out = subprocess.run([py, '-m', 'pip', 'list', '--format=json'], capture_output=True, text=True).stdout
-    try: return {p['name']: p['version'] for p in json.loads(out) if p['name'].lower().startswith(prefix)}
-    except ValueError: return {}
+    out = subprocess.run([py, "-m", "pip", "list", "--format=json"], capture_output=True, text=True).stdout
+    try:
+        return {p["name"]: p["version"] for p in json.loads(out) if p["name"].lower().startswith(prefix)}
+    except ValueError:
+        return {}
 
 
 def repair_cudnn(py, plan, dry=False):
     """Leave only the cuDNN package of the torch's CUDA major version, with its own files back in place (see the module doc). True when something was changed."""
     major = PLANS[plan][2]
-    if major is None: return False
-    have = installed(py, 'nvidia-cudnn'); wanted = f'nvidia-cudnn-cu{major}'; wrong = [n for n in have if n.lower() != wanted and re.match(r'nvidia-cudnn-cu\d+$', n.lower())]
-    if not wrong or wanted not in {n.lower() for n in have}: return False
-    print(f'two cuDNN packages are installed ({", ".join(sorted(have))}): removing {", ".join(wrong)} and putting {wanted} back')
+    if major is None:
+        return False
+    have = installed(py, "nvidia-cudnn")
+    wanted = f"nvidia-cudnn-cu{major}"
+    wrong = [n for n in have if n.lower() != wanted and re.match(r"nvidia-cudnn-cu\d+$", n.lower())]
+    if not wrong or wanted not in {n.lower() for n in have}:
+        return False
+    print(
+        f"two cuDNN packages are installed ({', '.join(sorted(have))}): removing {', '.join(wrong)} and putting {wanted} back"
+    )
     version = next(v for n, v in have.items() if n.lower() == wanted)
-    pip(py, 'uninstall', '-y', *wrong, dry=dry); pip(py, 'install', '--no-deps', '--force-reinstall', f'{wanted}=={version}', dry=dry); return True
+    pip(py, "uninstall", "-y", *wrong, dry=dry)
+    pip(py, "install", "--no-deps", "--force-reinstall", f"{wanted}=={version}", dry=dry)
+    return True
 
 
 PROBE = r"""
@@ -114,31 +164,57 @@ print(json.dumps(r))
 
 def probe(py):
     """The state of torch in `py`, from a fresh process: {ok, torch, cuda, available, card, kernel, cudnn, cudnn_ok, ...}."""
-    out = subprocess.run([py, '-c', PROBE], capture_output=True, text=True, env={**os.environ, **amd_env(amd_chips())}).stdout.strip().splitlines()
-    try: return json.loads(out[-1])
-    except (ValueError, IndexError): return dict(ok=False, error='the probe printed nothing (torch not installed?)')
+    out = (
+        subprocess.run([py, "-c", PROBE], capture_output=True, text=True, env={**os.environ, **amd_env(amd_chips())})
+        .stdout.strip()
+        .splitlines()
+    )
+    try:
+        return json.loads(out[-1])
+    except (ValueError, IndexError):
+        return dict(ok=False, error="the probe printed nothing (torch not installed?)")
 
 
 def install(py, plan, dry=False):
     index, req, _ = PLANS[plan]
-    return pip(py, 'install', '--upgrade', req, 'torchvision', *(['--index-url', INDEX + index] if index else []), dry=dry)
+    return pip(
+        py, "install", "--upgrade", req, "torchvision", *(["--index-url", INDEX + index] if index else []), dry=dry
+    )
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--python', default=sys.executable); ap.add_argument('--cuda', default='auto', choices=('auto', 'cu128', 'cu126', 'rocm64', 'cpu')); ap.add_argument('--dry-run', action='store_true'); ap.add_argument('--check', action='store_true'); a = ap.parse_args(argv)
-    cards = gpus(); plan, why = choose(cards, platform.system(), amd_chips()) if a.cuda == 'auto' else (a.cuda, f'asked for {a.cuda}'); print(f'plan: {plan}: {why}')
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--cuda", default="auto", choices=("auto", "cu128", "cu126", "rocm64", "cpu"))
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--check", action="store_true")
+    a = ap.parse_args(argv)
+    cards = gpus()
+    plan, why = choose(cards, platform.system(), amd_chips()) if a.cuda == "auto" else (a.cuda, f"asked for {a.cuda}")
+    print(f"plan: {plan}: {why}")
     if not a.check:
-        start = LADDER.index(plan) if plan in LADDER else 0; tries = LADDER[start:] if plan in LADDER else [plan]
+        start = LADDER.index(plan) if plan in LADDER else 0
+        tries = LADDER[start:] if plan in LADDER else [plan]
         for p in tries:
-            if install(a.python, p, a.dry_run): print(f'pip failed for {p}'); continue
+            if install(a.python, p, a.dry_run):
+                print(f"pip failed for {p}")
+                continue
             repair_cudnn(a.python, p, a.dry_run)
-            if a.dry_run: return 0
-            r = probe(a.python); print('probe:', json.dumps(r))
-            if r.get('ok'): return 0
-            print(f'torch from the {p} plan does not work on this machine' + (': trying the next older plan' if p != tries[-1] else ''))
+            if a.dry_run:
+                return 0
+            r = probe(a.python)
+            print("probe:", json.dumps(r))
+            if r.get("ok"):
+                return 0
+            print(
+                f"torch from the {p} plan does not work on this machine"
+                + (": trying the next older plan" if p != tries[-1] else "")
+            )
         return 1
-    r = probe(a.python); print('probe:', json.dumps(r)); return 0 if r.get('ok') else 1
+    r = probe(a.python)
+    print("probe:", json.dumps(r))
+    return 0 if r.get("ok") else 1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

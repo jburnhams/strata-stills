@@ -13,188 +13,377 @@ Presets: built in (BUILTIN: 'best' is the default and needs nothing chosen) or t
 `apply_rules` generates what is missing, so adding a folder and pressing one button gives the preferred variants of every picture in it.
 
 Nothing is ever written into a source folder."""
-import contextlib, datetime as dt, hashlib, json, math, os, re, time
 
-import cv2, numpy as np
+import contextlib
+import datetime as dt
+import hashlib
+import json
+import math
+import os
+import re
+import time
 
-from stratastills import detail, develop, export as X, gpu, images, inputs, jpeg_quality, lensfundb, match, preview, projects as P, settings, sizeplan, tonematch, transforms
+import cv2
+import numpy as np
 
-DEFAULT_QUALITY = 90            # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
-SHARPEN_AMOUNT = 2.0            # 2026-10-30: 3.0 -> 2.0 with detail.KNEE 0.03 in place of the hard clamp (amount 3 went far past the measured blur and the clamp cut it back, so thin lines came out as flat stepped bands and low-contrast fur as flat cells; docs/progress.md). Earlier: chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
-ORDER = ('develop', 'level', 'resize', 'sharpen', 'encode')
-LABELS = dict(develop='Develop', level='Level', resize='Size', sharpen='Sharpen', encode='Encode')
+from stratastills import (
+    detail,
+    develop,
+    gpu,
+    images,
+    inputs,
+    jpeg_quality,
+    lensfundb,
+    match,
+    preview,
+    settings,
+    sizeplan,
+    transforms,
+)
+from stratastills import (
+    export as X,
+)
+from stratastills import (
+    projects as P,
+)
+
+DEFAULT_QUALITY = 90  # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
+SHARPEN_AMOUNT = 2.0  # 2026-10-30: 3.0 -> 2.0 with detail.KNEE 0.03 in place of the hard clamp (amount 3 went far past the measured blur and the clamp cut it back, so thin lines came out as flat stepped bands and low-contrast fur as flat cells; docs/progress.md). Earlier: chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
+ORDER = ("develop", "level", "resize", "sharpen", "encode")
+LABELS = dict(develop="Develop", level="Level", resize="Size", sharpen="Sharpen", encode="Encode")
 
 
 # ---- the stages -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
 def _num(params, k, lo, hi, default):
-    try: v = round(float(params.get(k, default)), 3)
-    except (TypeError, ValueError): raise P.ProjectError(f'{k} must be a number')
-    if not lo <= v <= hi: raise P.ProjectError(f'{k} must be between {lo:g} and {hi:g}')
+    try:
+        v = round(float(params.get(k, default)), 3)
+    except (TypeError, ValueError):
+        raise P.ProjectError(f"{k} must be a number")
+    if not lo <= v <= hi:
+        raise P.ProjectError(f"{k} must be between {lo:g} and {hi:g}")
     return v
 
 
 def _exposure(v):
     """'auto' (the tone of the camera's own JPEG of the picture when the raw has a usable one, as 'match' below; else the median of the picture is brought to a fixed lightness), 'camera' (the exposure the camera's own JPEG has: needs the device's tone curve, see inputs.py), 'match' (the tone of the camera's own JPEG of this very picture, found from the preview inside the raw: tonematch.py; the curve is kept in the record of the picture) or a number of stops added to the camera's exposure; 0 is 'camera'."""
-    if str(v).lower() in ('auto', 'camera', 'match'): return str(v).lower()
-    try: n = round(float(v), 2)
-    except (TypeError, ValueError): raise P.ProjectError("develop exposure is 'auto', 'camera' or a number of stops")
-    if not -5 <= n <= 5: raise P.ProjectError('exposure must be between -5 and 5 stops')
-    return 'camera' if n == 0 else n
+    if str(v).lower() in ("auto", "camera", "match"):
+        return str(v).lower()
+    try:
+        n = round(float(v), 2)
+    except (TypeError, ValueError):
+        raise P.ProjectError("develop exposure is 'auto', 'camera' or a number of stops")
+    if not -5 <= n <= 5:
+        raise P.ProjectError("exposure must be between -5 and 5 stops")
+    return "camera" if n == 0 else n
 
 
 def _denoise(v):
     """The noise clean-up of the develop: 'auto' (the classical clean-up, colour noise and fringes taken out edge-aware and the luminance grain cored band by band, both driven by the noise the device's profile says each pixel has; and the learned model on top where the picture's own noise is high: blind_noise >= AUTO_AI_NOISE, about ISO 2500 and up), 'classical' (never the model), 'ai' (always the model), 'chroma' (colour only), 'off'. Only 'auto' is meant for use: the others are for tests and tuning."""
-    if str(v).lower() not in ('auto', 'ai', 'classical', 'chroma', 'off'): raise P.ProjectError("develop denoise is 'auto', 'ai', 'classical', 'chroma' or 'off'")
+    if str(v).lower() not in ("auto", "ai", "classical", "chroma", "off"):
+        raise P.ProjectError("develop denoise is 'auto', 'ai', 'classical', 'chroma' or 'off'")
     return str(v).lower()
 
 
 def _lens(v):
     """'auto': all the lens correction there is for the file is applied (a DNG's own opcodes; for another raw the camera's own shading, distortion and colour-fringe tables, else the lensfun profile of its lens: lenscorr.py, lensfundb.py); 'off': none; 'shading' or 'geometry' (distortion and colour fringes): only that; 'camera': what the camera's own JPEG shows (geometry when its distortion setting is on, never the shading: the setting the parity with the JPEGs is measured with)."""
-    if str(v).lower() not in ('auto', 'off', 'camera', 'geometry', 'shading'): raise P.ProjectError("develop lens is 'auto', 'off', 'camera', 'geometry' or 'shading'")
+    if str(v).lower() not in ("auto", "off", "camera", "geometry", "shading"):
+        raise P.ProjectError("develop lens is 'auto', 'off', 'camera', 'geometry' or 'shading'")
     return str(v).lower()
 
 
 def _recover(v):
     """How hard the local tone step squeezes bright regions and lifts shadows: 'auto' (0.35, but 0 with `exposure: match`: the matched tone is the camera's own global curve, and a local tone step on top of it moved the highlights and shadows away from the camera's JPEG: DSC00449-00451 colour difference 4.1 -> 2.3), or a number from 0 to 1."""
-    if str(v).lower() == 'auto': return 'auto'
-    try: n = round(float(v), 3)
-    except (TypeError, ValueError): raise P.ProjectError("develop recover is 'auto' or a number from 0 to 1")
-    if not 0 <= n <= 1: raise P.ProjectError('recover must be between 0 and 1')
+    if str(v).lower() == "auto":
+        return "auto"
+    try:
+        n = round(float(v), 3)
+    except (TypeError, ValueError):
+        raise P.ProjectError("develop recover is 'auto' or a number from 0 to 1")
+    if not 0 <= n <= 1:
+        raise P.ProjectError("recover must be between 0 and 1")
     return n
 
 
 def _frame(v):
     v = str(v).lower()
-    if v not in ('auto', 'full'): raise P.ProjectError("develop frame is 'full' (the whole picture, the default: framing is decided later) or 'auto' (crop to the part of the picture the lens covers)")
+    if v not in ("auto", "full"):
+        raise P.ProjectError(
+            "develop frame is 'full' (the whole picture, the default: framing is decided later) or 'auto' (crop to the part of the picture the lens covers)"
+        )
     return v
 
 
 def _develop_params(p):
-    m = str(p.get('match', 'auto')).lower()
-    if m not in ('auto', 'off'): raise P.ProjectError("develop match is 'auto' or 'off'")
-    return dict(highlight_contrast=_num(p, 'highlight_contrast', 0, 3, develop.HIGHLIGHT_CONTRAST), match=m, exposure=_exposure(p.get('exposure', 'auto')), recover=_recover(p.get('recover', 'auto')), lens=_lens(p.get('lens', 'auto')), denoise=_denoise(p.get('denoise', 'auto')), frame=_frame(p.get('frame', 'full')))                    # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
-def _level_params(p): return dict(nadir=bool(p.get('nadir', False)))                                                    # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
+    m = str(p.get("match", "auto")).lower()
+    if m not in ("auto", "off"):
+        raise P.ProjectError("develop match is 'auto' or 'off'")
+    return dict(
+        highlight_contrast=_num(p, "highlight_contrast", 0, 3, develop.HIGHLIGHT_CONTRAST),
+        match=m,
+        exposure=_exposure(p.get("exposure", "auto")),
+        recover=_recover(p.get("recover", "auto")),
+        lens=_lens(p.get("lens", "auto")),
+        denoise=_denoise(p.get("denoise", "auto")),
+        frame=_frame(p.get("frame", "full")),
+    )  # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
+
+
+def _level_params(p):
+    return dict(
+        nadir=bool(p.get("nadir", False))
+    )  # straight-down shots are not levelled unless asked: their lines (roofs, kerbs) are weak evidence
 
 
 def _resize_params(p):
-    s = str(p.get('size', 'auto')).lower()
-    if s in ('auto', 'native'): return dict(size=s)
-    try: n = int(float(s))
-    except ValueError: raise P.ProjectError(f'bad size {s!r}')
-    if n < 64: raise P.ProjectError('the size is too small')
+    s = str(p.get("size", "auto")).lower()
+    if s in ("auto", "native"):
+        return dict(size=s)
+    try:
+        n = int(float(s))
+    except ValueError:
+        raise P.ProjectError(f"bad size {s!r}")
+    if n < 64:
+        raise P.ProjectError("the size is too small")
     return dict(size=str(n))
 
 
-def _sharpen_params(p): return dict(amount=_num(p, 'amount', 0, 4, SHARPEN_AMOUNT))
+def _sharpen_params(p):
+    return dict(amount=_num(p, "amount", 0, 4, SHARPEN_AMOUNT))
 
 
 def _encode_params(p):
-    fmt = p.get('format', 'jpeg')
-    if fmt not in X.FORMATS: raise P.ProjectError(f'unknown format {fmt!r}')
-    q = p.get('quality', DEFAULT_QUALITY)
-    if fmt == 'tiff': return dict(format='tiff', quality='auto')                       # a TIFF has no quality: a setting that does nothing must not make a different key
-    if str(q).lower() == 'auto': return dict(format='jpeg', quality='auto')
-    try: q = int(q)
-    except (TypeError, ValueError): raise P.ProjectError('the JPEG quality must be a number or auto')
-    if not 60 <= q <= 100: raise P.ProjectError('the JPEG quality must be between 60 and 100')
-    return dict(format='jpeg', quality=q)
+    fmt = p.get("format", "jpeg")
+    if fmt not in X.FORMATS:
+        raise P.ProjectError(f"unknown format {fmt!r}")
+    q = p.get("quality", DEFAULT_QUALITY)
+    if fmt == "tiff":
+        return dict(
+            format="tiff", quality="auto"
+        )  # a TIFF has no quality: a setting that does nothing must not make a different key
+    if str(q).lower() == "auto":
+        return dict(format="jpeg", quality="auto")
+    try:
+        q = int(q)
+    except (TypeError, ValueError):
+        raise P.ProjectError("the JPEG quality must be a number or auto")
+    if not 60 <= q <= 100:
+        raise P.ProjectError("the JPEG quality must be between 60 and 100")
+    return dict(format="jpeg", quality=q)
 
 
-PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_params, sharpen=_sharpen_params, encode=_encode_params)
+PARAMS = dict(
+    develop=_develop_params, level=_level_params, resize=_resize_params, sharpen=_sharpen_params, encode=_encode_params
+)
 
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 3, sharpen=7, encode=4)[stage]                    # encode 4: nvJPEG output checked, so a corrupt file made by version 3 is generated again
+    return dict(
+        develop=develop.VERSION, level=transforms.VERSION["level"], resize=1000 * detail.TILE + 3, sharpen=7, encode=4
+    )[stage]  # encode 4: nvJPEG output checked, so a corrupt file made by version 3 is generated again
 
 
 class State:
     """What flows through the stages of one run."""
+
     def __init__(self, pid, iid, item, variant, say):
         self.pid, self.iid, self.item, self.variant, self.say = pid, iid, item, variant, say
-        self.path = variant['path']; self._rgb = None; self.dev = None; self.final_hw = None; self.native = None; self.scale = 1.0; self._res = None; self.rec = dict(steps=[]); self.quality = None; self.file = None; self.analysis = None
+        self.path = variant["path"]
+        self._rgb = None
+        self.dev = None
+        self.final_hw = None
+        self.native = None
+        self.scale = 1.0
+        self._res = None
+        self.rec = dict(steps=[])
+        self.quality = None
+        self.file = None
+        self.analysis = None
 
     @property
     def rgb(self):
         """The picture as a float32 (H, W, 3) array. From resize on it may live on the card instead (`dev`, a (3, H, W) tensor: resize, sharpen and the JPEG encoder then hand it on without a trip to the CPU and back); asking for the array downloads it once."""
-        if self._rgb is None and self.dev is not None: self._rgb = gpu.to_numpy(self.dev)
+        if self._rgb is None and self.dev is not None:
+            self._rgb = gpu.to_numpy(self.dev)
         return self._rgb
 
     @rgb.setter
-    def rgb(self, v): self._rgb = v; self.dev = None
+    def rgb(self, v):
+        self._rgb = v
+        self.dev = None
 
-    def set_dev(self, t): self.dev = t; self._rgb = None
+    def set_dev(self, t):
+        self.dev = t
+        self._rgb = None
 
-    def hw(self): return tuple(self.dev.shape[1:]) if self.dev is not None else tuple(self._rgb.shape[:2]) if self._rgb is not None else self.final_hw
+    def hw(self):
+        return (
+            tuple(self.dev.shape[1:])
+            if self.dev is not None
+            else tuple(self._rgb.shape[:2])
+            if self._rgb is not None
+            else self.final_hw
+        )
 
     @property
     def res(self):
-        if self._res is None: self.say('measuring the real detail'); self._res = X.measure_detail(self.pid, self.path, luma=self.analysis)
+        if self._res is None:
+            self.say("measuring the real detail")
+            self._res = X.measure_detail(self.pid, self.path, luma=self.analysis)
         return self._res
 
 
 def _reference_picture(item):
     """A developed (half size) neighbouring frame to match a panorama to: its raw when it has one, else its JPEG."""
-    v = next((x for x in item['variants'] if x['kind'] == 'raw'), None) or next((x for x in item['variants'] if x['kind'] == 'jpeg'), None)
-    if v is None: return None
-    if X._is_camera_raw(v['path']): return develop.develop(v['path'], half=True)
-    return images.load(v['path'], 100000)[:, :, ::-1].astype(np.float32) / 255.0
+    v = next((x for x in item["variants"] if x["kind"] == "raw"), None) or next(
+        (x for x in item["variants"] if x["kind"] == "jpeg"), None
+    )
+    if v is None:
+        return None
+    if X._is_camera_raw(v["path"]):
+        return develop.develop(v["path"], half=True)
+    return images.load(v["path"], 100000)[:, :, ::-1].astype(np.float32) / 255.0
 
 
 def _centre(a, f):
-    h, w = a.shape[:2]; nh, nw = round(h * f), round(w * f); y, x = (h - nh) // 2, (w - nw) // 2; return a[y:y + nh, x:x + nw]
+    h, w = a.shape[:2]
+    nh, nw = round(h * f), round(w * f)
+    y, x = (h - nh) // 2, (w - nw) // 2
+    return a[y : y + nh, x : x + nw]
 
 
 def crop_to_image_circle(st, frame):
     """`frame: auto`: a lens made for a smaller sensor (an APS-C lens on a full frame body) only lights a circle; the rest of the picture is black falloff that no correction can bring back, so the picture is cropped (centred, same shape) to the largest rectangle inside the circle. `full` keeps everything (debugging)."""
-    f = lensfundb.image_circle(st.path) if frame == 'auto' else 1.0
-    if f >= 1.0: return
+    f = lensfundb.image_circle(st.path) if frame == "auto" else 1.0
+    if f >= 1.0:
+        return
     st.rgb = np.ascontiguousarray(_centre(st.rgb, f))
-    if st.analysis is not None: st.analysis = np.ascontiguousarray(_centre(st.analysis, f))
-    st.rec['frame'] = dict(applied=True, fraction=f, reason='the lens was made for a smaller sensor: cropped to the part it covers')
+    if st.analysis is not None:
+        st.analysis = np.ascontiguousarray(_centre(st.analysis, f))
+    st.rec["frame"] = dict(
+        applied=True, fraction=f, reason="the lens was made for a smaller sensor: cropped to the part it covers"
+    )
 
 
 def run_develop(st, p):
-    st.say('developing the full-size picture'); an = {}; ev = p.get('exposure', 'auto'); kw = {}
-    lens = p.get('lens', 'auto'); kw['lens'] = lens; kw['denoise'] = p.get('denoise', 'auto'); rec = p.get('recover', 'auto'); raw = X._is_camera_raw(st.path); matching = ev in ('auto', 'match') and raw
-    if matching: st.say('matching the tone of the camera JPEG'); kw['tone'] = 'match'; kw['recover'] = rec           # the tone of the camera's own JPEG of this picture (the preview in the raw), found by the develop itself (on the card when there is one) and kept with the picture so that it can be adjusted later; `auto` falls back to the fixed lightness rule when the file has no usable preview, `match` to the camera's exposure
-    else: kw['recover'] = 0.35 if rec == 'auto' else rec
-    st.rgb, how = X._read_full(st.path, analysis=an, highlight_contrast=p['highlight_contrast'], ev=ev, **kw) if X._is_camera_raw(st.path) else X._read_full(st.path); st.analysis = an.get('luma')
-    if matching: tone = an.get('tone'); st.rec['tone'] = dict(source='the JPEG inside the raw', **tone) if tone else dict(source=None, reason='no usable preview in the file (or it does not agree with the raw): ' + ('the exposure is set by the picture itself' if ev == 'auto' else 'the camera exposure and the device tone curve are used'))
-    if raw: crop_to_image_circle(st, p.get('frame', 'full'))
-    st.rec['input'] = inputs.describe(st.path); st.rec['steps'].append(how); h, w = st.rgb.shape[:2]; st.native = [w, h]; st.rec['native'] = [w, h]
-    if p.get('match', 'auto') == 'auto' and st.rec['input']['kind'] == 'linear-dng':                                      # a merge is exposed by its own content: bring it to the levels of the frames it was made from
-        refs = match.references(st.item, P.source_items(st.pid, st.item['id'].partition('~')[0]))
-        if not refs: st.rec['match'] = dict(applied=False, reason='no neighbouring frames found by time stamp'); return
-        st.say('matching the levels of the neighbouring frames'); pics = [r for r in (_reference_picture(it) for it in refs) if r is not None]
-        st.rgb, rec = match.match_levels(st.rgb, pics); st.rec['match'] = dict(rec, references=[it['stem'] for it in refs])
-        if rec['applied']: st.rec['steps'].append(f"levels matched to {', '.join(it['stem'] for it in refs)} ({rec['points']} points, rms {rec['rms_before']:.3f} -> {rec['rms_after']:.3f})")
+    st.say("developing the full-size picture")
+    an = {}
+    ev = p.get("exposure", "auto")
+    kw = {}
+    lens = p.get("lens", "auto")
+    kw["lens"] = lens
+    kw["denoise"] = p.get("denoise", "auto")
+    rec = p.get("recover", "auto")
+    raw = X._is_camera_raw(st.path)
+    matching = ev in ("auto", "match") and raw
+    if matching:
+        st.say("matching the tone of the camera JPEG")
+        kw["tone"] = "match"
+        kw["recover"] = (
+            rec  # the tone of the camera's own JPEG of this picture (the preview in the raw), found by the develop itself (on the card when there is one) and kept with the picture so that it can be adjusted later; `auto` falls back to the fixed lightness rule when the file has no usable preview, `match` to the camera's exposure
+        )
+    else:
+        kw["recover"] = 0.35 if rec == "auto" else rec
+    st.rgb, how = (
+        X._read_full(st.path, analysis=an, highlight_contrast=p["highlight_contrast"], ev=ev, **kw)
+        if X._is_camera_raw(st.path)
+        else X._read_full(st.path)
+    )
+    st.analysis = an.get("luma")
+    if matching:
+        tone = an.get("tone")
+        st.rec["tone"] = (
+            dict(source="the JPEG inside the raw", **tone)
+            if tone
+            else dict(
+                source=None,
+                reason="no usable preview in the file (or it does not agree with the raw): "
+                + (
+                    "the exposure is set by the picture itself"
+                    if ev == "auto"
+                    else "the camera exposure and the device tone curve are used"
+                ),
+            )
+        )
+    if raw:
+        crop_to_image_circle(st, p.get("frame", "full"))
+    st.rec["input"] = inputs.describe(st.path)
+    st.rec["steps"].append(how)
+    h, w = st.rgb.shape[:2]
+    st.native = [w, h]
+    st.rec["native"] = [w, h]
+    if (
+        p.get("match", "auto") == "auto" and st.rec["input"]["kind"] == "linear-dng"
+    ):  # a merge is exposed by its own content: bring it to the levels of the frames it was made from
+        refs = match.references(st.item, P.source_items(st.pid, st.item["id"].partition("~")[0]))
+        if not refs:
+            st.rec["match"] = dict(applied=False, reason="no neighbouring frames found by time stamp")
+            return
+        st.say("matching the levels of the neighbouring frames")
+        pics = [r for r in (_reference_picture(it) for it in refs) if r is not None]
+        st.rgb, rec = match.match_levels(st.rgb, pics)
+        st.rec["match"] = dict(rec, references=[it["stem"] for it in refs])
+        if rec["applied"]:
+            st.rec["steps"].append(
+                f"levels matched to {', '.join(it['stem'] for it in refs)} ({rec['points']} points, rms {rec['rms_before']:.3f} -> {rec['rms_after']:.3f})"
+            )
 
 
 def run_level(st, p):
-    st.say('levelling')
-    if st.analysis is not None:                                                                                      # the tilt is measured on the analysis luminance the develop pass already made (reduced to 2048 px): no second develop
-        a = st.analysis; k = min(1.0, 2048 / max(a.shape)); small = cv2.resize(a, (round(a.shape[1] * k), round(a.shape[0] * k)), interpolation=cv2.INTER_AREA); info = transforms.level_info((small * 255 + 0.5).astype(np.uint8), dict(preview._ctx(st.item), level_nadir=p['nadir']))
-    else: work = images.working(P.folder(st.pid), st.path, preview.WORK_PX); info = transforms.apply('level', work, dict(preview._ctx(st.item), level_nadir=p['nadir']))[1]
-    st.rec['level'] = {k: info[k] for k in ('applied', 'angle', 'confidence', 'reason') if k in info}
-    if info.get('applied'): st.rgb = transforms.rotate_fill(st.rgb, info['angle']); st.rec['steps'].append(f"levelled by {info['angle']:+.2f} degrees")
+    st.say("levelling")
+    if (
+        st.analysis is not None
+    ):  # the tilt is measured on the analysis luminance the develop pass already made (reduced to 2048 px): no second develop
+        a = st.analysis
+        k = min(1.0, 2048 / max(a.shape))
+        small = cv2.resize(a, (round(a.shape[1] * k), round(a.shape[0] * k)), interpolation=cv2.INTER_AREA)
+        info = transforms.level_info(
+            (small * 255 + 0.5).astype(np.uint8), dict(preview._ctx(st.item), level_nadir=p["nadir"])
+        )
+    else:
+        work = images.working(P.folder(st.pid), st.path, preview.WORK_PX)
+        info = transforms.apply("level", work, dict(preview._ctx(st.item), level_nadir=p["nadir"]))[1]
+    st.rec["level"] = {k: info[k] for k in ("applied", "angle", "confidence", "reason") if k in info}
+    if info.get("applied"):
+        st.rgb = transforms.rotate_fill(st.rgb, info["angle"])
+        st.rec["steps"].append(f"levelled by {info['angle']:+.2f} degrees")
 
 
 def run_resize(st, p):
-    res = st.res; st.rec['detail'] = {k: res.get(k) for k in ('ok', 'f50', 'f30', 'f20', 'scale50', 'scale30', 'scale20', 'recommended', 'alpha')}
-    h, w = st.rgb.shape[:2]; long_native = max(w, h); out_long, why = X.choose_size(p['size'], long_native, res)
-    if p['size'] in (None, 'auto'):                                                                                  # the folder's size for pictures of this native size, so they all come out alike
-        try: fs = sizeplan.folder_size(st.pid, st.item, (w, h), lambda path: X.measure_detail(st.pid, path), lambda it: source_variant(it))
-        except Exception: fs = None
-        if fs: out_long, why = fs, 'the detail limit measured over this folder (median of a sample of its pictures of this size)'
-    floor = sizeplan.min_share(st.rec.get('input', {}).get('kind'))
-    if p['size'] in (None, 'auto') and out_long < floor * long_native: out_long, why = math.ceil(floor * long_native), f'{floor:.0%} of the native size: auto never goes below it'
-    if p['size'] in (None, 'auto'): ow, oh = sizeplan.output_dims(w, h, out_long)                                      # tidy dimensions; a size asked for in pixels is made exactly
-    else: ow, oh = (out_long, max(1, round(h * out_long / w))) if w >= h else (max(1, round(w * out_long / h)), out_long)
-    st.scale = max(ow, oh) / long_native; st.rec['size'] = dict(long_side=max(ow, oh), why=why)
+    res = st.res
+    st.rec["detail"] = {
+        k: res.get(k) for k in ("ok", "f50", "f30", "f20", "scale50", "scale30", "scale20", "recommended", "alpha")
+    }
+    h, w = st.rgb.shape[:2]
+    long_native = max(w, h)
+    out_long, why = X.choose_size(p["size"], long_native, res)
+    if p["size"] in (None, "auto"):  # the folder's size for pictures of this native size, so they all come out alike
+        try:
+            fs = sizeplan.folder_size(
+                st.pid, st.item, (w, h), lambda path: X.measure_detail(st.pid, path), lambda it: source_variant(it)
+            )
+        except Exception:
+            fs = None
+        if fs:
+            out_long, why = (
+                fs,
+                "the detail limit measured over this folder (median of a sample of its pictures of this size)",
+            )
+    floor = sizeplan.min_share(st.rec.get("input", {}).get("kind"))
+    if p["size"] in (None, "auto") and out_long < floor * long_native:
+        out_long, why = math.ceil(floor * long_native), f"{floor:.0%} of the native size: auto never goes below it"
+    if p["size"] in (None, "auto"):
+        ow, oh = sizeplan.output_dims(w, h, out_long)  # tidy dimensions; a size asked for in pixels is made exactly
+    else:
+        ow, oh = (out_long, max(1, round(h * out_long / w))) if w >= h else (max(1, round(w * out_long / h)), out_long)
+    st.scale = max(ow, oh) / long_native
+    st.rec["size"] = dict(long_side=max(ow, oh), why=why)
     if (ow, oh) != (w, h):
-        st.say('resizing'); _resize(st, ow, oh); st.rec['steps'].append(f'resized to {ow}x{oh}')
+        st.say("resizing")
+        _resize(st, ow, oh)
+        st.rec["steps"].append(f"resized to {ow}x{oh}")
 
 
 def _resize(st, ow, oh):
@@ -202,221 +391,426 @@ def _resize(st, ow, oh):
     lanczos = st.scale > 0.5
     if st.dev is not None:
         try:
-            with gpu.slot(): st.set_dev(gpu.resize_cv_lanczos4(st.dev, (oh, ow)) if lanczos else gpu.resize_cv_area(st.dev, (oh, ow))); return
+            with gpu.slot():
+                st.set_dev(
+                    gpu.resize_cv_lanczos4(st.dev, (oh, ow)) if lanczos else gpu.resize_cv_area(st.dev, (oh, ow))
+                )
+                return
         except Exception as e:
-            if not gpu.is_oom(e): raise
+            if not gpu.is_oom(e):
+                raise
             gpu.free()
     st.rgb = cv2.resize(st.rgb, (ow, oh), interpolation=cv2.INTER_LANCZOS4 if lanczos else cv2.INTER_AREA)
 
 
 def run_sharpen(st, p):
     res = st.res
-    if not res.get('ok'): st.rec['steps'].append('not sharpened: too little texture to measure the blur'); return
-    st.say('sharpening to the measured blur'); out = detail.sharpen_picture(st.dev if st.dev is not None else st.rgb, np.array(res['freq']), np.array(res['mtf']), st.scale, amount=p['amount'], keep_on_device=gpu.available())
-    if isinstance(out, np.ndarray): st.rgb = out
-    else: st.set_dev(out)
-    st.rec['steps'].append(f"sharpened with the Wiener filter of the measured MTF (amount {p['amount']:g})")
+    if not res.get("ok"):
+        st.rec["steps"].append("not sharpened: too little texture to measure the blur")
+        return
+    st.say("sharpening to the measured blur")
+    out = detail.sharpen_picture(
+        st.dev if st.dev is not None else st.rgb,
+        np.array(res["freq"]),
+        np.array(res["mtf"]),
+        st.scale,
+        amount=p["amount"],
+        keep_on_device=gpu.available(),
+    )
+    if isinstance(out, np.ndarray):
+        st.rgb = out
+    else:
+        st.set_dev(out)
+    st.rec["steps"].append(f"sharpened with the Wiener filter of the measured MTF (amount {p['amount']:g})")
 
 
 def run_encode(st, p, out_base):
-    fmt = p['format']; quality = None
-    if fmt == 'jpeg':
-        if p['quality'] == 'auto':
-            st.say('choosing the JPEG quality'); quality, qi = jpeg_quality.choose_quality(X.to_u8(st.rgb)); st.rec['quality_info'] = qi
-            st.rec['steps'].append(f"JPEG quality {quality} chosen automatically (error {qi.get('rms')} against a target of {qi.get('target')} grey levels; the picture's own noise is {qi.get('sigma')})")
-        else: quality = int(p['quality']); st.rec['steps'].append(f'JPEG quality {quality} as asked')
-    out = out_base + ('.tif' if fmt == 'tiff' else '.jpg'); st.say('writing'); st.final_hw = st.hw(); X.write_picture(out, st.dev if st.dev is not None and fmt == 'jpeg' else st.rgb, fmt, quality, X._exif_of(st.item)); st.file = out; st.quality = quality; st.dev = None
+    fmt = p["format"]
+    quality = None
+    if fmt == "jpeg":
+        if p["quality"] == "auto":
+            st.say("choosing the JPEG quality")
+            quality, qi = jpeg_quality.choose_quality(X.to_u8(st.rgb))
+            st.rec["quality_info"] = qi
+            st.rec["steps"].append(
+                f"JPEG quality {quality} chosen automatically (error {qi.get('rms')} against a target of {qi.get('target')} grey levels; the picture's own noise is {qi.get('sigma')})"
+            )
+        else:
+            quality = int(p["quality"])
+            st.rec["steps"].append(f"JPEG quality {quality} as asked")
+    out = out_base + (".tif" if fmt == "tiff" else ".jpg")
+    st.say("writing")
+    st.final_hw = st.hw()
+    X.write_picture(out, st.dev if st.dev is not None and fmt == "jpeg" else st.rgb, fmt, quality, X._exif_of(st.item))
+    st.file = out
+    st.quality = quality
+    st.dev = None
 
 
 # ---- configs and presets --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-BEST = [dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='auto'), dict(stage='sharpen', amount=SHARPEN_AMOUNT), dict(stage='encode', format='jpeg', quality=DEFAULT_QUALITY)]
+BEST = [
+    dict(stage="develop"),
+    dict(stage="level"),
+    dict(stage="resize", size="auto"),
+    dict(stage="sharpen", amount=SHARPEN_AMOUNT),
+    dict(stage="encode", format="jpeg", quality=DEFAULT_QUALITY),
+]
 BUILTIN = {
-    'best': dict(label='Best quality (automatic)', stages=BEST),
-    'archive': dict(label='Archive: 16 bit TIFF, native size, as developed', stages=[dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='native'), dict(stage='encode', format='tiff')]),
-    'web': dict(label='Web: 2048 px JPEG', stages=[dict(stage='develop'), dict(stage='level'), dict(stage='resize', size='2048'), dict(stage='sharpen', amount=1.0), dict(stage='encode', format='jpeg', quality=DEFAULT_QUALITY)]),
+    "best": dict(label="Best quality (automatic)", stages=BEST),
+    "archive": dict(
+        label="Archive: 16 bit TIFF, native size, as developed",
+        stages=[
+            dict(stage="develop"),
+            dict(stage="level"),
+            dict(stage="resize", size="native"),
+            dict(stage="encode", format="tiff"),
+        ],
+    ),
+    "web": dict(
+        label="Web: 2048 px JPEG",
+        stages=[
+            dict(stage="develop"),
+            dict(stage="level"),
+            dict(stage="resize", size="2048"),
+            dict(stage="sharpen", amount=1.0),
+            dict(stage="encode", format="jpeg", quality=DEFAULT_QUALITY),
+        ],
+    ),
 }
-DEFAULT_PRESET = 'best'
+DEFAULT_PRESET = "best"
 
 
 def normalize(stages):
     """The stage settings with every default filled in and every value checked, as a new list [{stage, ...settings}]. `develop` must be first and `encode` last, the others in ORDER and at most once; an unknown stage or setting is refused."""
-    out = []; last = -1
+    out = []
+    last = -1
     for s in stages or []:
-        name = s.get('stage')
-        if name not in PARAMS: raise P.ProjectError(f'unknown stage {name!r} (one of {", ".join(ORDER)})')
+        name = s.get("stage")
+        if name not in PARAMS:
+            raise P.ProjectError(f"unknown stage {name!r} (one of {', '.join(ORDER)})")
         k = ORDER.index(name)
-        if k <= last: raise P.ProjectError(f'stage {name!r} is out of order or repeated (the order is {", ".join(ORDER)})')
-        extra = set(s) - {'stage'} - set(PARAMS[name]({}))
-        if extra: raise P.ProjectError(f'stage {name!r} has no setting {sorted(extra)[0]!r}')
-        last = k; out.append(dict(stage=name, **PARAMS[name](s)))
-    if not out or out[0]['stage'] != 'develop' or out[-1]['stage'] != 'encode': raise P.ProjectError('a pipeline starts with develop and ends with encode')
+        if k <= last:
+            raise P.ProjectError(f"stage {name!r} is out of order or repeated (the order is {', '.join(ORDER)})")
+        extra = set(s) - {"stage"} - set(PARAMS[name]({}))
+        if extra:
+            raise P.ProjectError(f"stage {name!r} has no setting {sorted(extra)[0]!r}")
+        last = k
+        out.append(dict(stage=name, **PARAMS[name](s)))
+    if not out or out[0]["stage"] != "develop" or out[-1]["stage"] != "encode":
+        raise P.ProjectError("a pipeline starts with develop and ends with encode")
     return out
 
 
 def apply_options(stages, options):
     """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
-    st = [dict(s) for s in stages]; o = dict(options or {})
-    unknown = set(o) - {'size', 'format', 'quality', 'level', 'sharpen', 'sharpen_amount', 'highlight_contrast', 'match', 'exposure', 'recover', 'lens', 'denoise', 'frame'}
-    if unknown: raise P.ProjectError(f'unknown option {sorted(unknown)[0]!r}')
+    st = [dict(s) for s in stages]
+    o = dict(options or {})
+    unknown = set(o) - {
+        "size",
+        "format",
+        "quality",
+        "level",
+        "sharpen",
+        "sharpen_amount",
+        "highlight_contrast",
+        "match",
+        "exposure",
+        "recover",
+        "lens",
+        "denoise",
+        "frame",
+    }
+    if unknown:
+        raise P.ProjectError(f"unknown option {sorted(unknown)[0]!r}")
 
-    def get(name): return next((s for s in st if s['stage'] == name), None)
+    def get(name):
+        return next((s for s in st if s["stage"] == name), None)
 
     def ensure(name, **kw):
         s = get(name)
         if s is None:
-            s = dict(stage=name); st.append(s); st.sort(key=lambda x: ORDER.index(x['stage']))
-        s.update(kw); return s
-    if o.get('highlight_contrast') is not None: ensure('develop', highlight_contrast=o['highlight_contrast'])
-    if o.get('match') is not None: ensure('develop', match=o['match'])
-    if o.get('exposure') is not None: ensure('develop', exposure=o['exposure'])
-    if o.get('recover') is not None: ensure('develop', recover=o['recover'])
-    if o.get('lens') is not None: ensure('develop', lens=o['lens'])
-    if o.get('denoise') is not None: ensure('develop', denoise=o['denoise'])
-    if o.get('frame') is not None: ensure('develop', frame=o['frame'])
-    if o.get('size') is not None: ensure('resize', size=o['size'])
-    if o.get('level') is False: st = [s for s in st if s['stage'] != 'level']
-    elif o.get('level') is True: ensure('level')
-    if o.get('sharpen') is False: st = [s for s in st if s['stage'] != 'sharpen']
-    elif o.get('sharpen') is True or o.get('sharpen_amount') is not None: ensure('sharpen', **({'amount': o['sharpen_amount']} if o.get('sharpen_amount') is not None else {}))
-    if o.get('format') is not None: ensure('encode', format=o['format'])
-    if o.get('quality') is not None: ensure('encode', quality=o['quality'])
+            s = dict(stage=name)
+            st.append(s)
+            st.sort(key=lambda x: ORDER.index(x["stage"]))
+        s.update(kw)
+        return s
+
+    if o.get("highlight_contrast") is not None:
+        ensure("develop", highlight_contrast=o["highlight_contrast"])
+    if o.get("match") is not None:
+        ensure("develop", match=o["match"])
+    if o.get("exposure") is not None:
+        ensure("develop", exposure=o["exposure"])
+    if o.get("recover") is not None:
+        ensure("develop", recover=o["recover"])
+    if o.get("lens") is not None:
+        ensure("develop", lens=o["lens"])
+    if o.get("denoise") is not None:
+        ensure("develop", denoise=o["denoise"])
+    if o.get("frame") is not None:
+        ensure("develop", frame=o["frame"])
+    if o.get("size") is not None:
+        ensure("resize", size=o["size"])
+    if o.get("level") is False:
+        st = [s for s in st if s["stage"] != "level"]
+    elif o.get("level") is True:
+        ensure("level")
+    if o.get("sharpen") is False:
+        st = [s for s in st if s["stage"] != "sharpen"]
+    elif o.get("sharpen") is True or o.get("sharpen_amount") is not None:
+        ensure("sharpen", **({"amount": o["sharpen_amount"]} if o.get("sharpen_amount") is not None else {}))
+    if o.get("format") is not None:
+        ensure("encode", format=o["format"])
+    if o.get("quality") is not None:
+        ensure("encode", quality=o["quality"])
     return normalize(st)
 
 
-def _preset_dir(): return os.path.join(settings.home(), 'pipelines')
+def _preset_dir():
+    return os.path.join(settings.home(), "pipelines")
+
+
 def _safe(name):
-    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,40}', name or ''): raise P.ProjectError('a preset name is lower-case letters, digits, - and _ (up to 41)')
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,40}", name or ""):
+        raise P.ProjectError("a preset name is lower-case letters, digits, - and _ (up to 41)")
     return name
 
 
 def _presets():
     from stratastills import presets_store
-    return presets_store.get()                      # the files (default) or, switched on in settings, schema `photos` (presets_store.py)
+
+    return presets_store.get()  # the files (default) or, switched on in settings, schema `photos` (presets_store.py)
 
 
 def list_presets():
     """[{name, label, builtin, stages}]: the built-in presets, then the person's own (a saved preset of the same name as a built-in one is not allowed)."""
-    out = [dict(name=n, label=d['label'], builtin=True, stages=normalize(d['stages'])) for n, d in BUILTIN.items()]
+    out = [dict(name=n, label=d["label"], builtin=True, stages=normalize(d["stages"])) for n, d in BUILTIN.items()]
     for r in _presets().list():
-        if r['name'] in BUILTIN: continue
-        try: out.append(dict(name=r['name'], label=r['label'], builtin=False, stages=normalize(r['stages'])))
-        except (KeyError, P.ProjectError): continue
+        if r["name"] in BUILTIN:
+            continue
+        try:
+            out.append(dict(name=r["name"], label=r["label"], builtin=False, stages=normalize(r["stages"])))
+        except (KeyError, P.ProjectError):
+            continue
     return out
 
 
 def get_preset(name):
     for p in list_presets():
-        if p['name'] == name: return p
-    raise P.ProjectError(f'no pipeline preset {name!r}')
+        if p["name"] == name:
+            return p
+    raise P.ProjectError(f"no pipeline preset {name!r}")
 
 
 def save_preset(name, label, stages):
     name = _safe(name)
-    if name in BUILTIN: raise P.ProjectError(f'{name!r} is a built-in preset: save yours under another name')
+    if name in BUILTIN:
+        raise P.ProjectError(f"{name!r} is a built-in preset: save yours under another name")
     _presets().save(name, label or name, normalize(stages))
     return get_preset(name)
 
 
 def delete_preset(name):
-    if name in BUILTIN: raise P.ProjectError('a built-in preset cannot be deleted')
-    if not _presets().delete(_safe(name)): raise P.ProjectError(f'no pipeline preset {name!r}')
+    if name in BUILTIN:
+        raise P.ProjectError("a built-in preset cannot be deleted")
+    if not _presets().delete(_safe(name)):
+        raise P.ProjectError(f"no pipeline preset {name!r}")
 
 
 def resolve(preset=None, options=None, stages=None):
     """The normalised stages to run: `stages` if given, else the preset (default 'best') with the flat `options` laid over it."""
-    if stages is not None: return normalize(stages)
-    return apply_options(get_preset(preset or DEFAULT_PRESET)['stages'], options)
+    if stages is not None:
+        return normalize(stages)
+    return apply_options(get_preset(preset or DEFAULT_PRESET)["stages"], options)
 
 
 def stage_key(iid, variant_id, stages):
     """A short identity of what is made: the item, the source variant, and every stage's settings and version."""
-    return hashlib.sha1(json.dumps([iid, variant_id, [({k: v for k, v in s.items() if not (k in ('match', 'exposure', 'recover', 'lens', 'denoise') and v == 'auto')}, version(s['stage'])) for s in normalize(stages)]], sort_keys=True).encode()).hexdigest()[:10]
+    return hashlib.sha1(
+        json.dumps(
+            [
+                iid,
+                variant_id,
+                [
+                    (
+                        {
+                            k: v
+                            for k, v in s.items()
+                            if not (k in ("match", "exposure", "recover", "lens", "denoise") and v == "auto")
+                        },
+                        version(s["stage"]),
+                    )
+                    for s in normalize(stages)
+                ],
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:10]
 
 
 def summary(stages):
     """One line for a person: 'JPEG, auto quality · 6016 px auto · levelled · sharpened 1.5' (from the stage settings)."""
-    d = {s['stage']: s for s in stages}; e = d['encode']; parts = ['TIFF 16 bit' if e['format'] == 'tiff' else f"JPEG {'auto quality' if e['quality'] == 'auto' else 'q' + str(e['quality'])}"]
-    r = d.get('resize'); parts.append('size ' + ({'auto': 'auto', 'native': 'native'}.get(r['size'], r['size'] + ' px') if r else 'native'))
-    if 'level' in d: parts.append('levelled')
-    if 'sharpen' in d: parts.append(f"sharpened {d['sharpen']['amount']:g}")
-    if d['develop']['highlight_contrast'] != develop.HIGHLIGHT_CONTRAST: parts.append(f"highlight contrast {d['develop']['highlight_contrast']:g}")
-    if d['develop'].get('lens', 'auto') == 'off': parts.append('no lens correction')
-    ex = d['develop'].get('exposure', 'auto')
-    if ex != 'auto': parts.append({'camera': 'camera exposure', 'match': 'matched to the camera JPEG'}.get(ex) or f'camera exposure {ex:+g} EV')
-    return ' · '.join(parts)
+    d = {s["stage"]: s for s in stages}
+    e = d["encode"]
+    parts = [
+        "TIFF 16 bit"
+        if e["format"] == "tiff"
+        else f"JPEG {'auto quality' if e['quality'] == 'auto' else 'q' + str(e['quality'])}"
+    ]
+    r = d.get("resize")
+    parts.append("size " + ({"auto": "auto", "native": "native"}.get(r["size"], r["size"] + " px") if r else "native"))
+    if "level" in d:
+        parts.append("levelled")
+    if "sharpen" in d:
+        parts.append(f"sharpened {d['sharpen']['amount']:g}")
+    if d["develop"]["highlight_contrast"] != develop.HIGHLIGHT_CONTRAST:
+        parts.append(f"highlight contrast {d['develop']['highlight_contrast']:g}")
+    if d["develop"].get("lens", "auto") == "off":
+        parts.append("no lens correction")
+    ex = d["develop"].get("exposure", "auto")
+    if ex != "auto":
+        parts.append(
+            {"camera": "camera exposure", "match": "matched to the camera JPEG"}.get(ex)
+            or f"camera exposure {ex:+g} EV"
+        )
+    return " · ".join(parts)
 
 
 # ---- running ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+
 def source_variant(item, variant=None):
     """The variant to make a picture from: the one asked for, else the item's primary, else (if the primary is itself a generated one) the best source file. Never a generated variant."""
-    vs = {v['id']: v for v in item['variants']}
+    vs = {v["id"]: v for v in item["variants"]}
     if variant is not None:
-        if variant not in vs: raise P.ProjectError(f"item {item['id']!r} has no variant {variant!r}")
+        if variant not in vs:
+            raise P.ProjectError(f"item {item['id']!r} has no variant {variant!r}")
         v = vs[variant]
     else:
-        v = vs.get(item['primary'])
-        if v is None or v['kind'] == 'generated': v = next((x for x in item['variants'] if x['kind'] != 'generated'), None)
-    if v is None or v['kind'] == 'generated': raise P.ProjectError('there is no source picture to generate from')
+        v = vs.get(item["primary"])
+        if v is None or v["kind"] == "generated":
+            v = next((x for x in item["variants"] if x["kind"] != "generated"), None)
+    if v is None or v["kind"] == "generated":
+        raise P.ProjectError("there is no source picture to generate from")
     return v
 
 
 def find_existing(pid, iid, variant=None, stages=None, preset=None, options=None):
     """(key, existing generated variant or None) for these settings: what the app asks before it offers Generate."""
-    st = resolve(preset, options, stages); item = P.get_item(pid, iid); v = source_variant(item, variant); key = stage_key(iid, v['id'], st)
-    return key, next((g for g in item['variants'] if g['kind'] == 'generated' and g.get('key') == key), None)
+    st = resolve(preset, options, stages)
+    item = P.get_item(pid, iid)
+    v = source_variant(item, variant)
+    key = stage_key(iid, v["id"], st)
+    return key, next((g for g in item["variants"] if g["kind"] == "generated" and g.get("key") == key), None)
 
 
 def generate(pid, iid, variant=None, preset=None, options=None, stages=None, progress=None, on_stage=None):
     """Run a pipeline on a source variant and return the record of the new generated variant (`key`, `file`, `stages`, ...; `existing` True if these exact settings had been generated before, in which case nothing is done). `progress(text)` is called as the steps go; `on_stage(name, state)` after each stage (scripts/build_report.py takes the picture as it is at every stage)."""
-    say = progress or (lambda t: None); st = resolve(preset, options, stages)
-    item = P.get_item(pid, iid); v = source_variant(item, variant); key = stage_key(iid, v['id'], st); d = P.generated_dir(pid, iid); base = os.path.join(d, key)
-    if any(g['kind'] == 'generated' and g.get('key') == key for g in item['variants']):
+    say = progress or (lambda t: None)
+    st = resolve(preset, options, stages)
+    item = P.get_item(pid, iid)
+    v = source_variant(item, variant)
+    key = stage_key(iid, v["id"], st)
+    d = P.generated_dir(pid, iid)
+    base = os.path.join(d, key)
+    if any(g["kind"] == "generated" and g.get("key") == key for g in item["variants"]):
         r = P.read_sidecar(pid, iid, key)
-        if r is not None: return dict(r, existing=True)
-    state = State(pid, iid, item, v, say); runners = dict(develop=run_develop, level=run_level, resize=run_resize, sharpen=run_sharpen)
-    timing = state.rec['timing'] = []                                                                                  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
+        if r is not None:
+            return dict(r, existing=True)
+    state = State(pid, iid, item, v, say)
+    runners = dict(develop=run_develop, level=run_level, resize=run_resize, sharpen=run_sharpen)
+    timing = state.rec[
+        "timing"
+    ] = []  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
     for s in st:
-        p = {k: val for k, val in s.items() if k != 'stage'}; t0 = time.perf_counter(); a0 = gpu.allocations()
-        if s['stage'] == 'encode': os.makedirs(d, exist_ok=True); run_encode(state, p, base)
-        else: runners[s['stage']](state, p)
-        a1 = gpu.allocations(); timing.append(dict(stage=s['stage'], seconds=round(time.perf_counter() - t0, 2), gpu=None if a0 is None or a1 is None else a1 > a0))
-        if on_stage: on_stage(s['stage'], state)
-    rec = dict(state.rec, version=1, key=key, created=dt.datetime.now().astimezone().isoformat(timespec='seconds'), item=iid, stem=item['stem'], source_variant=v['id'], source=v['path'], preset=preset, stages=st, summary=summary(st),
-               output=[int(state.hw()[1]), int(state.hw()[0])], file=state.file, bytes=os.path.getsize(state.file), format=st[-1]['format'], quality=state.quality, existing=False)
+        p = {k: val for k, val in s.items() if k != "stage"}
+        t0 = time.perf_counter()
+        a0 = gpu.allocations()
+        if s["stage"] == "encode":
+            os.makedirs(d, exist_ok=True)
+            run_encode(state, p, base)
+        else:
+            runners[s["stage"]](state, p)
+        a1 = gpu.allocations()
+        timing.append(
+            dict(
+                stage=s["stage"],
+                seconds=round(time.perf_counter() - t0, 2),
+                gpu=None if a0 is None or a1 is None else a1 > a0,
+            )
+        )
+        if on_stage:
+            on_stage(s["stage"], state)
+    rec = dict(
+        state.rec,
+        version=1,
+        key=key,
+        created=dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        item=iid,
+        stem=item["stem"],
+        source_variant=v["id"],
+        source=v["path"],
+        preset=preset,
+        stages=st,
+        summary=summary(st),
+        output=[int(state.hw()[1]), int(state.hw()[0])],
+        file=state.file,
+        bytes=os.path.getsize(state.file),
+        format=st[-1]["format"],
+        quality=state.quality,
+        existing=False,
+    )
     P.save_sidecar(pid, iid, key, rec)
     return rec
 
 
 # ---- rules: apply presets to source folders ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-def rules(pid): return P.load(pid).get('auto', [])
+
+def rules(pid):
+    return P.load(pid).get("auto", [])
 
 
 def set_rules(pid, new):
     """Save the project's auto-apply rules: [{source: <source id or '*'>, pipeline: <preset name>, variant: <optional source variant id>}] (each checked)."""
     clean = []
     for r in new or []:
-        get_preset(r.get('pipeline')); src = r.get('source', '*')
-        if src != '*': P._source(pid, src)
-        clean.append({k: v for k, v in dict(source=src, pipeline=r['pipeline'], variant=r.get('variant') or None).items() if v is not None})
-    doc = P.load(pid); doc['auto'] = clean; P._save(doc); return clean
+        get_preset(r.get("pipeline"))
+        src = r.get("source", "*")
+        if src != "*":
+            P._source(pid, src)
+        clean.append(
+            {
+                k: v
+                for k, v in dict(source=src, pipeline=r["pipeline"], variant=r.get("variant") or None).items()
+                if v is not None
+            }
+        )
+    doc = P.load(pid)
+    doc["auto"] = clean
+    P._save(doc)
+    return clean
 
 
 def pending(pid):
     """What applying the rules would generate: [(item id, source variant id, preset name)] for every still and panorama of the sources a rule names whose settings have no generated variant yet."""
     out = []
     for r in rules(pid):
-        stages = get_preset(r['pipeline'])['stages']
+        stages = get_preset(r["pipeline"])["stages"]
         for s in P.source_summaries(pid):
-            if r['source'] not in ('*', s['id']) or not s['reachable']: continue
-            for it in P.source_items(pid, s['id']):
-                if it['kind'] == 'video': continue
-                try: v = source_variant(it, r.get('variant'))
-                except P.ProjectError: continue
-                key = stage_key(it['id'], v['id'], stages)
-                if not any(g['kind'] == 'generated' and g.get('key') == key for g in it['variants']): out.append((it['id'], v['id'], r['pipeline']))
+            if r["source"] not in ("*", s["id"]) or not s["reachable"]:
+                continue
+            for it in P.source_items(pid, s["id"]):
+                if it["kind"] == "video":
+                    continue
+                try:
+                    v = source_variant(it, r.get("variant"))
+                except P.ProjectError:
+                    continue
+                key = stage_key(it["id"], v["id"], stages)
+                if not any(g["kind"] == "generated" and g.get("key") == key for g in it["variants"]):
+                    out.append((it["id"], v["id"], r["pipeline"]))
     return out
 
 
@@ -425,17 +819,42 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
     `workers`: how many at once (default resources.auto_workers: 2 with a GPU, where the device slots (gpu.slots) decide how many are on the card and the CPU parts of the others (decode, encode, files, the network share) overlap its work; fewer without one). One picture is made by one thread and distinct pictures write distinct files, so nothing is shared."""
     import threading
     from concurrent.futures import ThreadPoolExecutor
+
     from stratastills import gpu, resources
-    todo = pending(pid); total = len(todo); done = [0]; failed = []; lock = threading.Lock(); n = max(1, workers or resources.auto_workers(gpu.available()))
+
+    todo = pending(pid)
+    total = len(todo)
+    done = [0]
+    failed = []
+    lock = threading.Lock()
+    n = max(1, workers or resources.auto_workers(gpu.available()))
 
     def work(iid, vid, name):
-        if stop(): return
-        short = iid.split('~')[-1]
-        try: generate(pid, iid, vid, name, progress=lambda t: progress and progress(done[0] + len(failed), total, f'{short}: {t}'))
+        if stop():
+            return
+        short = iid.split("~")[-1]
+        try:
+            generate(
+                pid,
+                iid,
+                vid,
+                name,
+                progress=lambda t: progress and progress(done[0] + len(failed), total, f"{short}: {t}"),
+            )
         except Exception as e:
-            with lock: failed.append((iid, str(e)))
+            with lock:
+                failed.append((iid, str(e)))
         else:
-            with lock: done[0] += 1
-        if progress: progress(done[0] + len(failed), total, f'{short} done')
-    with gpu.lease(f'{total} pictures') if todo else contextlib.nullcontext(), resources.batch(n), (gpu.batch(n) if gpu.available() else contextlib.nullcontext()), ThreadPoolExecutor(n) as ex: list(ex.map(lambda a: work(*a), todo))
+            with lock:
+                done[0] += 1
+        if progress:
+            progress(done[0] + len(failed), total, f"{short} done")
+
+    with (
+        gpu.lease(f"{total} pictures") if todo else contextlib.nullcontext(),
+        resources.batch(n),
+        gpu.batch(n) if gpu.available() else contextlib.nullcontext(),
+        ThreadPoolExecutor(n) as ex,
+    ):
+        list(ex.map(lambda a: work(*a), todo))
     return dict(done=done[0], failed=failed, total=total, workers=n)

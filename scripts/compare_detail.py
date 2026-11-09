@@ -8,87 +8,187 @@ Per picture and program:
   cnoise  the same for the two colour channels of CIELAB (the blotchy colour noise)
   detail  the same high-pass in the TEXTURED areas (gradient in the middle range) over the noise: how much of the texture is kept against the noise let through (higher is better)
 The programs are named after the last folder of their path; the camera JPEG is the reference called 'camera'."""
-import argparse, glob, json, os, sys
-import cv2, numpy as np
+
+import argparse
+import glob
+import json
+import os
+import sys
+
+import cv2
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(__file__))
 import parity_jpeg as PJ
 
-
-TIE = 0.03                      # a difference under 3 % of the other program's value is a tie
-HIGHER = ('sharp', 'detail')   # the metrics where more is better
+TIE = 0.03  # a difference under 3 % of the other program's value is a tie
+HIGHER = ("sharp", "detail")  # the metrics where more is better
 
 
 def load(path, size):
     im = cv2.imread(path, cv2.IMREAD_COLOR)
-    if im is None: return None
-    k = size / max(im.shape[:2]); return cv2.resize(im, (round(im.shape[1] * k), round(im.shape[0] * k)), interpolation=cv2.INTER_AREA)
+    if im is None:
+        return None
+    k = size / max(im.shape[:2])
+    return cv2.resize(im, (round(im.shape[1] * k), round(im.shape[0] * k)), interpolation=cv2.INTER_AREA)
 
 
-def grad(y): gx = cv2.Sobel(y, cv2.CV_32F, 1, 0, ksize=3) / 8; gy = cv2.Sobel(y, cv2.CV_32F, 0, 1, ksize=3) / 8; return np.hypot(gx, gy)
+def grad(y):
+    gx = cv2.Sobel(y, cv2.CV_32F, 1, 0, ksize=3) / 8
+    gy = cv2.Sobel(y, cv2.CV_32F, 0, 1, ksize=3) / 8
+    return np.hypot(gx, gy)
 
 
 def masks(ref_bgr):
     """(flat, textured) masks from the camera JPEG, the same for every program."""
-    y = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32); g = cv2.GaussianBlur(grad(y), (0, 0), 2.0); mid = (y > 25) & (y < 225)
-    return mid & (g < np.percentile(g[mid], 25)), mid & (g > np.percentile(g[mid], 60)) & (g < np.percentile(g[mid], 95))
+    y = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    g = cv2.GaussianBlur(grad(y), (0, 0), 2.0)
+    mid = (y > 25) & (y < 225)
+    return mid & (g < np.percentile(g[mid], 25)), mid & (g > np.percentile(g[mid], 60)) & (
+        g < np.percentile(g[mid], 95)
+    )
 
 
 def measure(bgr, flat, tex):
-    y = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32); g = grad(y); hp = y - cv2.GaussianBlur(y, (0, 0), 1.5); top = g >= np.percentile(g, 98)
-    over = cv2.dilate(y, np.ones((5, 5), np.uint8)) - y; under = y - cv2.erode(y, np.ones((5, 5), np.uint8)); lab = PJ.lab(np.ascontiguousarray(bgr[..., ::-1])); ch = np.mean([(lab[..., c] - cv2.GaussianBlur(lab[..., c], (0, 0), 1.5))[flat].std() for c in (1, 2)])
-    noise = float(hp[flat].std()); tex_hp = float(hp[tex].std())
-    y8 = np.clip(y + 0.5, 0, 255).astype(np.uint8); ring = np.abs(y - cv2.medianBlur(y8, 7).astype(np.float32)); near = cv2.dilate(top.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0          # ringing: a step edge survives a 7x7 median, the narrow bright and dark lobes beside a sharpened edge do not
-    return dict(sharp=float(g[top].mean()), halo=float(np.minimum(over, under)[top].mean()), ring=float(ring[near].mean()), noise=noise, cnoise=float(ch), detail=tex_hp / max(noise, 1e-3))
+    y = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    g = grad(y)
+    hp = y - cv2.GaussianBlur(y, (0, 0), 1.5)
+    top = g >= np.percentile(g, 98)
+    over = cv2.dilate(y, np.ones((5, 5), np.uint8)) - y
+    under = y - cv2.erode(y, np.ones((5, 5), np.uint8))
+    lab = PJ.lab(np.ascontiguousarray(bgr[..., ::-1]))
+    ch = np.mean([(lab[..., c] - cv2.GaussianBlur(lab[..., c], (0, 0), 1.5))[flat].std() for c in (1, 2)])
+    noise = float(hp[flat].std())
+    tex_hp = float(hp[tex].std())
+    y8 = np.clip(y + 0.5, 0, 255).astype(np.uint8)
+    ring = np.abs(y - cv2.medianBlur(y8, 7).astype(np.float32))
+    near = (
+        cv2.dilate(top.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    )  # ringing: a step edge survives a 7x7 median, the narrow bright and dark lobes beside a sharpened edge do not
+    return dict(
+        sharp=float(g[top].mean()),
+        halo=float(np.minimum(over, under)[top].mean()),
+        ring=float(ring[near].mean()),
+        noise=noise,
+        cnoise=float(ch),
+        detail=tex_hp / max(noise, 1e-3),
+    )
 
 
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('candidates'); ap.add_argument('cameras'); ap.add_argument('programs', nargs='+'); ap.add_argument('--size', type=int, default=3000); ap.add_argument('--ext', default='.JPG'); ap.add_argument('--ours', default=None, help='name of our program (default: the first one given): the win table is ours against each other program'); ap.add_argument('--report', default=None, help='write the tables as markdown to this file'); a = ap.parse_args()
-    names = ['camera'] + [os.path.basename(os.path.normpath(p)) for p in a.programs]; dirs = [a.cameras] + a.programs; rows = {n: {} for n in names}; sel = [c['stem'] for c in json.load(open(a.candidates))]
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("candidates")
+    ap.add_argument("cameras")
+    ap.add_argument("programs", nargs="+")
+    ap.add_argument("--size", type=int, default=3000)
+    ap.add_argument("--ext", default=".JPG")
+    ap.add_argument(
+        "--ours",
+        default=None,
+        help="name of our program (default: the first one given): the win table is ours against each other program",
+    )
+    ap.add_argument("--report", default=None, help="write the tables as markdown to this file")
+    a = ap.parse_args()
+    names = ["camera"] + [os.path.basename(os.path.normpath(p)) for p in a.programs]
+    dirs = [a.cameras] + a.programs
+    rows = {n: {} for n in names}
+    sel = [c["stem"] for c in json.load(open(a.candidates))]
     for s in sel:
         ims = []
         for n, d in zip(names, dirs):
-            f = next(iter(glob.glob(os.path.join(d, s + '.[jJ][pP][gG]'))), None); ims.append(load(f, a.size) if f else None)
-        if any(i is None for i in ims) or len({(i.shape[1] > i.shape[0]) for i in ims}) > 1: print(s, 'skipped (missing or turned differently)'); continue
-        h = min(i.shape[0] for i in ims); w = min(i.shape[1] for i in ims); ims = [i[:h, :w] for i in ims]; flat, tex = masks(ims[0])
-        for n, i in zip(names, ims): rows[n][s] = measure(i, flat, tex)
-    keys = ('sharp', 'halo', 'ring', 'noise', 'cnoise', 'detail'); common = sorted(set.intersection(*[set(r) for r in rows.values()]))
-    print('%-28s' % 'median over %d pictures' % len(common), ' '.join('%8s' % k for k in keys))
-    for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in common]) for k in keys))
+            f = next(iter(glob.glob(os.path.join(d, s + ".[jJ][pP][gG]"))), None)
+            ims.append(load(f, a.size) if f else None)
+        if any(i is None for i in ims) or len({(i.shape[1] > i.shape[0]) for i in ims}) > 1:
+            print(s, "skipped (missing or turned differently)")
+            continue
+        h = min(i.shape[0] for i in ims)
+        w = min(i.shape[1] for i in ims)
+        ims = [i[:h, :w] for i in ims]
+        flat, tex = masks(ims[0])
+        for n, i in zip(names, ims):
+            rows[n][s] = measure(i, flat, tex)
+    keys = ("sharp", "halo", "ring", "noise", "cnoise", "detail")
+    common = sorted(set.intersection(*[set(r) for r in rows.values()]))
+    print("%-28s" % "median over %d pictures" % len(common), " ".join("%8s" % k for k in keys))
+    for n in names:
+        print("%-28s" % n, " ".join("%8.2f" % np.median([rows[n][s][k] for s in common]) for k in keys))
+
     def iso(s):
         import tifffile
-        for ext in ('.ARW', '.DNG', '.arw', '.dng'):
+
+        for ext in (".ARW", ".DNG", ".arw", ".dng"):
             f = os.path.join(a.cameras, s + ext)
             if os.path.exists(f):
-                try: return int(tifffile.TiffFile(f).pages[0].tags['ExifTag'].value['ISOSpeedRatings'])
-                except Exception: return 0
+                try:
+                    return int(tifffile.TiffFile(f).pages[0].tags["ExifTag"].value["ISOSpeedRatings"])
+                except Exception:
+                    return 0
         return 0
+
     isos = {s: iso(s) for s in common}
-    for lo, hi_ in ((0, 250), (251, 800), (801, 2500), (2501, 6000), (6001, 10 ** 6)):
+    for lo, hi_ in ((0, 250), (251, 800), (801, 2500), (2501, 6000), (6001, 10**6)):
         grp = [s for s in common if lo <= isos[s] <= hi_]
         if len(grp) >= 3:
-            print('\nISO %d-%d (%d pictures):' % (lo, hi_, len(grp)))
-            for n in names: print('%-28s' % n, ' '.join('%8.2f' % np.median([rows[n][s][k] for s in grp]) for k in keys))
-    ours = a.ours or names[1]; md = [f'# Detail comparison: {ours} against the others', '', f'{len(common)} pictures from `{os.path.basename(a.candidates)}`, all at {a.size} px on the long side. sharp and detail: higher is better; halo, noise, cnoise: lower is better. Win = better by more than {TIE:.0%} (a tie otherwise).', '']
+            print("\nISO %d-%d (%d pictures):" % (lo, hi_, len(grp)))
+            for n in names:
+                print("%-28s" % n, " ".join("%8.2f" % np.median([rows[n][s][k] for s in grp]) for k in keys))
+    ours = a.ours or names[1]
+    md = [
+        f"# Detail comparison: {ours} against the others",
+        "",
+        f"{len(common)} pictures from `{os.path.basename(a.candidates)}`, all at {a.size} px on the long side. sharp and detail: higher is better; halo, noise, cnoise: lower is better. Win = better by more than {TIE:.0%} (a tie otherwise).",
+        "",
+    ]
+
     def table(grp, title):
-        md.extend([f'## {title}', '', '| program | ' + ' | '.join(keys) + ' | halo/sharp |', '|---|' + '---:|' * (len(keys) + 1)])
-        for n in names: md.append(f'| {n} | ' + ' | '.join('%.2f' % np.median([rows[n][s][k] for s in grp]) for k in keys) + ' | %.3f |' % np.median([rows[n][s]['halo'] / max(rows[n][s]['sharp'], 1e-3) for s in grp]))
-        md.extend(['', f'Pictures where {ours} wins / ties / loses:', '', '| against | ' + ' | '.join(keys) + ' |', '|---|' + '---|' * len(keys)])
+        md.extend(
+            [
+                f"## {title}",
+                "",
+                "| program | " + " | ".join(keys) + " | halo/sharp |",
+                "|---|" + "---:|" * (len(keys) + 1),
+            ]
+        )
         for n in names:
-            if n == ours: continue
+            md.append(
+                f"| {n} | "
+                + " | ".join("%.2f" % np.median([rows[n][s][k] for s in grp]) for k in keys)
+                + " | %.3f |" % np.median([rows[n][s]["halo"] / max(rows[n][s]["sharp"], 1e-3) for s in grp])
+            )
+        md.extend(
+            [
+                "",
+                f"Pictures where {ours} wins / ties / loses:",
+                "",
+                "| against | " + " | ".join(keys) + " |",
+                "|---|" + "---|" * len(keys),
+            ]
+        )
+        for n in names:
+            if n == ours:
+                continue
             cells = []
             for k in keys:
                 w = t = l = 0
                 for s in grp:
-                    a_, b_ = rows[ours][s][k], rows[n][s][k]; r = (a_ - b_) / max(abs(b_), 1e-3) * (1 if k in HIGHER else -1)
-                    if r > TIE: w += 1
-                    elif r < -TIE: l += 1
-                    else: t += 1
-                cells.append(f'{w} / {t} / {l}')
-            md.append(f'| {n} | ' + ' | '.join(cells) + ' |')
-        md.append('')
-    table(common, 'All pictures')
-    for lo, hi_ in ((0, 250), (251, 800), (801, 2500), (2501, 6000), (6001, 10 ** 6)):
+                    a_, b_ = rows[ours][s][k], rows[n][s][k]
+                    r = (a_ - b_) / max(abs(b_), 1e-3) * (1 if k in HIGHER else -1)
+                    if r > TIE:
+                        w += 1
+                    elif r < -TIE:
+                        l += 1
+                    else:
+                        t += 1
+                cells.append(f"{w} / {t} / {l}")
+            md.append(f"| {n} | " + " | ".join(cells) + " |")
+        md.append("")
+
+    table(common, "All pictures")
+    for lo, hi_ in ((0, 250), (251, 800), (801, 2500), (2501, 6000), (6001, 10**6)):
         grp = [s for s in common if lo <= isos[s] <= hi_]
-        if len(grp) >= 3: table(grp, f'ISO {lo}-{hi_} ({len(grp)} pictures)')
-    if a.report: open(a.report, 'w').write('\n'.join(md) + '\n'); print(f'report written to {a.report}')
-    json.dump(rows, open(os.path.join(os.path.dirname(a.programs[0]), 'detail_metrics.json'), 'w'), indent=1)
+        if len(grp) >= 3:
+            table(grp, f"ISO {lo}-{hi_} ({len(grp)} pictures)")
+    if a.report:
+        open(a.report, "w").write("\n".join(md) + "\n")
+        print(f"report written to {a.report}")
+    json.dump(rows, open(os.path.join(os.path.dirname(a.programs[0]), "detail_metrics.json"), "w"), indent=1)
