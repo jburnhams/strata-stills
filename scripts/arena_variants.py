@@ -30,7 +30,9 @@ def auto3(c): return LK.apply_look(c.neu, c.pred, dict(zip(c.names, c.x)), colou
 
 def auto4(c):                                                                                                                                     # the network trained on OUR neutral -> the final (scripts/lr_neutral_model.py): its whole transform (tone curve, chroma gains, cast, hue) applied to the neutral picture
     import lr_neutral_model as NM, lr_tmodel as TM
-    return TM.apply_params(c.neu, NM.predict_params(c.neu, c.x))
+    out = TM.apply_params(c.neu, NM.predict_params(c.neu, c.x))
+    if out.std() < 0.3 * c.neu.std(): out = TM.apply_params(c.neu, NM.typical_params())                                                       # a picture far outside the training set can get a transform that flattens it (2023-12-16_DSC05694 came out one grey): the person's typical edit instead
+    return out
 def auto5(c):                                                                                                                                     # auto3's pipeline (percentile curve, local tone, vignette, clarity, skin guard) with its colour step taken from the neutral-trained network instead of the camera-trained transform model
     import lr_neutral_model as NM
     return LK.apply_look(c.neu, c.pred, dict(zip(c.names, c.x)), colour=NM.predict_params(c.neu, c.x), face=c.face)[0]
