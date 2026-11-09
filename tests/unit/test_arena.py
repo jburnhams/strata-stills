@@ -53,3 +53,13 @@ def test_pick_pair_only_offers_pictures_of_the_named_set_and_load_set_reads_it(t
     assert arena.load_set(str(tmp_path), 'hard') == {'p1', 'p3'} and arena.load_set(str(tmp_path), 'obj') == {'p2'} and arena.load_set(str(tmp_path), '') is None
     for bad in ('missing', '../x'):
         with pytest.raises(ValueError): arena.load_set(str(tmp_path), bad)
+
+
+def test_weighted_pick_prefers_wanted_far_apart_pairs_but_excludes_nothing():
+    import collections
+    e = lambda h: dict(file='x', hash=h); pool = {p: {'auto6': e(p + '6'), 'auto4': e(p + '4'), 'camera': e(p + 'c')} for p in ('p1', 'p2')}
+    k = arena.pair_key; diffs = {k('p16', 'p14'): [1.0, None], k('p26', 'p24'): [9.0, 12.0], k('p16', 'p1c'): [9.0, None], k('p14', 'p1c'): [9.0, None], k('p26', 'p2c'): [9.0, None], k('p24', 'p2c'): [9.0, None]}
+    rng = random.Random(3); c = collections.Counter((p, frozenset((a, b))) for p, a, b in (arena.pick_pair(pool, [], rng, diffs=diffs) for _ in range(3000)))
+    close, far = c[('p1', frozenset(('auto6', 'auto4')))], c[('p2', frozenset(('auto6', 'auto4')))]
+    assert far > 10 * close > 0 and far > 5 * c[('p2', frozenset(('auto6', 'camera')))] > 0
+    assert arena.pick_pair(pool, [], rng, diffs={}) is not None and arena.separation(None) == 0.3 and arena.separation([12, None]) == 1.0 and arena.separation([1, 9]) > arena.separation([1, None])

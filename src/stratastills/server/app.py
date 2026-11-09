@@ -160,7 +160,7 @@ def create_app():
     def arena_next(want: str = '', set_name: str = Query('', alias='set')):
         try: only = AR.load_set(settings.arena_dir(), set_name)
         except ValueError as e: raise HTTPException(404, str(e))
-        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, {w for w in want.split(',') if w} or None, AR.open_alerts(arena_alert_events()), only)
+        pool, retired = arena_pool(), arena_retired(); pick = AR.pick_pair(pool, arena_votes(), random.Random(), retired, {w for w in want.split(',') if w} or None, AR.open_alerts(arena_alert_events()), only, AR.load_diffs(settings.arena_dir()) or None)
         if not pick: raise HTTPException(404, 'nothing to rate yet: make the pictures with scripts/build_arena.py')
         pic, a, b = pick; token = secrets.token_urlsafe(9)
         with arena_lock:
