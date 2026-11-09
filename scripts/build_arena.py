@@ -25,6 +25,7 @@ def code_key(name):
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())
     if name == 'auto6':                                                                                              # face first: its code, the skin-target models and the faces it reads
         import lr_face_first as FF
+        h.update(inspect.getsource(AV.auto4).encode())                                                          # it starts from auto4's picture
         for f in (os.path.join(os.path.dirname(__file__), 'lr_face_first.py'), FF.MODEL_FILE, FF.FACES_FILE): h.update(open(f, 'rb').read() if os.path.exists(f) else b'missing')
     if name in ('auto4', 'auto5', 'auto6'):                                                                                    # the neutral-trained network: its code and its saved weights
         import lr_neutral_model as NM

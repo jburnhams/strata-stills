@@ -62,12 +62,14 @@ def features(x, face, so, sn):
 
 
 def models():
-    if 'models' not in _cache: _cache['models'] = pickle.load(open(MODEL_FILE, 'rb'))
+    """The skin-target models, or None when the file is missing (apply then leaves the picture as it is)."""
+    if 'models' not in _cache: _cache['models'] = pickle.load(open(MODEL_FILE, 'rb')) if os.path.exists(MODEL_FILE) else None
     return _cache['models']
 
 
 def apply(out_bgr, neu_bgr, x, face, glob=GLOBAL, local=LOCAL):
     """`out_bgr` (the edited picture) with its face moved toward the predicted skin; `face` with box/lm as fractions of this frame. (picture, what was done)."""
+    if models() is None: return out_bgr, {}
     m = skin_mask(out_bgr.shape, face['lm']); Lo = lab(out_bgr); so, sn = skin(Lo, m), skin(lab(neu_bgr), m)
     if so is None or sn is None: return out_bgr, {}
     f = features(np.asarray(x, np.float64), face, so, sn)[None]; target = so + np.array([mm.predict(f)[0] for mm in models()])
