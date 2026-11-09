@@ -98,14 +98,29 @@ def available():
 
 _lease_lock = threading.Lock()
 _lease_held = [0, None]          # how many blocks in this process hold it, the strata-models lease itself
+_lease_cap = None                # bytes this process may plan with while it holds a sized lease (_cuda_total)
+LEASE_GB = 8.0                   # what a lease asks for by default: one whole 48 MP develop at its peak (5.7 GB measured, PEAK_BYTES 6.5) with room; STRATASTILLS_LEASE_GB
+
+
+def lease_gb():
+    """The size of lease to ask for: STRATASTILLS_LEASE_GB, else LEASE_GB; 0 (or 'whole') asks for the whole card (None: exclusive)."""
+    v = os.environ.get('STRATASTILLS_LEASE_GB')
+    if v is None: return LEASE_GB
+    if v.strip().lower() in ('0', 'whole', ''): return None
+    try: return float(v)
+    except ValueError: return LEASE_GB
 
 
 @contextlib.contextmanager
-def lease(note, vram_gb=None):
-    """The GPU for this block, lent by strata-models (the service that owns the card on omarchy and runs every app's model jobs): it waits until the
-    card is free, frees the memory its models hold, and runs nothing else until the block ends. Without it another program on the card made the
-    arena build write grey, truncated pictures (2026-11-08). Blocks nest and threads share one lease (the batch's workers are all this app).
+def lease(note, vram_gb='default'):
+    """Part of the GPU for this block, lent by strata-models (the service that owns the card on omarchy and runs every app's model jobs): it waits
+    until that much is free (freeing its own models if it must), and while the block runs its other jobs carry on in the rest of the card. This
+    process then plans with no more than the lease (_cuda_total), so the two never fight over memory, which is what made the arena build write
+    grey, truncated pictures on 2026-11-08 when nothing coordinated them. vram_gb None asks for the whole card (nothing else runs).
+    Blocks nest and threads share one lease (the batch's workers are all this app).
     No CUDA device, no client installed, the service not running, or STRATASTILLS_LEASE=0: the block simply runs."""
+    global _lease_cap
+    vram_gb = lease_gb() if vram_gb == 'default' else vram_gb
     if os.environ.get('STRATASTILLS_LEASE') == '0' or not available() or dev().type != 'cuda':
         yield None; return
     try: import strata_models_client as sm
@@ -117,6 +132,7 @@ def lease(note, vram_gb=None):
                 if not sm.available(): raise sm.Unavailable('not running')
                 print(f'waiting for the GPU (strata-models lease: {note})', flush=True)
                 _lease_held[1] = sm.acquire('strata-stills', vram_gb=vram_gb, note=note)
+                _lease_cap = None if vram_gb is None else vram_gb * 1e9
             except sm.Unavailable: _lease_held[1] = None
         _lease_held[0] += 1
     try: yield _lease_held[1]
@@ -124,7 +140,7 @@ def lease(note, vram_gb=None):
         with _lease_lock:
             _lease_held[0] -= 1
             if _lease_held[0] == 0 and _lease_held[1] is not None:
-                _give_back_memory(); _lease_held[1].release(); _lease_held[1] = None
+                _give_back_memory(); _lease_held[1].release(); _lease_held[1] = None; _lease_cap = None
 
 
 def _give_back_memory():
@@ -163,7 +179,8 @@ def _cuda_total():
     try:
         d = dev()
         if d.type == 'cuda':
-            t = torch_(); free, total = t.cuda.mem_get_info(); return min(total, free + t.cuda.memory_reserved())
+            t = torch_(); free, total = t.cuda.mem_get_info(); have = min(total, free + t.cuda.memory_reserved())
+            return have if _lease_cap is None else min(have, _lease_cap)                                       # a sized strata-models lease: the rest of the card is the service's
     except Exception: pass
     return None
 
