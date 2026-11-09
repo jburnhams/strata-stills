@@ -87,30 +87,33 @@ def elo(votes, retired=()):
 
 
 def _fit(votes, retired, iters, side):
-    """-> (strengths {variant: p} with geometric mean 1, left-side odds h) of the Bradley-Terry fit; ({}, 1.0) when there is no usable vote."""
-    games, names = [], set()  # (left, right, score of left)
+    """-> (strengths {variant: p} with geometric mean 1, left-side odds h) of the Bradley-Terry fit; ({}, 1.0) when there is no usable vote. The votes are summed per (left, right) pair once, so an iteration costs the number of pairs, not of votes."""
+    agg = {}  # (left, right) -> [games, score of left summed]
     for v in votes:
         s = score(v)
         if s is None or v["a"] in retired or v["b"] in retired:
             continue
-        names |= {v["a"], v["b"]}
-        games.append((v["a"], v["b"], s))
+        g = agg.setdefault((v["a"], v["b"]), [0, 0.0])
+        g[0] += 1
+        g[1] += s
+    names = {n for k in agg for n in k}
     if not names:
         return {}, 1.0
+    total_left = sum(g[1] for g in agg.values())
     p, h = dict.fromkeys(names, 1.0), 1.0
     for _ in range(iters):
         w, d = dict.fromkeys(names, 0.01), dict.fromkeys(names, 1e-9)
-        for a, b, s in games:
+        for (a, b), (n, s) in agg.items():
             den = h * p[a] + p[b]
             w[a] += s
-            w[b] += 1 - s
-            d[a] += h / den
-            d[b] += 1 / den
+            w[b] += n - s
+            d[a] += n * h / den
+            d[b] += n / den
         q = {n: w[n] / d[n] for n in names}
         g = math.exp(sum(math.log(x) for x in q.values()) / len(q))
         p = {n: x / g for n, x in q.items()}
         if side:
-            h = (sum(s for _, _, s in games) + 0.01) / (sum(p[a] / (h * p[a] + p[b]) for a, b, _ in games) + 0.01)
+            h = (total_left + 0.01) / (sum(n * p[a] / (h * p[a] + p[b]) for (a, b), (n, _) in agg.items()) + 0.01)
     return p, h
 
 
