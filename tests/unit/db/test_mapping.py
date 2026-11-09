@@ -1,10 +1,16 @@
 """Arena picture names to photos: matching needs no database, linking is checked on SQLite (`pytest --pg` runs it on Postgres)."""
 
+import sys
+
 import pytest
 from sqlalchemy import select
 
 from stratastills.db import hashes, mapping
 from stratastills.db.models import ArenaPic, Photo
+
+# The fixtures are POSIX paths ("/data/raw/..."); the code under test normalises with os.path, which on Windows turns them into "\\data\\raw" and nothing matches.
+# Real Windows paths are exercised by the application, not here: rewrite the fixtures with tmp_path to run these on Windows too.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX-path fixtures; see the comment above")
 
 ROOT = "/data/raw"
 H = {n: f"{i:064x}" for i, n in enumerate("abcdefg")}
