@@ -44,6 +44,7 @@ def pick(cats, test, n, rng, X, names):
 def i_shoot(i): return SHOOTS[i]
 
 
+deferred = []                                                                                                                                  # raws whose develop came out blank while other GPU work ran beside it: the caller develops them again once alone (build_arena does, after its parallel pass)
 _alone = threading.Lock()                                                                                                                         # a retried develop runs with no other retry beside it
 
 
@@ -59,7 +60,7 @@ def _develop_alone(raw, work):
     return PL.generate(pid, it['id'], preset='best', options=dict(quality=95, level=False, size='native'), progress=lambda m: None)
 
 
-def neutral(raws, work, say, rebuild=False):
+def neutral(raws, work, say, rebuild=False, retry_now=True):
     """Our pipeline's 'best' preset, without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
     cdir = os.path.join(BR.ROOT, 'out', 'cache', 'report-auto-neutral'); os.makedirs(cdir, exist_ok=True); out = {}; todo = []
     key = lambda r: hashlib.sha1(json.dumps([BR.CACHE_VERSION, BR.code_hash(), r, os.path.getsize(r), int(os.path.getmtime(r))]).encode()).hexdigest()
@@ -83,12 +84,13 @@ def neutral(raws, work, say, rebuild=False):
         except Exception as e: say(f'  {os.path.basename(r)}: FAILED ({type(e).__name__}: {e})'); continue
         im = readable(rec['file'])
         if im is None:                                                                                                                            # a blank or truncated develop (seen with two arena workers on the card at once): once more on its own, and never cached when still bad
-            say(f'  {os.path.basename(r)}: blank or unreadable develop, making it again on its own')
+            say(f'  {os.path.basename(r)}: blank or unreadable develop' + (', making it again on its own' if retry_now else ''))
             try:                                                                                                                                  # keep the evidence (picture and record: which stages ran on the card) for the open bug
                 keep = os.path.join(os.path.expanduser('~/work/strata-stills/blank-develops'), '%d_%s' % (time.time_ns(), os.path.basename(r))); os.makedirs(keep, exist_ok=True)
                 if os.path.exists(rec['file']): shutil.copyfile(rec['file'], os.path.join(keep, 'develop.jpg'))
                 json.dump(dict(rec, env={k: v for k, v in os.environ.items() if k.startswith('STRATASTILLS')}), open(os.path.join(keep, 'record.json'), 'w'), default=str)
             except Exception: pass
+            if not retry_now: deferred.append(r); say(f'  {os.path.basename(r)}: deferred until the parallel work is done'); continue
             with _alone:                                                                                                                          # a fresh one-picture project, so nothing of the bad run is reused
                 try: rec = _develop_alone(r, work)
                 except Exception as e: say(f'  {os.path.basename(r)}: FAILED ({type(e).__name__}: {e})'); continue
