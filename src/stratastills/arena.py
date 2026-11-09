@@ -203,25 +203,36 @@ def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None, pr
     return (pic, a, b) if rng.random() < 0.5 else (pic, b, a)
 
 
-REF_DIST = 8.0  # mean CIELAB distance between two versions of a picture that counts as 'clearly different' (the typical pair is about 5-10)
+INTEREST = {
+    "auto4": 3.0,
+    "auto5": 3.0,
+    "auto6": 3.0,
+    "auto3": 1.5,
+    "lightroom": 1.5,
+    "auto1": 0.5,
+    "auto2": 0.5,
+    "camera": 0.2,
+    "neutral": 0.2,
+}  # how much a vote on a version is wanted now (the newest automatic versions most; overridden by 'interest' of priorities.json; a version not listed counts 1)
+SEPARATE = 6.0  # mean CIELAB distance between two versions from which a pair is 'clearly different' (full weight); below it the weight falls with the square of the distance
 
 
 def pair_weight(priority, pic, a, b, seen, pair_n):
-    """How much a pair is wanted, a product of: the interest in its variants (`focus`: both 8, one 4, none 1), how far apart the two pictures are (`dist`: (d / REF_DIST)^2 within 0.05..9, so a near-identical pair is rarely shown but never dropped; 1 when not measured), faces (`faces`: a picture with a real face 3x), and how little the picture (1/(1+votes)) and the pair (1/(1+votes)) have been judged yet."""
-    focus = priority.get("focus") or ()
-    w = 1.0 + 3 * (a in focus) + 3 * (b in focus) + (a in focus and b in focus)
+    """How much a pair is wanted, a product of: the interest in its two variants (`INTEREST`), how far apart the pictures are (`dist`: (d / SEPARATE)^2 within 0.02..1, so a near-identical pair is rarely shown but never dropped; 1 when not measured; the script makes d from the whole picture and, with a face, the face region counting 1.5x), a picture with a real face (`faces`) 3x, and how little the picture (1/(1+votes)^2) and the pair (1/(1+votes/10)) have been judged: votes spread over the pool, and a pair keeps being drawn until it has about a hundred."""
+    interest = {**INTEREST, **(priority.get("interest") or {})}
+    w = interest.get(a, 1.0) * interest.get(b, 1.0)
     d = (priority.get("dist") or {}).get(pic, {}).get("|".join(sorted((a, b))))
     if isinstance(d, list):  # [distance, [hash a, hash b]]: the hashes are for the script's cache
         d = d[0]
     if d is not None:
-        w *= min(9.0, max(0.05, (d / REF_DIST) ** 2))
+        w *= min(1.0, max(0.02, (d / SEPARATE) ** 2))
     if pic in (priority.get("faces") or ()):
         w *= 3.0
-    return w / ((1 + seen.get(pic, 0)) * (1 + pair_n.get(frozenset((a, b)), 0)))
+    return w / ((1 + seen.get(pic, 0)) ** 2 * (1 + pair_n.get(frozenset((a, b)), 0) / 10))
 
 
 def load_priorities(root):
-    """`<arena dir>/priorities.json` (made by scripts/arena_priorities.py): {'focus': [variants], 'faces': [pictures with a real face], 'dist': {picture: {'a|b' (names sorted): mean CIELAB distance, or [distance, [hash, hash]]}}}, or None when there is none (the plain picker runs). Unreadable files count as none."""
+    """`<arena dir>/priorities.json` (made by scripts/arena_priorities.py): {'interest': {variant: weight} (optional, over INTEREST), 'faces': [pictures with a real face], 'dist': {picture: {'a|b' (names sorted): mean CIELAB distance, or [distance, [hash, hash]]}}}, or None when there is none (the plain picker runs). Unreadable files count as none."""
     try:
         d = json.load(open(os.path.join(root, "priorities.json"), encoding="utf8"))
     except (OSError, ValueError):
