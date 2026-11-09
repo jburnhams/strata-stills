@@ -18,7 +18,7 @@ LOOK = ['lr_look.py', 'lr_tmodel.py', 'lr_ftarget.py', 'lr_fit.py']
 def code_key(name):
     """A version is made again when its own function, the brightness helper or (for the automatic ones) the look code changed, not when another version did."""
     import inspect
-    h = hashlib.sha1(name.encode()); h.update(b'framing 5'); h.update(inspect.getsource(AV.VARIANTS[name]).encode())
+    h = hashlib.sha1(name.encode()); h.update(b'framing 5'); h.update(inspect.getsource(LRR.to_final).encode()); h.update(inspect.getsource(LRR.turn_to_ref).encode());                       # the framing code itself, so a fix to it (the square-crop turn) reaches pictures already in the pool h.update(inspect.getsource(AV.VARIANTS[name]).encode())
     if name in ('camera', 'neutral'): h.update(inspect.getsource(AV.match_brightness).encode())
     if name in ('camera', 'neutral') or name.startswith('auto'): h.update(inspect.getsource(AV.auto1).encode())
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())

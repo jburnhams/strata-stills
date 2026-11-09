@@ -87,16 +87,16 @@ def evaluate(a):
     for f in sorted(glob.glob(os.path.join(D.OUT, 'thumbs', 't*.npz'))):
         z = np.load(f); cam.update({int(i): c for i, c in zip(z['idx'], z['cam'])})
     print(f'{len(nidx)} pairs with our neutral, {test.sum()} held out ({(hard & test).sum()} in the old hard mask); training on {(~test).sum()}', flush=True)
-    import psycopg
-    rawid = dict(psycopg.connect('dbname=omarchy', options='-csearch_path=photos,public').execute("select relpath, photo_id from file where role='raw'").fetchall())
-    pid = np.array([rawid.get(os.path.relpath(rows[int(i)]['raw'], os.path.expanduser('~/raw')), -1) for i in nidx])
     sets = {'all held out': test, 'old hard mask': test & hard}
     hf = os.path.join(D.OUT, 'hard', 'hard_cases.json')
-    if os.path.exists(hf):
+    if os.path.exists(hf):                                                                                                               # the hard-case sets need the photo ids of the shared database; the main comparison does not
+        import psycopg
+        rawid = dict(psycopg.connect('dbname=omarchy', options='-csearch_path=photos,public').execute("select relpath, photo_id from file where role='raw'").fetchall())
+        pid = np.array([rawid.get(os.path.relpath(rows[int(i)]['raw'], os.path.expanduser('~/raw')), -1) for i in nidx])
         H = json.load(open(hf)); sets['hard (151)'] = np.isin(pid, [h['photo_id'] for h in H['hard']]); sets['core (40)'] = np.isin(pid, [h['photo_id'] for h in H['hard'] if h['core']]); sets['control (30)'] = np.isin(pid, [h['photo_id'] for h in H['control']])
     ti = np.where(test)[0]; res = {}
     res['neutral as it is'] = dist(neu[ti], fin[ti], None)
-    res['camera-trained model on neutral (now)'] = dist(neu[ti], fin[ti], TM.predict(TM.train_cached(), Xn[ti]))
+    if a.share == 0.1: res['camera-trained model on neutral (now)'] = dist(neu[ti], fin[ti], TM.predict(TM.train_cached(), Xn[ti]))                  # that model is trained with the default 0.1 held-out share: with another share some of these shoots trained it
     typical = np.median(NP_[~test], 0); res['typical neutral edit'] = dist(neu[ti], fin[ti], np.tile(typical, (len(ti), 1)))
     w = np.where(hard, 3.0, 1.0); t0 = time.time(); xm = TM.train(Xn[~test], NP_[~test], w[~test]); res['XGBoost on neutral fits'] = dist(neu[ti], fin[ti], TM.predict(xm, Xn[ti])); print(f'XGBoost trained in {time.time() - t0:.0f} s', flush=True)
     if not a.no_cnn:
@@ -140,11 +140,17 @@ def _predict_params(neu_bgr, x):
     t = cv2.resize(neu_bgr, (D.THUMB, D.THUMB), interpolation=cv2.INTER_AREA)[..., ::-1].copy(); img = torch.from_numpy(t).permute(2, 0, 1)[None].float().to(DEV) / 255
     xs = torch.from_numpy(np.nan_to_num((np.asarray(x, np.float64) - _net['mu']) / _net['sd']).clip(-5, 5).astype(np.float32))[None].to(DEV)
     with torch.no_grad(): out = _net['net'](img, xs)[0].cpu().numpy()
-    if 'lo' not in _net: q = np.load(os.path.join(D.OUT, 'nfit.npz'))['params']; _net.update(lo=np.percentile(q, 0.5, 0), hi=np.percentile(q, 99.5, 0))
+    if 'lo' not in _net: q = _train_fits(); _net.update(lo=np.percentile(q, 0.5, 0), hi=np.percentile(q, 99.5, 0))
     return np.clip(out, _net['lo'], _net['hi'])                                                                                                  # an unusual picture (features far outside training) can get a transform no edit ever had (cast -21, hue 26 degrees, a near-white curve): each parameter is held to the range the per-pair fits span (0.5-99.5 %)
 
 
 def typical_params():
     """The median per-pair neutral fit: the person's typical edit, the fallback when the network's transform would flatten a picture."""
-    if 'typical' not in _net: _net['typical'] = np.median(np.load(os.path.join(D.OUT, 'nfit.npz'))['params'], 0).astype(np.float32)
+    if 'typical' not in _net: _net['typical'] = np.median(_train_fits(), 0).astype(np.float32)
     return _net['typical']
+
+
+def _train_fits():
+    """The per-pair neutral fits of the TRAINING shoots only (lr_look.test_shoot False): the range and median used at inference must not come from the held-out finals the arena judges against."""
+    z = np.load(os.path.join(D.OUT, 'nfit.npz')); rows = D.load_catalogue()
+    train = np.array([not K.test_shoot(os.path.dirname(rows[int(i)]['final'])) for i in z['idx']]); return z['params'][train]
