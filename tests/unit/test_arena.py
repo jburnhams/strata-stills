@@ -76,3 +76,54 @@ def test_pick_pair_only_offers_pictures_of_the_named_set_and_load_set_reads_it(t
     for bad in ("missing", "../x"):
         with pytest.raises(ValueError):
             arena.load_set(str(tmp_path), bad)
+
+
+def _votes(*rows):
+    return [dict(pic="p", a=a, b=b, winner=w, t=i) for i, (a, b, w) in enumerate(rows)]
+
+
+def test_side_term_takes_a_left_preference_out_of_the_strengths():
+    import random as R
+
+    rng, vs = R.Random(3), []
+    for _ in range(600):  # x is truly stronger (70 %), the left picture gets a boost on top
+        a, b = ("x", "y") if rng.random() < 0.5 else ("y", "x")
+        px = 0.7 if a == "x" else 0.3
+        left = 1.6 * px / (1.6 * px + (1 - px))
+        vs.append(dict(pic="p", a=a, b=b, winner="a" if rng.random() < left else "b", t=0))
+    assert 1.3 < arena.side_advantage(vs) < 2.0
+    assert arena.bradley_terry(vs, side=False)["x"] > arena.bradley_terry(vs, side=False)["y"]
+    # always-left wins with no preference between the versions: side term explains it all, strengths stay level
+    flat = _votes(*[("x", "y", "a"), ("y", "x", "a")] * 20)
+    bt = arena.bradley_terry(flat)
+    assert abs(bt["x"] - bt["y"]) < 5 and arena.side_advantage(flat) > 5
+    assert arena.side_advantage([]) == 1.0
+
+
+def test_priority_weights_clear_pairs_of_interesting_variants_and_faces_but_never_drop_a_pair():
+    pool = {p: {v: {"file": f"{p}{v}", "hash": f"{p}{v}"} for v in ("auto4", "auto6", "camera")} for p in ("p1", "p2")}
+    pr = dict(
+        faces=["p2"],
+        dist={"p1": {"auto4|auto6": 1.0, "auto4|camera": 12.0, "auto6|camera": 12.0}},
+    )
+    seen, pn = {}, {}
+    assert arena.pair_weight(pr, "p1", "auto4", "auto6", seen, pn) < arena.pair_weight(
+        pr, "p1", "auto4", "camera", seen, pn
+    )
+    assert arena.pair_weight(pr, "p2", "auto4", "auto6", seen, pn) > arena.pair_weight(
+        pr, "p1", "auto4", "auto6", seen, pn
+    )
+    assert arena.pair_weight(pr, "p1", "auto4", "auto6", seen, pn) > 0
+    rng, hits = random.Random(0), {}
+    for _ in range(400):
+        pic, a, b = arena.pick_pair(pool, [], rng, priority=pr)
+        hits[pic] = hits.get(pic, 0) + 1
+    assert hits["p2"] > hits["p1"]
+
+
+def test_load_priorities_reads_the_file_or_says_none(tmp_path):
+    assert arena.load_priorities(str(tmp_path)) is None
+    (tmp_path / "priorities.json").write_text('{"interest": {"auto6": 2}}')
+    assert arena.load_priorities(str(tmp_path)) == {"interest": {"auto6": 2}}
+    (tmp_path / "priorities.json").write_text("[1]")
+    assert arena.load_priorities(str(tmp_path)) is None

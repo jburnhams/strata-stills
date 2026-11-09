@@ -86,30 +86,47 @@ def elo(votes, retired=()):
     return r
 
 
-def bradley_terry(votes, retired=(), iters=200):
-    """Order-independent strengths (Bradley-Terry, ties as half a win each way) on the Elo scale, the mean of the variants 1500. -> {variant: rating}."""
-    wins, games, names = {}, {}, set()
+def _fit(votes, retired, iters, side):
+    """-> (strengths {variant: p} with geometric mean 1, left-side odds h) of the Bradley-Terry fit; ({}, 1.0) when there is no usable vote. The votes are summed per (left, right) pair once, so an iteration costs the number of pairs, not of votes."""
+    agg = {}  # (left, right) -> [games, score of left summed]
     for v in votes:
         s = score(v)
         if s is None or v["a"] in retired or v["b"] in retired:
             continue
-        a, b = v["a"], v["b"]
-        names |= {a, b}
-        wins[(a, b)] = wins.get((a, b), 0) + s
-        wins[(b, a)] = wins.get((b, a), 0) + 1 - s
-        games[frozenset((a, b))] = games.get(frozenset((a, b)), 0) + 1
+        g = agg.setdefault((v["a"], v["b"]), [0, 0.0])
+        g[0] += 1
+        g[1] += s
+    names = {n for k in agg for n in k}
     if not names:
-        return {}
-    p = dict.fromkeys(names, 1.0)
+        return {}, 1.0
+    total_left = sum(g[1] for g in agg.values())
+    p, h = dict.fromkeys(names, 1.0), 1.0
     for _ in range(iters):
-        q = {}
-        for i in names:
-            w = sum(wins.get((i, j), 0) for j in names if j != i) + 0.01
-            d = sum(games.get(frozenset((i, j)), 0) / (p[i] + p[j]) for j in names if j != i) + 1e-9
-            q[i] = w / d
+        w, d = dict.fromkeys(names, 0.01), dict.fromkeys(names, 1e-9)
+        for (a, b), (n, s) in agg.items():
+            den = h * p[a] + p[b]
+            w[a] += s
+            w[b] += n - s
+            d[a] += n * h / den
+            d[b] += n / den
+        q = {n: w[n] / d[n] for n in names}
         g = math.exp(sum(math.log(x) for x in q.values()) / len(q))
         p = {n: x / g for n, x in q.items()}
+        if side:
+            h = (total_left + 0.01) / (sum(n * p[a] / (h * p[a] + p[b]) for (a, b), (n, _) in agg.items()) + 0.01)
+    return p, h
+
+
+def bradley_terry(votes, retired=(), iters=200, side=True):
+    """Order-independent strengths (Bradley-Terry, ties as half a win each way) on the Elo scale, the mean of the variants 1500. -> {variant: rating}.
+    `side` (default) fits a left-side advantage h as well: P(left wins) = h*p_a / (h*p_a + p_b), 'a' being the variant shown left. The sides are drawn at random, so h only removes noise from the strengths (the person favours the left picture, see `side_advantage`), it cannot favour a variant. `side=False` is the plain model."""
+    p, _ = _fit(votes, retired, iters, side)
     return {n: START + 400 * math.log10(x) for n, x in p.items()}
+
+
+def side_advantage(votes, retired=(), iters=200):
+    """The odds multiplier h the left picture has over the right one at equal strength (1.0 = no side preference; 1.3 = the left picture wins 57 % of the time between equals), fitted with the strengths."""
+    return _fit(votes, retired, iters, True)[1]
 
 
 def bootstrap(votes, retired=(), n=200, seed=0):
@@ -147,8 +164,8 @@ def head_to_head(votes, retired=()):
     return t
 
 
-def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None):
-    """Choose what to show next: a picture and two of its variants (-> (picture, left, right), left and right already shuffled), or None when nothing can be offered. Pictures with the fewest votes come first (spreading the votes over the whole pool), then among a picture's pairs the one whose variants have been compared the least in total, ties broken at random; `want` (a set of variant names) limits pairs to those containing one of them (a new variant being tested); `only` (a set of picture names, a named set such as the hard cases) limits the pictures."""
+def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None, priority=None):
+    """Choose what to show next: a picture and two of its variants (-> (picture, left, right), left and right already shuffled), or None when nothing can be offered. Pictures with the fewest votes come first (spreading the votes over the whole pool), then among a picture's pairs the one whose variants have been compared the least in total, ties broken at random; `want` (a set of variant names) limits pairs to those containing one of them (a new variant being tested); `only` (a set of picture names, a named set such as the hard cases) limits the pictures. `priority` (see `load_priorities`) turns the choice into a weighted draw over every pair of every picture, nothing excluded: see `pair_weight`."""
     seen = {}
     pool = {
         pic: {n: e for n, e in vs.items() if (pic, n) not in blocked}
@@ -174,12 +191,53 @@ def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None):
             pics.append((pic, pairs))
     if not pics:
         return None
+    if priority:
+        cand = [(pic, a, b) for pic, pairs in pics for a, b in pairs]
+        pic, a, b = rng.choices(cand, [pair_weight(priority, c[0], c[1], c[2], seen, pair_n) for c in cand])[0]
+        return (pic, a, b) if rng.random() < 0.5 else (pic, b, a)
     low = min(seen.get(p, 0) for p, _ in pics)
     cand = [(p, ps) for p, ps in pics if seen.get(p, 0) == low]
     pic, pairs = cand[rng.randrange(len(cand))]
     best = min(pair_n.get(frozenset(p), 0) for p in pairs)
     a, b = rng.choice([p for p in pairs if pair_n.get(frozenset(p), 0) == best])
     return (pic, a, b) if rng.random() < 0.5 else (pic, b, a)
+
+
+INTEREST = {
+    "auto4": 3.0,
+    "auto5": 3.0,
+    "auto6": 3.0,
+    "auto3": 1.5,
+    "lightroom": 1.5,
+    "auto1": 0.5,
+    "auto2": 0.5,
+    "camera": 0.2,
+    "neutral": 0.2,
+}  # how much a vote on a version is wanted now (the newest automatic versions most; overridden by 'interest' of priorities.json; a version not listed counts 1)
+SEPARATE = 6.0  # mean CIELAB distance between two versions from which a pair is 'clearly different' (full weight); below it the weight falls with the square of the distance
+
+
+def pair_weight(priority, pic, a, b, seen, pair_n):
+    """How much a pair is wanted, a product of: the interest in its two variants (`INTEREST`), how far apart the pictures are (`dist`: (d / SEPARATE)^2 within 0.02..1, so a near-identical pair is rarely shown but never dropped; 1 when not measured; the script makes d from the whole picture and, with a face, the face region counting 1.5x), a picture with a real face (`faces`) 3x, and how little the picture (1/(1+votes)^2) and the pair (1/(1+votes/10)) have been judged: votes spread over the pool, and a pair keeps being drawn until it has about a hundred."""
+    interest = {**INTEREST, **(priority.get("interest") or {})}
+    w = interest.get(a, 1.0) * interest.get(b, 1.0)
+    d = (priority.get("dist") or {}).get(pic, {}).get("|".join(sorted((a, b))))
+    if isinstance(d, list):  # [distance, [hash a, hash b]]: the hashes are for the script's cache
+        d = d[0]
+    if d is not None:
+        w *= min(1.0, max(0.02, (d / SEPARATE) ** 2))
+    if pic in (priority.get("faces") or ()):
+        w *= 3.0
+    return w / ((1 + seen.get(pic, 0)) ** 2 * (1 + pair_n.get(frozenset((a, b)), 0) / 10))
+
+
+def load_priorities(root):
+    """`<arena dir>/priorities.json` (made by scripts/arena_priorities.py): {'interest': {variant: weight} (optional, over INTEREST), 'faces': [pictures with a real face], 'dist': {picture: {'a|b' (names sorted): mean CIELAB distance, or [distance, [hash, hash]]}}}, or None when there is none (the plain picker runs). Unreadable files count as none."""
+    try:
+        d = json.load(open(os.path.join(root, "priorities.json"), encoding="utf8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
 
 
 def load_set(root, name):
