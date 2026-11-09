@@ -290,15 +290,18 @@ def _safe(name):
     return name
 
 
+def _presets():
+    from stratastills import presets_store
+    return presets_store.get()                      # the files (default) or, switched on in settings, schema `photos` (presets_store.py)
+
+
 def list_presets():
     """[{name, label, builtin, stages}]: the built-in presets, then the person's own (a saved preset of the same name as a built-in one is not allowed)."""
     out = [dict(name=n, label=d['label'], builtin=True, stages=normalize(d['stages'])) for n, d in BUILTIN.items()]
-    d = _preset_dir()
-    if os.path.isdir(d):
-        for f in sorted(os.listdir(d)):
-            if not f.endswith('.json') or f[:-5] in BUILTIN: continue
-            try: r = json.load(open(os.path.join(d, f))); out.append(dict(name=f[:-5], label=r.get('label') or f[:-5], builtin=False, stages=normalize(r['stages'])))
-            except (OSError, ValueError, KeyError, P.ProjectError): continue
+    for r in _presets().list():
+        if r['name'] in BUILTIN: continue
+        try: out.append(dict(name=r['name'], label=r['label'], builtin=False, stages=normalize(r['stages'])))
+        except (KeyError, P.ProjectError): continue
     return out
 
 
@@ -311,16 +314,13 @@ def get_preset(name):
 def save_preset(name, label, stages):
     name = _safe(name)
     if name in BUILTIN: raise P.ProjectError(f'{name!r} is a built-in preset: save yours under another name')
-    st = normalize(stages); os.makedirs(_preset_dir(), exist_ok=True)
-    with open(os.path.join(_preset_dir(), name + '.json'), 'w') as f: json.dump(dict(label=label or name, stages=st), f, indent=1)
+    _presets().save(name, label or name, normalize(stages))
     return get_preset(name)
 
 
 def delete_preset(name):
     if name in BUILTIN: raise P.ProjectError('a built-in preset cannot be deleted')
-    p = os.path.join(_preset_dir(), _safe(name) + '.json')
-    if not os.path.exists(p): raise P.ProjectError(f'no pipeline preset {name!r}')
-    os.remove(p)
+    if not _presets().delete(_safe(name)): raise P.ProjectError(f'no pipeline preset {name!r}')
 
 
 def resolve(preset=None, options=None, stages=None):
