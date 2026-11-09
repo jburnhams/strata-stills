@@ -120,7 +120,10 @@ def main():
     try: st = AS.run(chunks, produce, make, gpu_workers=gw, cpu_workers=cw, serial=a.serial, on_error=failed)
     finally: shutil.rmtree(work, ignore_errors=True)
     say(f'{st["items"]} pictures made in {st["seconds"]:.0f} s' + (f'; FAILED: {st["failed_chunks"]} chunks, {st["failed_items"]} pictures' if st['failed_chunks'] or st['failed_items'] else ''))
-    say(f'pool: {len(pool)} pictures'); return 0
+    from stratastills import images
+    made = {sid for _, sid, _ in todo}; bad = sorted((sid, n) for sid in made if sid in pool for n, e in pool[sid].items() if images.readable_jpeg(os.path.join(root, e['file'])) is None)          # every picture made in this run must decode and must not be one flat value
+    if bad: say(f'{len(bad)} versions are blank or unreadable: ' + ', '.join(f'{s}/{n}' for s, n in bad[:20]) + '\nremake them with: --serial --rebuild --only ' + ' '.join(f'--pic {s}' for s in sorted({s for s, _ in bad})))
+    say(f'pool: {len(pool)} pictures'); return 1 if bad else 0
 
 
 if __name__ == '__main__':
