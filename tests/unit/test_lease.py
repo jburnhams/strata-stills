@@ -27,7 +27,7 @@ def cuda(monkeypatch):
     monkeypatch.delenv('STRATASTILLS_LEASE', raising=False)
     monkeypatch.setattr(gpu, 'available', lambda: True)
     monkeypatch.setattr(gpu, 'dev', lambda: types.SimpleNamespace(type='cuda'))
-    gpu._lease_held[:] = [0, None]
+    gpu._lease_held[:] = [0, None]; gpu._lease_cap = None; monkeypatch.delenv('STRATASTILLS_LEASE_GB', raising=False)
 
 
 def test_a_lease_is_taken_once_for_nested_blocks_and_worker_threads(cuda, monkeypatch):
@@ -40,7 +40,7 @@ def test_a_lease_is_taken_once_for_nested_blocks_and_worker_threads(cuda, monkey
             with gpu.lease('worker') as w: seen.append(w)
         t = threading.Thread(target=worker); t.start(); t.join()                                  # a batch worker thread shares the same lease
         assert seen == [l]
-    assert log == [('acquire', 'strata-stills', None, 'arena build'), 'release'] and gpu._lease_held == [0, None]
+    assert log == [('acquire', 'strata-stills', 8.0, 'arena build'), 'release'] and gpu._lease_held == [0, None] and gpu._lease_cap is None
 
 
 def test_the_card_memory_is_returned_before_the_lease_goes_back(cuda, monkeypatch):
@@ -72,3 +72,29 @@ def test_without_cuda_client_service_or_with_it_switched_off_the_block_just_runs
     monkeypatch.setattr(gpu, 'available', lambda: False)
     with gpu.lease('x') as l: assert l is None
     assert log == []
+
+
+def test_a_sized_lease_caps_what_this_process_plans_with(cuda, monkeypatch):
+    log = []; monkeypatch.setitem(sys.modules, 'strata_models_client', fake_client(log))
+    with gpu.lease('batch'): assert gpu._lease_cap == 8e9
+    monkeypatch.setenv('STRATASTILLS_LEASE_GB', '5.5')
+    with gpu.lease('batch'): assert gpu._lease_cap == 5.5e9
+    monkeypatch.setenv('STRATASTILLS_LEASE_GB', 'whole')
+    with gpu.lease('batch'): assert gpu._lease_cap is None
+    monkeypatch.setenv('STRATASTILLS_LEASE_GB', 'lots'); assert gpu.lease_gb() == 8.0
+    assert [e[2] for e in log if isinstance(e, tuple)] == [8.0, 5.5, None]
+    t = types.SimpleNamespace(cuda=types.SimpleNamespace(mem_get_info=lambda: (10e9, 12e9), memory_reserved=lambda: 1e9))
+    monkeypatch.setattr(gpu, 'torch_', lambda: t)
+    assert gpu._cuda_total() == 11e9
+    gpu._lease_cap = 4e9; assert gpu._cuda_total() == 4e9
+    gpu._lease_cap = None
+
+
+def test_slots_made_before_a_lease_are_not_shared_by_work_under_it(cuda, monkeypatch):
+    monkeypatch.setattr(gpu, '_slots', None); monkeypatch.delenv('STRATASTILLS_GPU_SLOTS', raising=False)
+    t = types.SimpleNamespace(cuda=types.SimpleNamespace(mem_get_info=lambda: (24e9, 24e9), memory_reserved=lambda: 0))
+    monkeypatch.setattr(gpu, 'torch_', lambda: t); monkeypatch.setattr(gpu, '_tiled_batch', False)
+    assert gpu.slots() == 3                                                                   # 24 GB: three whole pictures
+    log = []; monkeypatch.setitem(sys.modules, 'strata_models_client', fake_client(log))
+    with gpu.lease('full-size view'): assert gpu.slots() == 1                                 # under the 8 GB lease: one
+    assert gpu.slots() == 3
