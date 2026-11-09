@@ -6,7 +6,7 @@ import argparse, hashlib, json, os, sys, tempfile, time, shutil, types
 import threading
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import arena_sched as AS, arena_variants as AV, build_lr_report as LRR, lr_dataset as D, lr_look as LK, lr_tmodel as TM, lr_ftarget as FT
+import arena_sched as AS, arena_variants as AV, build_lr_report as LRR, lr_dataset as D, lr_look as LK, lr_tmodel as TM, lr_ftarget as FT, lr_face_first as FF
 from stratastills import settings
 
 DISPLAY = 1400
@@ -23,7 +23,10 @@ def code_key(name):
     if name in ('camera', 'neutral'): h.update(inspect.getsource(AV.match_brightness).encode())
     if name in ('camera', 'neutral') or name.startswith('auto'): h.update(inspect.getsource(AV.auto1).encode())
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())
-    if name in ('auto4', 'auto5'):                                                                                    # the neutral-trained network: its code and its saved weights
+    if name == 'auto6':                                                                                              # face first: its code, the skin-target models and the faces it reads
+        import lr_face_first as FF
+        for f in (os.path.join(os.path.dirname(__file__), 'lr_face_first.py'), FF.MODEL_FILE, FF.FACES_FILE): h.update(open(f, 'rb').read() if os.path.exists(f) else b'missing')
+    if name in ('auto4', 'auto5', 'auto6'):                                                                                    # the neutral-trained network: its code and its saved weights
         import lr_neutral_model as NM
         h.update(open(os.path.join(os.path.dirname(__file__), 'lr_neutral_model.py'), 'rb').read()); h.update(open(NM.NET_FILE, 'rb').read() if os.path.exists(NM.NET_FILE) else b'no net')
     return h.hexdigest()[:12]
@@ -105,7 +108,11 @@ def main():
         x0, y0, x1, y1 = max(r1[0], r2[0]), max(r1[1], r2[1]), min(r1[2], r2[2]), min(r1[3], r2[3]); sx0, sy0, sx1, sy1 = smear_rect(neu); x0, y0, x1, y1 = max(x0, sx0), max(y0, sy0), min(x1, sx1), min(y1, sy1); H, W = fin.shape[:2]
         fl = [dict(f, box=[(f['box'][0] * W - x0) / (x1 - x0), (f['box'][1] * H - y0) / (y1 - y0), f['box'][2] * W / (x1 - x0), f['box'][3] * H / (y1 - y0)]) for f in fl]
         fin, neu, cam = fin[y0:y1, x0:x1], neu[y0:y1, x0:x1], cam[y0:y1, x0:x1]                          # every version on the part where all of them have real pixels: the moved pictures smear their last row and column outside it, and our own develop repeats its edge pixels where the lens correction pulls from outside the frame (streaks on the edges, smear_rect); the person's final is cut the same way so that nothing shows the difference
-        c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, x=X[i], names=names, **predictions(i, fl))
+        f2 = FF.main_face(idx[i])
+        if f2 is not None:                                                                                         # on the same cut as the versions: box and landmarks into its frame
+            sx, sy = W / (x1 - x0), H / (y1 - y0); ox, oy = x0 / W, y0 / H
+            f2 = dict(f2, box=[(f2['box'][0] - ox) * sx, (f2['box'][1] - oy) * sy, f2['box'][2] * sx, f2['box'][3] * sy], lm=(np.asarray(f2['lm']) - [ox, oy]) * [sx, sy])
+        c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, x=X[i], names=names, face2=f2, **predictions(i, fl))
         d = os.path.join(root, 'img', sid); os.makedirs(d, exist_ok=True); entry = pool.get(sid, {})
         for n in need:
             img = AV.VARIANTS[n](c); assert img.shape[:2] == fin.shape[:2], f'{sid}/{n}: {img.shape[:2]} is not the final\'s {fin.shape[:2]}: all versions must be on the same crop'; f = os.path.join(d, f'{n}.jpg'); tmp = os.path.join(d, f'{n}.tmp.jpg'); cv2.imwrite(tmp, img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); os.replace(tmp, f); entry[n] = dict(file=f'img/{sid}/{n}.jpg', hash=hashlib.sha1(open(f, 'rb').read()).hexdigest()[:16], key=keys[n])
