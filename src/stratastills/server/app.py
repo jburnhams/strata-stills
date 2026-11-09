@@ -225,6 +225,7 @@ def create_app():
             {w for w in want.split(",") if w} or None,
             AR.open_alerts(arena_alert_events()),
             only,
+            AR.load_priorities(settings.arena_dir()),
         )
         if not pick:
             raise HTTPException(404, "nothing to rate yet: make the pictures with scripts/build_arena.py")
@@ -390,6 +391,9 @@ def create_app():
             pictures=len(pool),
             voted_pictures=len({v["pic"] for v in votes}),
             retired=sorted(retired),
+            left_odds=round(
+                AR.side_advantage(votes, retired), 3
+            ),  # >1: the left picture wins more often between equals (already taken out of the ratings)
             variants=[
                 dict(
                     name=k,
