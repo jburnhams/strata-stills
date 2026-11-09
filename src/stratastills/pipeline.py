@@ -106,7 +106,7 @@ PARAMS = dict(develop=_develop_params, level=_level_params, resize=_resize_param
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
-    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 3, sharpen=7, encode=3)[stage]
+    return dict(develop=develop.VERSION, level=transforms.VERSION['level'], resize=1000 * detail.TILE + 3, sharpen=7, encode=4)[stage]                    # encode 4: nvJPEG output checked, so a corrupt file made by version 3 is generated again
 
 
 class State:
