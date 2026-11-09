@@ -22,6 +22,9 @@ def code_key(name):
     if name in ('camera', 'neutral'): h.update(inspect.getsource(AV.match_brightness).encode())
     if name in ('camera', 'neutral') or name.startswith('auto'): h.update(inspect.getsource(AV.auto1).encode())
     for f in DEPS.get(name, LOOK): h.update(open(os.path.join(os.path.dirname(__file__), f), 'rb').read())
+    if name in ('auto4', 'auto5'):                                                                                    # the neutral-trained network: its code and its saved weights
+        import lr_neutral_model as NM
+        h.update(open(os.path.join(os.path.dirname(__file__), 'lr_neutral_model.py'), 'rb').read()); h.update(open(NM.NET_FILE, 'rb').read() if os.path.exists(NM.NET_FILE) else b'no net')
     return h.hexdigest()[:12]
 
 
@@ -63,7 +66,7 @@ def save_json(path, obj):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--n', type=int, default=60, help='how many pictures to have in the pool at the end'); ap.add_argument('--seed', type=int, default=7)
-    ap.add_argument('--redo', action='append', default=[]); ap.add_argument('--pic', action='append', default=[], help='make every version of this picture again (repeatable)'); ap.add_argument('--retire', action='append', default=[]); ap.add_argument('--unretire', action='append', default=[]); ap.add_argument('--rebuild', action='store_true')
+    ap.add_argument('--redo', action='append', default=[]); ap.add_argument('--pic', action='append', default=[], help='make every version of this picture again (repeatable)'); ap.add_argument('--only', action='store_true', help='make nothing but the --pic pictures'); ap.add_argument('--picks', help='a JSON file ({"pics": [...]} or a list) naming exactly the pictures the pool should hold: the others are dropped from the pool (their votes stay), the missing ones are made'); ap.add_argument('--retire', action='append', default=[]); ap.add_argument('--unretire', action='append', default=[]); ap.add_argument('--rebuild', action='store_true')
     ap.add_argument('--serial', action='store_true', help='one picture after the other in this thread (the reference the scheduler is compared with)'); ap.add_argument('--gpu-workers', type=int, help='chunks developed at a time (default 2; gpu.slot() keeps the card memory in bounds; STRATASTILLS_ARENA_GPU_WORKERS)'); ap.add_argument('--cpu-workers', type=int, help='workers making versions besides (default: half the cores, at most 6; STRATASTILLS_ARENA_CPU_WORKERS)'); ap.add_argument('--chunk', type=int, default=3, help='pictures per neutral develop job')
     a = ap.parse_args(); root = settings.arena_dir(); os.makedirs(os.path.join(root, 'img'), exist_ok=True); say = lambda m: print(m, flush=True)
     vf = os.path.join(root, 'variants.json'); var = json.load(open(vf)) if os.path.exists(vf) else {'retired': []}
@@ -72,12 +75,14 @@ def main():
     rows, X, names, Y, idx, G = LK.load(); test = np.array([LK.test_shoot(g) for g in G]); FACES = json.load(open(os.path.join(D.OUT, 'faces.json'))) if os.path.exists(os.path.join(D.OUT, 'faces.json')) else {}
     models, tmodels, fmodels = LK.train_cached(X[~test], Y[~test]), TM.train_cached(), FT.train_cached(); keys = {n: code_key(n) for n in AV.VARIANTS}
     todo = []; valid = {sid for _, sid in order(rows, idx, G, test, a.seed)}
+    picks = None
+    if a.picks: d = json.load(open(a.picks)); picks = set(d['pics'] if isinstance(d, dict) else d); valid &= picks; say(f'picks: {len(picks)} pictures named, {len(picks - valid)} of them not held-out pictures of the dataset (skipped)')
     gone = [k for k in pool if k not in valid]
-    if gone: pool = {k: v for k, v in pool.items() if k in valid}; save_json(pf, pool); say(f'dropped {len(gone)} pictures from the pool: no longer in the dataset (the nudity filter flags them): {gone}')           # votes on them stay in votes.jsonl but the server no longer offers them
+    if gone: pool = {k: v for k, v in pool.items() if k in valid}; save_json(pf, pool); say(f'dropped {len(gone)} pictures from the pool: ' + ('not in --picks or ' if picks else '') + f'no longer in the dataset (the nudity filter flags them): {gone}')           # votes on them stay in votes.jsonl but the server no longer offers them
     for i, sid in order(rows, idx, G, test, a.seed):
         have = pool.get(sid, {}); need = [n for n in AV.VARIANTS if n in a.redo or sid in a.pic or n not in have or have[n].get('key') != keys[n]]
-        if sid in pool or len(pool) + len([t for t in todo if t[1] not in pool]) < a.n:
-            if need: todo.append((i, sid, need))
+        if (sid in picks) if picks is not None else (sid in pool or len(pool) + len([t for t in todo if t[1] not in pool]) < a.n):
+            if need and (not a.only or sid in a.pic): todo.append((i, sid, need))
     say(f'{len(pool)} pictures in the pool; {len(todo)} to make or update')
     work = tempfile.mkdtemp(prefix='arena-', dir=os.path.join(root, '..')); lock = threading.Lock(); predict_lock = threading.Lock()                    # the pool dict and its file, and xgboost's predict, one thread at a time
 
