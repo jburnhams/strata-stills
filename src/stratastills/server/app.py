@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stratastills import arena as AR, arena_store, export as X, ingest, nsfw, pipeline as PL, preview, projects as P, settings
+from stratastills import arena as AR, arena_store, flags_store, export as X, ingest, nsfw, pipeline as PL, preview, projects as P, settings
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 LANDING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'landing.html')
@@ -254,28 +254,24 @@ def create_app():
 
     FLAG_REPORTS = ('neutral', 'auto'); FLAG_PIC = re.compile(r'^[A-Za-z0-9_.\- ]{1,120}$'); flag_lock = threading.Lock()
 
-    def flag_file(report):
+    def flag_report(report):
         if report not in FLAG_REPORTS: raise HTTPException(404, 'no such report')
-        return os.path.join(settings.report_flags_dir(), f'{report}.json')
+        return report
 
     @app.get('/api/report-flags/{report}')
     def get_flags(report: str):
-        f = flag_file(report)
-        try: return json.load(open(f, encoding='utf8'))
-        except (OSError, ValueError): return {}
+        return flags_store.get().read(flag_report(report))
 
     @app.put('/api/report-flags/{report}/{pic}')
     def put_flag(report: str, pic: str, body: FlagIn):
-        f = flag_file(report)
+        report = flag_report(report)
         if not FLAG_PIC.match(pic): raise HTTPException(400, 'bad picture id')
         with flag_lock:                                                                                 # the flags of a report are one small file: read, change one picture, write whole (through a temporary file)
-            try: cur = json.load(open(f, encoding='utf8'))
-            except (OSError, ValueError): cur = {}
+            st = flags_store.get(); cur = st.read(report)
             rating = body.rating if body.rating in ('worst', 'bad', 'medium', 'good', 'perfect') else ''
-            if rating or body.reasons or body.note: now = time.strftime('%Y-%m-%dT%H:%M:%S'); cur[pic] = dict(flag=True, rating=rating, reasons=body.reasons[:20], note=body.note[:2000], status=body.status if body.status in ('open', 'fixable', 'deferred', 'fixed') else 'open', at=now, first=cur.get(pic, {}).get('first', now))      # `at` is the last change, `first` when it was first flagged: to see which to revisit
-            else: cur.pop(pic, None)
-            os.makedirs(os.path.dirname(f), exist_ok=True); tmp = f + '.tmp'; json.dump(cur, open(tmp, 'w', encoding='utf8'), indent=1, sort_keys=True); os.replace(tmp, f)
-        return cur.get(pic, {})
+            entry = None
+            if rating or body.reasons or body.note: now = time.strftime('%Y-%m-%dT%H:%M:%S'); entry = dict(flag=True, rating=rating, reasons=body.reasons[:20], note=body.note[:2000], status=body.status if body.status in ('open', 'fixable', 'deferred', 'fixed') else 'open', at=now, first=cur.get(pic, {}).get('first', now))      # `at` is the last change, `first` when it was first flagged: to see which to revisit
+            return st.write(report, pic, entry)
 
     @app.get('/report')
     def report_slash(): return RedirectResponse('/report/')
