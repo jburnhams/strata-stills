@@ -2,12 +2,15 @@
   --dcp     a DNG camera profile (.dcp: colour matrices, hue/saturation maps), e.g. RawTherapee's rtdata/dcpprofiles/SONY ILCE-7C.dcp (its profiles are public domain, made with Adobe's DNG converter)
   --noise   darktable's data/noiseprofiles.json (per-ISO Poisson/Gaussian noise fits contributed by its users, GPL-3.0) with --model naming the entry
 A bundle can also hold a `ProfileToneCurve` (scripts/fit_tone_curve.py adds one fitted to the camera's own JPEGs). Usage: python scripts/build_profile_bundle.py --dcp "SONY ILCE-7C.dcp" --noise noiseprofiles.json --model ILCE-7C --out src/stratastills/sony_ilce7c_profile.json"""
-import argparse, json
+
+import argparse
+import json
+
 import numpy as np
 import tifffile
 
-MATRICES = ('ColorMatrix1', 'ColorMatrix2', 'CalibrationIlluminant1', 'CalibrationIlluminant2')
-HUE_SAT = ('ProfileHueSatMapDims', 'ProfileHueSatMapData1', 'ProfileHueSatMapData2', 'ProfileHueSatMapEncoding')
+MATRICES = ("ColorMatrix1", "ColorMatrix2", "CalibrationIlluminant1", "CalibrationIlluminant2")
+HUE_SAT = ("ProfileHueSatMapDims", "ProfileHueSatMapData1", "ProfileHueSatMapData2", "ProfileHueSatMapEncoding")
 
 
 def read_dcp(path, hue_sat=False):
@@ -16,20 +19,32 @@ def read_dcp(path, hue_sat=False):
         tags = {tag.name: tag.value for tag in t.pages[0].tags.values()}
     out = {}
     for k in MATRICES + (HUE_SAT if hue_sat else ()):
-        if k in tags: v = tags[k]; out[k] = np.asarray(v).tolist() if hasattr(v, '__len__') else v
-    out['ProfileName'] = 'Embedded'; return out
+        if k in tags:
+            v = tags[k]
+            out[k] = np.asarray(v).tolist() if hasattr(v, "__len__") else v
+    out["ProfileName"] = "Embedded"
+    return out
 
 
 def noise_table(path, model):
     """[[iso, S, O]]: darktable's a and b (variance = a * v + b of the raw value 0..1, per channel) averaged over the channels, as the DNG NoiseProfile (S, O) the development uses."""
-    for maker in json.load(open(path, encoding='utf-8'))['noiseprofiles']:
-        for m in maker['models']:
-            if m['model'].lower() == model.lower(): return [[p['iso'], float(np.mean(p['a'])), float(np.mean(p['b']))] for p in m['profiles']]
-    raise SystemExit(f'no noise profile for {model}')
+    for maker in json.load(open(path, encoding="utf-8"))["noiseprofiles"]:
+        for m in maker["models"]:
+            if m["model"].lower() == model.lower():
+                return [[p["iso"], float(np.mean(p["a"])), float(np.mean(p["b"]))] for p in m["profiles"]]
+    raise SystemExit(f"no noise profile for {model}")
 
 
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('--dcp', required=True); ap.add_argument('--noise'); ap.add_argument('--model'); ap.add_argument('--out', required=True); ap.add_argument('--hue-sat', action='store_true'); a = ap.parse_args()
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dcp", required=True)
+    ap.add_argument("--noise")
+    ap.add_argument("--model")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--hue-sat", action="store_true")
+    a = ap.parse_args()
     b = read_dcp(a.dcp, a.hue_sat)
-    if a.noise: b['NoiseTable'] = noise_table(a.noise, a.model)
-    json.dump(b, open(a.out, 'w'), separators=(',', ':')); print('wrote', a.out, sorted(b))
+    if a.noise:
+        b["NoiseTable"] = noise_table(a.noise, a.model)
+    json.dump(b, open(a.out, "w"), separators=(",", ":"))
+    print("wrote", a.out, sorted(b))

@@ -5,59 +5,88 @@ Making the copy is the slow part and happens once, in the background: a JPEG, TI
 shows of a raw is what Generate starts from). `status` says where that stands, `prepare` starts it if needed, and the loupe's crop endpoint answers 'preparing' until it is ready.
 
 `dims(path)` is the full size of a file without reading it (an image header, or the largest level of a DNG): the loupe uses it to show the same scene area from variants of different sizes."""
-import os, threading
+
+import os
+import threading
 
 import numpy as np
 
-from stratastills import develop, images, projects as P
+from stratastills import develop, images
+from stratastills import projects as P
 
-_jobs = {}                                  # (cache file) -> {state: running|failed, text}
+_jobs = {}  # (cache file) -> {state: running|failed, text}
 _lock = threading.Lock()
 
 
 def cache_file(pid, path):
-    return images.cache_path(P.folder(pid), images.cache_key(path, 'fullres', develop.VERSION, develop.HIGHLIGHT_CONTRAST), '.npy')
+    return images.cache_path(
+        P.folder(pid), images.cache_key(path, "fullres", develop.VERSION, develop.HIGHLIGHT_CONTRAST), ".npy"
+    )
 
 
 def get(pid, path):
     """The full-size picture as a read-only memory map (H, W, 3) uint8 BGR, or None if it has not been made yet."""
     f = cache_file(pid, path)
-    if not os.path.exists(f): return None
-    try: return np.load(f, mmap_mode='r')
-    except (OSError, ValueError): return None
+    if not os.path.exists(f):
+        return None
+    try:
+        return np.load(f, mmap_mode="r")
+    except (OSError, ValueError):
+        return None
 
 
 def status(pid, path):
     """{state: 'ready' | 'running' | 'failed' | 'idle', text}."""
-    if os.path.exists(cache_file(pid, path)): return dict(state='ready', text='')
-    with _lock: j = _jobs.get(cache_file(pid, path))
-    return dict(j) if j else dict(state='idle', text='')
+    if os.path.exists(cache_file(pid, path)):
+        return dict(state="ready", text="")
+    with _lock:
+        j = _jobs.get(cache_file(pid, path))
+    return dict(j) if j else dict(state="idle", text="")
 
 
 def _build(pid, path, f):
     try:
         if images.is_camera_raw(path):
             from stratastills import gpu
+
             try:
-                with gpu.lease('full-size view'): rgb = develop.develop(path, half=False)
+                with gpu.lease("full-size view"):
+                    rgb = develop.develop(path, half=False)
                 arr = np.ascontiguousarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)[:, :, ::-1])
-            except Exception: arr = images.load(path, 100000)                                    # a Lightroom linear DNG, or a raw LibRaw cannot develop: its biggest embedded level
-        else: arr = images.load(path, 100000)
-        tmp = f + '.tmp.npy'; np.save(tmp, arr); os.replace(tmp, f)
-        with _lock: _jobs.pop(f, None)
+            except Exception:
+                arr = images.load(
+                    path, 100000
+                )  # a Lightroom linear DNG, or a raw LibRaw cannot develop: its biggest embedded level
+        else:
+            arr = images.load(path, 100000)
+        tmp = f + ".tmp.npy"
+        np.save(tmp, arr)
+        os.replace(tmp, f)
+        with _lock:
+            _jobs.pop(f, None)
     except Exception as e:
-        with _lock: _jobs[f] = dict(state='failed', text=str(e)[:200])
+        with _lock:
+            _jobs[f] = dict(state="failed", text=str(e)[:200])
 
 
 def prepare(pid, path):
     """Start making the full-size copy in the background unless it exists or is being made (a failed one is tried again); returns the status."""
     f = cache_file(pid, path)
-    if os.path.exists(f): return dict(state='ready', text='')
+    if os.path.exists(f):
+        return dict(state="ready", text="")
     with _lock:
         j = _jobs.get(f)
-        if j and j['state'] == 'running': return dict(j)
-        st = _jobs[f] = dict(state='running', text='developing the raw at full size (about a minute and a half, once)' if images.is_camera_raw(path) else 'decoding the picture (once)')
-    result = dict(st)                                                                              # copied before the thread starts: a small picture is decoded and its job removed (_build pops it) before this function returns, and reading _jobs[f] then raised KeyError (seen on a macOS runner)
+        if j and j["state"] == "running":
+            return dict(j)
+        st = _jobs[f] = dict(
+            state="running",
+            text="developing the raw at full size (about a minute and a half, once)"
+            if images.is_camera_raw(path)
+            else "decoding the picture (once)",
+        )
+    result = dict(
+        st
+    )  # copied before the thread starts: a small picture is decoded and its job removed (_build pops it) before this function returns, and reading _jobs[f] then raised KeyError (seen on a macOS runner)
     threading.Thread(target=_build, args=(pid, path, f), daemon=True).start()
     return result
 

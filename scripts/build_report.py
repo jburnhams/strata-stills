@@ -2,37 +2,73 @@
   python scripts/build_report.py [--out out/report/neutral] [--set a7c --set dji] [--min-lens 2] [--min-device 5] [--all] [--stems DSC00014,...] [--public-only] [--quality 95] [--crops 3]
 Reads candidates/<set>/ (scripts/copy_candidates.py) and docs/report_public.json (the pictures whose subject is not a person, so that they could be public; hand-picked). The report has every kind of picture, the public ones marked, and a switch at the top of the page that shows only those (also `?public=1` in the address): it is for this machine and the app's own server (/report/), never to be committed or published as it is; --public-only leaves the others out altogether, for a report that may go public; shows at least --min-lens of each lens and --min-device of each device, then more until every octave of ISO the pool has is covered; writes <out>/index.html and <out>/assets/*.jpg (gitignored with out/). The pictures of ours are made again on every run (a temporary project: nothing of the app's projects is touched); an optional step of the build (scripts/setup_env.sh --report), skipped when there are no candidate photos.
 How the crops are chosen: every program's picture is brought to the size of ours and registered to it; the disagreement at each place is the colour and brightness difference (blurred, so that a one pixel shift does not count) plus the difference in how much fine detail and noise there is, each relative to its median over the picture; the best window of each kind that does not overlap an earlier one is shown (1: the two together, 2: the detail and noise, 3: the colour and tone)."""
-import argparse, functools, hashlib, collections, glob, html, json, os, shutil, sys, tempfile, time
-import cv2, numpy as np
-sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import compare_detail as CD, render_external as RE
-from stratastills import externaltools as ET, nsfw
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-RAW_EXTS = ('.arw', '.cr2', '.cr3', '.nef', '.dng', '.rw2', '.orf', '.raf', '.pef', '.srw')
+import argparse
+import collections
+import functools
+import glob
+import hashlib
+import html
+import json
+import os
+import shutil
+import sys
+import tempfile
+import time
+
+import cv2
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import compare_detail as CD
+import render_external as RE
+
+from stratastills import externaltools as ET
+from stratastills import nsfw
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+RAW_EXTS = (".arw", ".cr2", ".cr3", ".nef", ".dng", ".rw2", ".orf", ".raf", ".pef", ".srw")
 
 
 def discover_sets():
     """The candidate sets there are: every docs/<set>_candidates.json (scripts/add_candidates.py makes them) whose folder candidates/<set>/ exists. The renders of the other programs are in candidates/renders/[<set>-]<program>/ (no prefix for a7c: the first set)."""
     out = {}
-    for f in sorted(glob.glob(os.path.join(ROOT, 'docs', '*_candidates.json'))):
-        name = os.path.basename(f)[:-len('_candidates.json')]; folder = os.path.join(ROOT, 'candidates', name)
-        if not os.path.isdir(folder): continue
-        exts = collections.Counter(os.path.splitext(x)[1].lower() for x in os.listdir(folder) if os.path.splitext(x)[1].lower() in RAW_EXTS)
-        if exts: out[name] = dict(label=name, ext=exts.most_common(1)[0][0], camera_ext='.JPG', prefix='' if name == 'a7c' else name + '-')
+    for f in sorted(glob.glob(os.path.join(ROOT, "docs", "*_candidates.json"))):
+        name = os.path.basename(f)[: -len("_candidates.json")]
+        folder = os.path.join(ROOT, "candidates", name)
+        if not os.path.isdir(folder):
+            continue
+        exts = collections.Counter(
+            os.path.splitext(x)[1].lower() for x in os.listdir(folder) if os.path.splitext(x)[1].lower() in RAW_EXTS
+        )
+        if exts:
+            out[name] = dict(
+                label=name, ext=exts.most_common(1)[0][0], camera_ext=".JPG", prefix="" if name == "a7c" else name + "-"
+            )
     return out
 
 
 SETS = discover_sets()
-OTHERS = [('darktable', 'darktable'), ('rawtherapee-auto-matched', 'RawTherapee (auto-matched)'), ('rawtherapee', 'RawTherapee (default)')]   # (folder in candidates/renders, name shown)
+OTHERS = [
+    ("darktable", "darktable"),
+    ("rawtherapee-auto-matched", "RawTherapee (auto-matched)"),
+    ("rawtherapee", "RawTherapee (default)"),
+]  # (folder in candidates/renders, name shown)
 OTHER_SETTINGS = {
-    'Camera': "The camera's own JPEG (the one next to the raw): its in-camera processing, whatever the camera was set to; lens corrections and noise reduction are the camera's.",
-    'darktable': 'darktable 5.6.2, darktable-cli with the default configuration (candidates/dtconf): the scene-referred workflow, its default modules and auto-applied presets, no styles; asked for 3000 px (the long side).',
-    'RawTherapee (auto-matched)': "RawTherapee 5.13, rawtherapee-cli with its own 'Auto-Matched Curve' profile for the picture's ISO (Low up to ISO 400, Medium up to 1600, else High); full size (resized to ours for the comparison).",
-    'RawTherapee (default)': "RawTherapee 5.13, rawtherapee-cli with its default profile; full size (resized to ours for the comparison).",
+    "Camera": "The camera's own JPEG (the one next to the raw): its in-camera processing, whatever the camera was set to; lens corrections and noise reduction are the camera's.",
+    "darktable": "darktable 5.6.2, darktable-cli with the default configuration (candidates/dtconf): the scene-referred workflow, its default modules and auto-applied presets, no styles; asked for 3000 px (the long side).",
+    "RawTherapee (auto-matched)": "RawTherapee 5.13, rawtherapee-cli with its own 'Auto-Matched Curve' profile for the picture's ISO (Low up to ISO 400, Medium up to 1600, else High); full size (resized to ours for the comparison).",
+    "RawTherapee (default)": "RawTherapee 5.13, rawtherapee-cli with its default profile; full size (resized to ours for the comparison).",
 }
-STAGE_NAMES = [('develop', 'Ours: developed'), ('level', 'Ours: levelled'), ('resize', 'Ours: resized'), ('sharpen', 'Ours: sharpened'), ('final', 'Ours: final JPEG')]
-WIN = (200, 140)                # the window of a crop, in pixels of the final picture; shown at ZOOM times
+STAGE_NAMES = [
+    ("develop", "Ours: developed"),
+    ("level", "Ours: levelled"),
+    ("resize", "Ours: resized"),
+    ("sharpen", "Ours: sharpened"),
+    ("final", "Ours: final JPEG"),
+]
+WIN = (200, 140)  # the window of a crop, in pixels of the final picture; shown at ZOOM times
 ZOOM = 2
 OVERVIEW = 1100
 JPEG_Q = 80
@@ -41,46 +77,73 @@ JPEG_Q = 80
 def shot(path):
     """(device, lens, focal mm, aperture, ISO) of a raw, for grouping the pictures by device and lens: from the profile bundle and the EXIF."""
     import tifffile
+
     from stratastills import inputs, lensfundb
-    try: dev = inputs.describe(path).get('profile') or 'unknown device'
-    except Exception: dev = 'unknown device'
-    sh = lensfundb.shot_of(path); lens = (sh[0] if sh else '') or 'built-in lens'
+
     try:
-        with tifffile.TiffFile(path) as t: iso = t.pages[0].tags['ExifTag'].value.get('ISOSpeedRatings'); iso = float(iso[0] if isinstance(iso, (tuple, list)) else iso)
-    except Exception: iso = None
+        dev = inputs.describe(path).get("profile") or "unknown device"
+    except Exception:
+        dev = "unknown device"
+    sh = lensfundb.shot_of(path)
+    lens = (sh[0] if sh else "") or "built-in lens"
+    try:
+        with tifffile.TiffFile(path) as t:
+            iso = t.pages[0].tags["ExifTag"].value.get("ISOSpeedRatings")
+            iso = float(iso[0] if isinstance(iso, (tuple, list)) else iso)
+    except Exception:
+        iso = None
     return dev, lens, (sh[1] if sh else None), (sh[2] if sh else None), iso
 
 
 def look(path):
     """A small feature of what the scene is like (a 12x8 colour thumbnail of the camera's JPEG, in Lab), for picking pictures that differ."""
-    im = read(os.path.splitext(path)[0] + '.JPG') if os.path.exists(os.path.splitext(path)[0] + '.JPG') else None
-    if im is None: return np.zeros(12 * 8 * 3, np.float32)
-    return cv2.cvtColor(cv2.resize(im, (12, 8), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2LAB).astype(np.float32).ravel() / 255
+    im = read(os.path.splitext(path)[0] + ".JPG") if os.path.exists(os.path.splitext(path)[0] + ".JPG") else None
+    if im is None:
+        return np.zeros(12 * 8 * 3, np.float32)
+    return (
+        cv2.cvtColor(cv2.resize(im, (12, 8), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2LAB)
+        .astype(np.float32)
+        .ravel()
+        / 255
+    )
 
 
 def choose(pool, shots, feats, min_lens, min_device):
     """Which pictures of `pool` (stems) to show: at least `min_lens` of each lens and `min_device` of each device, then more where an octave of ISO that the pool has is not covered yet. Each pick is the one most unlike those already chosen (ISO in stops, and the look of the scene), so that the range of scenes and light is covered. -> {(device, lens): [stem]} in the order of first appearance."""
     iso = lambda x: float(np.log2(shots[x][4] or 100))
+
     def far(cands, chosen):
-        if not chosen: return min(cands, key=lambda x: (iso(x), x))
-        return max(cands, key=lambda x: min(abs(iso(x) - iso(c)) * 0.15 + float(np.abs(feats[x] - feats[c]).mean()) for c in chosen))
+        if not chosen:
+            return min(cands, key=lambda x: (iso(x), x))
+        return max(
+            cands,
+            key=lambda x: min(abs(iso(x) - iso(c)) * 0.15 + float(np.abs(feats[x] - feats[c]).mean()) for c in chosen),
+        )
+
     picked = []
     devices = {}
-    for st in pool: devices.setdefault(shots[st][0], []).append(st)
+    for st in pool:
+        devices.setdefault(shots[st][0], []).append(st)
     for dev, ss in devices.items():
         lenses = {}
-        for st in ss: lenses.setdefault(shots[st][1], []).append(st)
+        for st in ss:
+            lenses.setdefault(shots[st][1], []).append(st)
         chosen = []
         for lens, ls in lenses.items():
             mine = []
-            while len(mine) < min(min_lens, len(ls)): mine.append(far([x for x in ls if x not in mine], mine + chosen))
+            while len(mine) < min(min_lens, len(ls)):
+                mine.append(far([x for x in ls if x not in mine], mine + chosen))
             chosen += mine
-        while len(chosen) < min(min_device, len(ss)): chosen.append(far([x for x in ss if x not in chosen], chosen))
-        for octave in sorted({round(iso(x)) for x in ss} - {round(iso(x)) for x in chosen}):                          # more where the range of ISO has a gap
+        while len(chosen) < min(min_device, len(ss)):
+            chosen.append(far([x for x in ss if x not in chosen], chosen))
+        for octave in sorted(
+            {round(iso(x)) for x in ss} - {round(iso(x)) for x in chosen}
+        ):  # more where the range of ISO has a gap
             chosen.append(far([x for x in ss if round(iso(x)) == octave], chosen))
         picked += chosen
     out = {}
-    for st in sorted(picked, key=lambda x: (pool.index(x))): out.setdefault(shots[st][:2], []).append(st)
+    for st in sorted(picked, key=lambda x: pool.index(x)):
+        out.setdefault(shots[st][:2], []).append(st)
     return {g: sorted(v, key=lambda x: iso(x)) for g, v in out.items()}
 
 
@@ -99,141 +162,274 @@ def shift_between(a, b, mask_sigma=3):
 
 def register(a, b, inliers=False):
     """The 2x3 similarity matrix (scale, rotation, shift) that lays gray uint8 `b` on `a` (ORB features and RANSAC: the programs differ in framing by tens of pixels and a little in scale, which a pure shift cannot undo), or None (with `inliers`: that and the number of matches RANSAC kept, 0 when there is none)."""
-    none = (None, 0) if inliers else None; orb = cv2.ORB_create(5000); ka, da = orb.detectAndCompute(a, None); kb, db = orb.detectAndCompute(b, None)
-    if da is None or db is None or len(ka) < 20 or len(kb) < 20: return none
+    none = (None, 0) if inliers else None
+    orb = cv2.ORB_create(5000)
+    ka, da = orb.detectAndCompute(a, None)
+    kb, db = orb.detectAndCompute(b, None)
+    if da is None or db is None or len(ka) < 20 or len(kb) < 20:
+        return none
     m = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(db, da)
-    if len(m) < 20: return none
-    M, inl = cv2.estimateAffinePartial2D(np.float32([kb[x.queryIdx].pt for x in m]), np.float32([ka[x.trainIdx].pt for x in m]), method=cv2.RANSAC, ransacReprojThreshold=2.0)
-    n = int(inl.sum()) if M is not None else 0; M = M if n >= 20 else None
+    if len(m) < 20:
+        return none
+    M, inl = cv2.estimateAffinePartial2D(
+        np.float32([kb[x.queryIdx].pt for x in m]),
+        np.float32([ka[x.trainIdx].pt for x in m]),
+        method=cv2.RANSAC,
+        ransacReprojThreshold=2.0,
+    )
+    n = int(inl.sum()) if M is not None else 0
+    M = M if n >= 20 else None
     return (M, n) if inliers else M
 
 
 def shifted(im, dx, dy):
-    return cv2.warpAffine(im, np.float32([[1, 0, dx], [0, 1, dy]]), (im.shape[1], im.shape[0]), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpAffine(
+        im,
+        np.float32([[1, 0, dx], [0, 1, dy]]),
+        (im.shape[1], im.shape[0]),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
 
 
 def disagreement(ref, others):
     """Two maps (colour/tone, detail/noise) of how much the other programs' pictures differ from `ref` (all BGR uint8, one size), each divided by its median."""
     lab = lambda im: cv2.GaussianBlur(cv2.cvtColor(im, cv2.COLOR_BGR2LAB).astype(np.float32), (0, 0), 1.5)
-    hp = lambda im: (lambda y: cv2.GaussianBlur(np.abs(y - cv2.GaussianBlur(y, (0, 0), 1.5)), (0, 0), 6.0))(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(np.float32))
-    lr, hr = lab(ref), hp(ref); col = np.mean([np.abs(lab(o) - lr).sum(axis=2) for o in others], axis=0); det = np.mean([np.abs(hp(o) - hr) for o in others], axis=0)
+    hp = lambda im: (lambda y: cv2.GaussianBlur(np.abs(y - cv2.GaussianBlur(y, (0, 0), 1.5)), (0, 0), 6.0))(
+        cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    )
+    lr, hr = lab(ref), hp(ref)
+    col = np.mean([np.abs(lab(o) - lr).sum(axis=2) for o in others], axis=0)
+    det = np.mean([np.abs(hp(o) - hr) for o in others], axis=0)
     return col / max(float(np.median(col)), 1e-3), det / max(float(np.median(det)), 1e-3)
 
 
 def pick_windows(col, det, n, win):
     """`n` windows (x0, y0, kind) of size `win` with the strongest disagreement, none overlapping: the best of the two maps together, then of the detail map, then of the colour map."""
-    h, w = col.shape; ww, wh = win; pool = lambda m: cv2.blur(m, (ww, wh))
-    maps = [('overall', pool(col) + pool(det)), ('detail and noise', pool(det)), ('colour and tone', pool(col))]; taken = []; out = []
+    h, w = col.shape
+    ww, wh = win
+    pool = lambda m: cv2.blur(m, (ww, wh))
+    maps = [("overall", pool(col) + pool(det)), ("detail and noise", pool(det)), ("colour and tone", pool(col))]
+    taken = []
+    out = []
     for i in range(n):
-        kind, m = maps[i % len(maps)]; m = m.copy(); m[:wh // 2 + 8] = 0; m[-(wh // 2 + 8):] = 0; m[:, :ww // 2 + 8] = 0; m[:, -(ww // 2 + 8):] = 0
-        for (cx, cy) in taken: m[max(0, cy - wh):cy + wh, max(0, cx - ww):cx + ww] = 0
-        cy, cx = np.unravel_index(int(np.argmax(m)), m.shape); taken.append((cx, cy)); out.append((int(cx - ww // 2), int(cy - wh // 2), kind))
+        kind, m = maps[i % len(maps)]
+        m = m.copy()
+        m[: wh // 2 + 8] = 0
+        m[-(wh // 2 + 8) :] = 0
+        m[:, : ww // 2 + 8] = 0
+        m[:, -(ww // 2 + 8) :] = 0
+        for cx, cy in taken:
+            m[max(0, cy - wh) : cy + wh, max(0, cx - ww) : cx + ww] = 0
+        cy, cx = np.unravel_index(int(np.argmax(m)), m.shape)
+        taken.append((cx, cy))
+        out.append((int(cx - ww // 2), int(cy - wh // 2), kind))
     return out
 
 
 def label(im, text):
     """Draw the label on a panel (a dark band at the top)."""
-    cv2.rectangle(im, (0, 0), (im.shape[1], 22), (0, 0, 0), -1); cv2.putText(im, text, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA); return im
+    cv2.rectangle(im, (0, 0), (im.shape[1], 22), (0, 0, 0), -1)
+    cv2.putText(im, text, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    return im
 
 
 def window(im, x0, y0, win):
     """The window (x0, y0, w, h) of a picture of any size, given in fractions of the final picture's size, shown at the panel size."""
-    h, w = im.shape[:2]; fx, fy, fw, fh = x0, y0, win[0], win[1]
-    xa, ya, xb, yb = int(round(fx[0] * w / fx[1])), int(round(fy[0] * h / fy[1])), int(round((fx[0] + fw) * w / fx[1])), int(round((fy[0] + fh) * h / fy[1]))
-    crop = im[max(0, ya):max(ya + 1, yb), max(0, xa):max(xa + 1, xb)]
-    return cv2.resize(crop, (win[0] * ZOOM, win[1] * ZOOM), interpolation=cv2.INTER_CUBIC if crop.shape[1] < win[0] * ZOOM else cv2.INTER_AREA)
+    h, w = im.shape[:2]
+    fx, fy, fw, fh = x0, y0, win[0], win[1]
+    xa, ya, xb, yb = (
+        int(round(fx[0] * w / fx[1])),
+        int(round(fy[0] * h / fy[1])),
+        int(round((fx[0] + fw) * w / fx[1])),
+        int(round((fy[0] + fh) * h / fy[1])),
+    )
+    crop = im[max(0, ya) : max(ya + 1, yb), max(0, xa) : max(xa + 1, xb)]
+    return cv2.resize(
+        crop,
+        (win[0] * ZOOM, win[1] * ZOOM),
+        interpolation=cv2.INTER_CUBIC if crop.shape[1] < win[0] * ZOOM else cv2.INTER_AREA,
+    )
 
 
 def run_ours(folder, items_wanted, quality, workdir, say):
     """Our pipeline on the wanted pictures of `folder` (stems) in a temporary project: (stem, dict(rec, stages={name: npy path of the picture at that stage (uint8 RGB)}, file)) one at a time (the caller deletes the stage files when done with a picture: they are big)."""
-    os.environ['STRATASTILLS_PROJECTS'] = os.path.join(workdir, 'projects'); os.environ['STRATASTILLS_HOME'] = os.path.join(workdir, 'home')
-    from stratastills import projects as P, pipeline as PL, export as X
-    pid = P.create('report-' + os.path.basename(os.path.normpath(folder)), [os.path.abspath(folder)])['id']; sid = P.source_id(P.load(pid)['sources'][0]['path']); items = {i['stem']: i for i in P.source_items(pid, sid)}; 
+    os.environ["STRATASTILLS_PROJECTS"] = os.path.join(workdir, "projects")
+    os.environ["STRATASTILLS_HOME"] = os.path.join(workdir, "home")
+    from stratastills import export as X
+    from stratastills import pipeline as PL
+    from stratastills import projects as P
+
+    pid = P.create("report-" + os.path.basename(os.path.normpath(folder)), [os.path.abspath(folder)])["id"]
+    sid = P.source_id(P.load(pid)["sources"][0]["path"])
+    items = {i["stem"]: i for i in P.source_items(pid, sid)}
     for stem in items_wanted:
         it = items.get(stem)
-        if not it: say(f'  {stem}: not found in {folder}'); continue
-        dumps = {}; t0 = time.time()
+        if not it:
+            say(f"  {stem}: not found in {folder}")
+            continue
+        dumps = {}
+        t0 = time.time()
+
         def on_stage(name, st, stem=stem, dumps=dumps):
-            if name == 'encode': return
-            f = os.path.join(workdir, f'{stem}-{name}.npy'); np.save(f, X.to_u8(st.rgb)); dumps[name] = f
-        try: r = PL.generate(pid, it['id'], preset='best', options=dict(quality=quality), progress=lambda m: None, on_stage=on_stage)
-        except Exception as e:                                                                                              # one picture that fails does not stop the report
-            say(f'  {stem}: FAILED ({type(e).__name__}: {e})'); [os.remove(f) for f in dumps.values() if os.path.exists(f)]; continue
-        say(f'  {stem}: ours made in {time.time() - t0:.0f} s'); yield stem, dict(rec=r, stages=dumps, file=r['file'])
+            if name == "encode":
+                return
+            f = os.path.join(workdir, f"{stem}-{name}.npy")
+            np.save(f, X.to_u8(st.rgb))
+            dumps[name] = f
+
+        try:
+            r = PL.generate(
+                pid, it["id"], preset="best", options=dict(quality=quality), progress=lambda m: None, on_stage=on_stage
+            )
+        except Exception as e:  # one picture that fails does not stop the report
+            say(f"  {stem}: FAILED ({type(e).__name__}: {e})")
+            [os.remove(f) for f in dumps.values() if os.path.exists(f)]
+            continue
+        say(f"  {stem}: ours made in {time.time() - t0:.0f} s")
+        yield stem, dict(rec=r, stages=dumps, file=r["file"])
 
 
 def settings_html(rec):
     """The stage settings and what each stage did, from the record the pipeline keeps with the picture."""
     rows = []
-    for s in rec['stages']:
-        name = s['stage']; params = ', '.join(f'{k} = {v}' for k, v in s.items() if k != 'stage'); rows.append(f'<tr><th>{html.escape(name)}</th><td>{html.escape(params)}</td></tr>')
-    steps = ''.join(f'<li>{html.escape(str(x))}</li>' for x in rec.get('steps', []))
+    for s in rec["stages"]:
+        name = s["stage"]
+        params = ", ".join(f"{k} = {v}" for k, v in s.items() if k != "stage")
+        rows.append(f"<tr><th>{html.escape(name)}</th><td>{html.escape(params)}</td></tr>")
+    steps = "".join(f"<li>{html.escape(str(x))}</li>" for x in rec.get("steps", []))
     extra = []
-    if rec.get('tone'): extra.append('tone: ' + html.escape(json.dumps({k: v for k, v in rec['tone'].items() if isinstance(v, (str, int, float))})))
-    if rec.get('size'): extra.append('size: ' + html.escape(f"{rec['size']['long_side']} px long side, {rec['size']['why']}"))
-    if rec.get('level'): extra.append('level: ' + html.escape(json.dumps(rec['level'])))
-    if rec.get('input'): extra.append('input: ' + html.escape(json.dumps({k: v for k, v in rec['input'].items() if isinstance(v, (str, int, float))})))
+    if rec.get("tone"):
+        extra.append(
+            "tone: "
+            + html.escape(json.dumps({k: v for k, v in rec["tone"].items() if isinstance(v, (str, int, float))}))
+        )
+    if rec.get("size"):
+        extra.append("size: " + html.escape(f"{rec['size']['long_side']} px long side, {rec['size']['why']}"))
+    if rec.get("level"):
+        extra.append("level: " + html.escape(json.dumps(rec["level"])))
+    if rec.get("input"):
+        extra.append(
+            "input: "
+            + html.escape(json.dumps({k: v for k, v in rec["input"].items() if isinstance(v, (str, int, float))}))
+        )
     return f"<table class=s>{''.join(rows)}</table><ul>{steps}</ul><p class=m>{'<br>'.join(extra)}</p>"
 
 
 def metric_table(ims, names):
-    ref = ims[0]; flat, tex = CD.masks(ref); keys = ('sharp', 'halo', 'ring', 'noise', 'cnoise', 'detail'); rows = [CD.measure(i, flat, tex) for i in ims]
-    head = ''.join(f'<th>{k}</th>' for k in keys); body = ''.join(f"<tr><th>{html.escape(n)}</th>{''.join('<td>%.2f</td>' % r[k] for k in keys)}</tr>" for n, r in zip(names, rows))
-    return f'<table class=t><tr><th></th>{head}</tr>{body}</table>'
+    ref = ims[0]
+    flat, tex = CD.masks(ref)
+    keys = ("sharp", "halo", "ring", "noise", "cnoise", "detail")
+    rows = [CD.measure(i, flat, tex) for i in ims]
+    head = "".join(f"<th>{k}</th>" for k in keys)
+    body = "".join(
+        f"<tr><th>{html.escape(n)}</th>{''.join('<td>%.2f</td>' % r[k] for k in keys)}</tr>"
+        for n, r in zip(names, rows)
+    )
+    return f"<table class=t><tr><th></th>{head}</tr>{body}</table>"
 
 
-REPORTS = [('neutral', 'Neutral', 'our pipeline processing photos as neutrally as possible, against the camera JPEG and the other raw tools (darktable, RawTherapee)'), ('auto', 'Auto-process', 'automatic processing that learns to match the person\'s own finished edits (private: their own pictures)')]
+REPORTS = [
+    (
+        "neutral",
+        "Neutral",
+        "our pipeline processing photos as neutrally as possible, against the camera JPEG and the other raw tools (darktable, RawTherapee)",
+    ),
+    (
+        "auto",
+        "Auto-process",
+        "automatic processing that learns to match the person's own finished edits (private: their own pictures)",
+    ),
+]
 
 
 def write_landing(root):
     """The page at the top of the reports folder (out/report/index.html), linking the sibling reports that have been built: neutral/ (build_report.py) and auto/ (build_lr_report.py). Each builder calls it, so the page lists whatever exists."""
-    items = ''.join(f'<li><a href="{d}/">{t}</a>: {html.escape(w)}</li>' for d, t, w in REPORTS if os.path.isfile(os.path.join(root, d, 'index.html')))
-    open(os.path.join(root, 'index.html'), 'w', encoding='utf-8').write(f'<!doctype html><meta charset=utf-8><title>stratastills: reports</title><style>{CSS}</style><header><h1>Reports</h1></header><main><ul>{items}</ul></main>')
+    items = "".join(
+        f'<li><a href="{d}/">{t}</a>: {html.escape(w)}</li>'
+        for d, t, w in REPORTS
+        if os.path.isfile(os.path.join(root, d, "index.html"))
+    )
+    open(os.path.join(root, "index.html"), "w", encoding="utf-8").write(
+        f"<!doctype html><meta charset=utf-8><title>stratastills: reports</title><style>{CSS}</style><header><h1>Reports</h1></header><main><ul>{items}</ul></main>"
+    )
 
 
-CACHE_VERSION = 1                 # bump when the code of this script that makes the pictures or numbers of a photo changes (the pipeline's own code is hashed, this script's page layout is not part of it)
+CACHE_VERSION = 1  # bump when the code of this script that makes the pictures or numbers of a photo changes (the pipeline's own code is hashed, this script's page layout is not part of it)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def code_hash():
     """A hash of the code and data the pictures of ours depend on (src/stratastills without the server, settings.py and cli.py, with its profiles, and the detail metrics): any change there makes every photo again."""
-    h = hashlib.sha1(); base = os.path.join(ROOT, 'src', 'stratastills')
+    h = hashlib.sha1()
+    base = os.path.join(ROOT, "src", "stratastills")
     for dp, dn, fn in sorted(os.walk(base)):
-        dn[:] = sorted(d for d in dn if d not in ('server', '__pycache__'))
+        dn[:] = sorted(d for d in dn if d not in ("server", "__pycache__"))
         for f in sorted(fn):
-            if f.endswith(('.py', '.json')) and f not in ('settings.py', 'cli.py'): h.update(f.encode()); h.update(open(os.path.join(dp, f), 'rb').read())
-    h.update(open(os.path.join(os.path.dirname(__file__), 'compare_detail.py'), 'rb').read()); return h.hexdigest()
+            if f.endswith((".py", ".json")) and f not in ("settings.py", "cli.py"):
+                h.update(f.encode())
+                h.update(open(os.path.join(dp, f), "rb").read())
+    h.update(open(os.path.join(os.path.dirname(__file__), "compare_detail.py"), "rb").read())
+    return h.hexdigest()
 
 
 def cache_load(cdir, stem, key):
-    f = os.path.join(cdir, stem, 'data.json')
-    try: d = json.load(open(f, encoding='utf-8'))
-    except (OSError, ValueError): return None
-    return d['data'] if d.get('key') == key and all(os.path.exists(os.path.join(cdir, stem, n)) for n in d['data']['files']) else None
+    f = os.path.join(cdir, stem, "data.json")
+    try:
+        d = json.load(open(f, encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return (
+        d["data"]
+        if d.get("key") == key and all(os.path.exists(os.path.join(cdir, stem, n)) for n in d["data"]["files"])
+        else None
+    )
 
 
 def cache_save(cdir, stem, key, data, assets):
-    sd = os.path.join(cdir, stem); shutil.rmtree(sd, ignore_errors=True); os.makedirs(sd)
-    for n in data['files']: shutil.copyfile(os.path.join(assets, n), os.path.join(sd, n))
-    json.dump(dict(key=key, data=data), open(os.path.join(sd, 'data.json'), 'w', encoding='utf-8'), default=str)
+    sd = os.path.join(cdir, stem)
+    shutil.rmtree(sd, ignore_errors=True)
+    os.makedirs(sd)
+    for n in data["files"]:
+        shutil.copyfile(os.path.join(assets, n), os.path.join(sd, n))
+    json.dump(dict(key=key, data=data), open(os.path.join(sd, "data.json"), "w", encoding="utf-8"), default=str)
 
 
-REASONS = ['skin tone', 'too red / warm', 'too cool / blue', 'green / magenta cast', 'too saturated', 'too flat / dull', 'too dark', 'too bright', 'highlights', 'shadows', 'contrast', 'noise', 'sharpness / halos', 'wrong crop / alignment', 'other']
+REASONS = [
+    "skin tone",
+    "too red / warm",
+    "too cool / blue",
+    "green / magenta cast",
+    "too saturated",
+    "too flat / dull",
+    "too dark",
+    "too bright",
+    "highlights",
+    "shadows",
+    "contrast",
+    "noise",
+    "sharpness / halos",
+    "wrong crop / alignment",
+    "other",
+]
 FLAG_CSS = """.flag{margin:6px 0;line-height:1.2}.flag .fb{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;cursor:pointer}.flag .fx{margin-top:6px}.flag .fr{margin-bottom:4px}.pic[data-rating=worst] .fs,.pic[data-rating=bad] .fs{color:#ff8a65}.flag label{display:inline-block;margin:0 10px 4px 0;white-space:nowrap}.flag input[type=text]{width:min(520px,90%);background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 6px}.flag select{background:#16181c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px}.flag .fs{color:#9aa;font-size:12px;margin-left:8px}body.onlyflagged .pic:not(.flagged){display:none}.pic.stale .fs{color:#ffb74d}.fbox{border-color:#5ee27a;box-shadow:none}"""
 
 
-RATINGS = ['worst', 'bad', 'medium', 'good', 'perfect']
+RATINGS = ["worst", "bad", "medium", "good", "perfect"]
 
 
 def flag_widget(pic):
     """The rating and flags of one picture, always shown: a rating (worst, bad, medium, good, perfect), what is wrong (checkboxes), a status (open, fixable, deferred, fixed) and a note. Kept by the server (/api/report-flags/<report>/<pic>, in out/flags/), so that it survives a rebuild of the report; without the server, in this browser."""
-    rate = ''.join(f'<label><input type=radio name="r-{html.escape(pic)}" value={r}> {r}</label>' for r in RATINGS)
-    chips = ''.join(f'<label><input type=checkbox value="{html.escape(r)}"> {html.escape(r)}</label>' for r in REASONS)
+    rate = "".join(f'<label><input type=radio name="r-{html.escape(pic)}" value={r}> {r}</label>' for r in RATINGS)
+    chips = "".join(f'<label><input type=checkbox value="{html.escape(r)}"> {html.escape(r)}</label>' for r in REASONS)
     return f'<div class=flag data-pic="{html.escape(pic)}"><div class=fr>{rate} <button class=fb type=button>clear</button><span class=fs></span></div><div class=fx>{chips}<br><select class=st><option value=open>open</option><option value=fixable>fixable</option><option value=deferred>deferred (cannot fix yet)</option><option value=fixed>fixed</option></select> <input type=text class=note placeholder="what is wrong (optional)"></div></div>'
 
 
 def flag_header(report):
-    return '<label class=sw><input type=checkbox id=onlyflagged> only rated or flagged pictures (<span id=nflag>0</span>)</label><a href="../../api/report-flags/%s" class=m>ratings and flags as JSON</a>' % report
+    return (
+        '<label class=sw><input type=checkbox id=onlyflagged> only rated or flagged pictures (<span id=nflag>0</span>)</label><a href="../../api/report-flags/%s" class=m>ratings and flags as JSON</a>'
+        % report
+    )
 
 
 def flag_script(report):
@@ -249,137 +445,364 @@ const upd=(w,f)=>{const p=w.dataset.pic,d=F[p]=F[p]||{};f(d);if(empty(d))delete 
 document.addEventListener('click',e=>{const b=e.target.closest('.fb');if(b){const w=b.closest('.flag');upd(w,d=>{d.rating='';d.reasons=[];d.note='';d.status='open'})}});
 document.addEventListener('change',e=>{const w=e.target.closest('.flag');if(!w)return;if(e.target.matches('input[type=radio]'))upd(w,d=>{d.rating=e.target.value});else if(e.target.matches('input[type=checkbox]'))upd(w,d=>{d.reasons=[...w.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value)});else if(e.target.matches('.st'))upd(w,d=>{d.status=e.target.value});else if(e.target.matches('.note'))upd(w,d=>{d.note=e.target.value})});
 document.getElementById('onlyflagged').onchange=e=>document.body.classList.toggle('onlyflagged',e.target.checked);
-fetch(API).then(r=>r.json()).then(j=>{F=j;paint()}).catch(()=>{try{F=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}paint()})})()</script>""" % (report, int(time.time()))
+fetch(API).then(r=>r.json()).then(j=>{F=j;paint()}).catch(()=>{try{F=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}paint()})})()</script>""" % (
+        report,
+        int(time.time()),
+    )
 
 
 def fit_width(W, H, cap=None):
     """CSS width of an overview box: its natural size, but never wider than the page nor so wide that the picture is taller than the viewport (the boxes are percentages, so the wrapper has to be exactly as big as the picture)."""
-    return f'min({cap or OVERVIEW}px,100%,calc((100vh - 24px) * {W / H:.4f}))'
+    return f"min({cap or OVERVIEW}px,100%,calc((100vh - 24px) * {W / H:.4f}))"
 
 
-CSS = """.tabs{margin:6px 0}.tabs button{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;margin-right:4px;cursor:pointer}.tabs button.on{background:#3b6fd8;border-color:#3b6fd8;color:#fff}.sw{display:block;margin:8px 0}body.pubonly .pic:not(.pub),body.pubonly nav a:not(.pub){display:none}body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#16181c;color:#d8dbe0}header{padding:18px 28px;background:#0e0f12}h1{margin:0 0 4px;font-size:22px}h2{font-size:18px;margin:34px 0 4px}h3{font-size:15px;margin:22px 0 6px}main{max-width:1500px;margin:0 auto;padding:0 28px 60px}a{color:#8ab4ff}nav a{margin-right:12px}
+CSS = (
+    """.tabs{margin:6px 0}.tabs button{background:#23262c;color:#d8dbe0;border:1px solid #3a3e46;border-radius:4px;padding:3px 10px;margin-right:4px;cursor:pointer}.tabs button.on{background:#3b6fd8;border-color:#3b6fd8;color:#fff}.sw{display:block;margin:8px 0}body.pubonly .pic:not(.pub),body.pubonly nav a:not(.pub){display:none}body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#16181c;color:#d8dbe0}header{padding:18px 28px;background:#0e0f12}h1{margin:0 0 4px;font-size:22px}h2{font-size:18px;margin:34px 0 4px}h3{font-size:15px;margin:22px 0 6px}main{max-width:1500px;margin:0 auto;padding:0 28px 60px}a{color:#8ab4ff}nav a{margin-right:12px}
 .pic{border-top:1px solid #333;margin-top:30px}.why{color:#9aa}.ov{position:relative;display:inline-block;line-height:0}.ov img{width:100%;height:auto}.box{position:absolute;border:2px solid #ffd54a;box-shadow:0 0 0 1px #000;color:#ffd54a;font:bold 13px sans-serif;line-height:1}.box b{position:absolute;left:0;top:-16px;background:#000;padding:1px 4px}
 .crop{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin:10px 0}.sheet{display:grid;gap:4px}.sheet div{background-repeat:no-repeat;position:relative}.sheet span{position:absolute;left:0;top:0;right:0;background:#000b;color:#fff;font:12px sans-serif;padding:2px 6px}
-table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-align:left;border-bottom:1px solid #2a2d33}.t td{text-align:right;font-variant-numeric:tabular-nums}.m{color:#9aa;font-size:12px}details{margin:8px 0}summary{cursor:pointer;color:#8ab4ff}ul{margin:6px 0 6px 18px;padding:0}.note{max-width:1000px;color:#aab}""" + FLAG_CSS
+table{border-collapse:collapse}.s th,.s td,.t th,.t td{padding:2px 10px;text-align:left;border-bottom:1px solid #2a2d33}.t td{text-align:right;font-variant-numeric:tabular-nums}.m{color:#9aa;font-size:12px}details{margin:8px 0}summary{cursor:pointer;color:#8ab4ff}ul{margin:6px 0 6px 18px;padding:0}.note{max-width:1000px;color:#aab}"""
+    + FLAG_CSS
+)
 
 
 def build(a):
-    ET.require()                                                                                  # no report without the other raw programs: a report that quietly shows only the camera and ours is worse than none
-    final = os.path.abspath(a.out); out = final + '.building'; assets = os.path.join(out, 'assets'); shutil.rmtree(out, ignore_errors=True); os.makedirs(assets); say = lambda m: print(m, flush=True)     # built beside and swapped in at the end: the server keeps showing the last report meanwhile
-    work = tempfile.mkdtemp(prefix='report-', dir=os.path.dirname(out)); sections = []; legend = {}; nav = []; total_pics = 0; perf = []
+    ET.require()  # no report without the other raw programs: a report that quietly shows only the camera and ours is worse than none
+    final = os.path.abspath(a.out)
+    out = final + ".building"
+    assets = os.path.join(out, "assets")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(assets)
+    say = lambda m: print(
+        m, flush=True
+    )  # built beside and swapped in at the end: the server keeps showing the last report meanwhile
+    work = tempfile.mkdtemp(prefix="report-", dir=os.path.dirname(out))
+    sections = []
+    legend = {}
+    nav = []
+    total_pics = 0
+    perf = []
     try:
         for setname in a.set:
-            cfg = SETS[setname]; folder = os.path.join(ROOT, 'candidates', setname); cj = os.path.join(ROOT, 'docs', f'{setname}_candidates.json')
-            if not os.path.isdir(folder) or not os.path.exists(cj): say(f'{setname}: no candidate photos here ({folder}), skipped'); continue
-            cands = json.load(open(cj)); whys = {c['stem']: c.get('why', '') for c in cands}
-            files = {os.path.splitext(f)[0]: os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in RAW_EXTS and not nsfw.flagged(os.path.join(folder, f))}; shots = {st: shot(f) for st, f in files.items()}
-            public = set(json.load(open(os.path.join(ROOT, 'docs', 'report_public.json'))).get(setname, []))      # (a set without an entry has not been looked through: nothing of it in a report that may go public)
-            pool = [s for s in a.stems.split(',') if s in files] if a.stems else [s for s in files if not a.public_only or s in public]; feats = {s: look(files[s]) for s in pool}; lens_n, dev_n = (10 ** 6, 10 ** 6) if a.all else (a.min_lens, a.min_device)
-            groups = choose(pool, shots, feats, lens_n, dev_n); stems = [s for ss in groups.values() for s in ss]
-            if not a.public_only and not a.stems and not a.all:                                     # the public pictures cover every lens and device by themselves (so that the switch leaves a whole report), the rest of the pool adds its own picks
-                more = choose([s for s in pool if s in public], shots, feats, lens_n, dev_n); stems += [s for ss in more.values() for s in ss if s not in stems]; stems.sort(key=pool.index)
-            raws = {st: (files[st], shots[st][4] or 0) for st in stems}; RE.render_missing('darktable', setname, raws, say=say); RE.render_missing('rawtherapee', setname, raws, 'auto-matched', say=say)       # whatever of the other programs' renders is missing is made now (a failure stops the report)
-            ext_times = {'darktable': RE.timings(setname, 'darktable'), 'RawTherapee': RE.timings(setname, 'rawtherapee', 'auto-matched')}
-            say(f'{cfg["label"]}: {len(stems)} pictures ({"; ".join(f"{g[1]}: {len(ss)}" for g, ss in groups.items())})')
-            sig = lambda f: f'{os.path.getsize(f)}:{int(os.path.getmtime(f))}' if os.path.exists(f) else '-'
-            def stem_key(stem):                                                                       # what the pictures and numbers of one photo depend on: the code that makes them, the raw, the camera JPEG, the other programs' renders and the options
-                ins = [files[stem]] + glob.glob(os.path.join(folder, stem + '.[jJ][pP][gG]')) + [os.path.join(ROOT, 'candidates', 'renders', cfg['prefix'] + d, stem + '.jpg') for d, _ in OTHERS]
-                return hashlib.sha1(json.dumps([CACHE_VERSION, code_hash(), a.quality, a.crops, [sig(f) for f in ins]]).encode()).hexdigest()
-            cdir = os.path.join(ROOT, 'out', 'cache', 'report-' + os.path.basename(final), setname); data = {}
-            for stem in stems:                                                                        # a photo whose inputs and code have not changed since the last run is not made again: its pictures and numbers come from the cache
+            cfg = SETS[setname]
+            folder = os.path.join(ROOT, "candidates", setname)
+            cj = os.path.join(ROOT, "docs", f"{setname}_candidates.json")
+            if not os.path.isdir(folder) or not os.path.exists(cj):
+                say(f"{setname}: no candidate photos here ({folder}), skipped")
+                continue
+            cands = json.load(open(cj))
+            whys = {c["stem"]: c.get("why", "") for c in cands}
+            files = {
+                os.path.splitext(f)[0]: os.path.join(folder, f)
+                for f in sorted(os.listdir(folder))
+                if os.path.splitext(f)[1].lower() in RAW_EXTS and not nsfw.flagged(os.path.join(folder, f))
+            }
+            shots = {st: shot(f) for st, f in files.items()}
+            public = set(
+                json.load(open(os.path.join(ROOT, "docs", "report_public.json"))).get(setname, [])
+            )  # (a set without an entry has not been looked through: nothing of it in a report that may go public)
+            pool = (
+                [s for s in a.stems.split(",") if s in files]
+                if a.stems
+                else [s for s in files if not a.public_only or s in public]
+            )
+            feats = {s: look(files[s]) for s in pool}
+            lens_n, dev_n = (10**6, 10**6) if a.all else (a.min_lens, a.min_device)
+            groups = choose(pool, shots, feats, lens_n, dev_n)
+            stems = [s for ss in groups.values() for s in ss]
+            if (
+                not a.public_only and not a.stems and not a.all
+            ):  # the public pictures cover every lens and device by themselves (so that the switch leaves a whole report), the rest of the pool adds its own picks
+                more = choose([s for s in pool if s in public], shots, feats, lens_n, dev_n)
+                stems += [s for ss in more.values() for s in ss if s not in stems]
+                stems.sort(key=pool.index)
+            raws = {st: (files[st], shots[st][4] or 0) for st in stems}
+            RE.render_missing("darktable", setname, raws, say=say)
+            RE.render_missing(
+                "rawtherapee", setname, raws, "auto-matched", say=say
+            )  # whatever of the other programs' renders is missing is made now (a failure stops the report)
+            ext_times = {
+                "darktable": RE.timings(setname, "darktable"),
+                "RawTherapee": RE.timings(setname, "rawtherapee", "auto-matched"),
+            }
+            say(
+                f"{cfg['label']}: {len(stems)} pictures ({'; '.join(f'{g[1]}: {len(ss)}' for g, ss in groups.items())})"
+            )
+            sig = lambda f: f"{os.path.getsize(f)}:{int(os.path.getmtime(f))}" if os.path.exists(f) else "-"
+
+            def stem_key(
+                stem,
+            ):  # what the pictures and numbers of one photo depend on: the code that makes them, the raw, the camera JPEG, the other programs' renders and the options
+                ins = (
+                    [files[stem]]
+                    + glob.glob(os.path.join(folder, stem + ".[jJ][pP][gG]"))
+                    + [os.path.join(ROOT, "candidates", "renders", cfg["prefix"] + d, stem + ".jpg") for d, _ in OTHERS]
+                )
+                return hashlib.sha1(
+                    json.dumps([CACHE_VERSION, code_hash(), a.quality, a.crops, [sig(f) for f in ins]]).encode()
+                ).hexdigest()
+
+            cdir = os.path.join(ROOT, "out", "cache", "report-" + os.path.basename(final), setname)
+            data = {}
+            for stem in stems:  # a photo whose inputs and code have not changed since the last run is not made again: its pictures and numbers come from the cache
                 d = None if a.rebuild else cache_load(cdir, stem, stem_key(stem))
-                if d: data[stem] = d
-            say(f'{len(data)} of {len(stems)} pictures unchanged since the last report, {len(stems) - len(data)} to make')
+                if d:
+                    data[stem] = d
+            say(
+                f"{len(data)} of {len(stems)} pictures unchanged since the last report, {len(stems) - len(data)} to make"
+            )
             for stem, o in run_ours(folder, [s for s in stems if s not in data], a.quality, work, say):
-                fin = read(o['file'])
-                if fin is None: continue
-                H, W = fin.shape[:2]; size = (W, H)
-                cam = read(next(iter(glob.glob(os.path.join(folder, stem + '.[jJ][pP][gG]'))), ''), size); methods = [('Camera', cam)]
+                fin = read(o["file"])
+                if fin is None:
+                    continue
+                H, W = fin.shape[:2]
+                size = (W, H)
+                cam = read(next(iter(glob.glob(os.path.join(folder, stem + ".[jJ][pP][gG]"))), ""), size)
+                methods = [("Camera", cam)]
                 for d, nm in OTHERS:
-                    im = read(os.path.join(ROOT, 'candidates', 'renders', cfg['prefix'] + d, stem + '.jpg'), size)
-                    if im is not None: methods.append((nm, im))
-                    elif d in ('darktable', 'rawtherapee-auto-matched'): sys.exit(f'no {nm} render of {stem}')
-                k = 1500 / max(W, H); small = lambda im: cv2.resize(im, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA); gfin = cv2.cvtColor(small(fin), cv2.COLOR_BGR2GRAY).astype(np.float32); aligned = []
+                    im = read(os.path.join(ROOT, "candidates", "renders", cfg["prefix"] + d, stem + ".jpg"), size)
+                    if im is not None:
+                        methods.append((nm, im))
+                    elif d in ("darktable", "rawtherapee-auto-matched"):
+                        sys.exit(f"no {nm} render of {stem}")
+                k = 1500 / max(W, H)
+                small = lambda im: cv2.resize(im, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA)
+                gfin = cv2.cvtColor(small(fin), cv2.COLOR_BGR2GRAY).astype(np.float32)
+                aligned = []
                 g8 = lambda im: cv2.cvtColor(small(im), cv2.COLOR_BGR2GRAY)
-                for nm, im in methods:                                                       # the other programs' framing differs from ours: one similarity transform for the whole picture, then a translation for each crop (below)
+                for (
+                    nm,
+                    im,
+                ) in methods:  # the other programs' framing differs from ours: one similarity transform for the whole picture, then a translation for each crop (below)
                     M = register(g8(fin), g8(im))
-                    if M is not None: M = M.copy(); M[:, 2] /= k; aligned.append((nm, cv2.warpAffine(im, M, (W, H), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)))
-                    else: dx, dy, resp = shift_between(gfin, g8(im).astype(np.float32)); aligned.append((nm, shifted(im, dx / k, dy / k)))
-                col, det = disagreement(small(fin), [small(im) for _, im in aligned]); sel = pick_windows(col, det, a.crops, (round(WIN[0] * k), round(WIN[1] * k)))
+                    if M is not None:
+                        M = M.copy()
+                        M[:, 2] /= k
+                        aligned.append(
+                            (nm, cv2.warpAffine(im, M, (W, H), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE))
+                        )
+                    else:
+                        dx, dy, resp = shift_between(gfin, g8(im).astype(np.float32))
+                        aligned.append((nm, shifted(im, dx / k, dy / k)))
+                col, det = disagreement(small(fin), [small(im) for _, im in aligned])
+                sel = pick_windows(col, det, a.crops, (round(WIN[0] * k), round(WIN[1] * k)))
                 # ---- panels: the others, then ours (final), then ours at each stage before it
-                stage_ims = [(nm, np.load(o['stages'][s])[..., ::-1]) for s, nm in STAGE_NAMES[:-1] if s in o['stages']]
+                stage_ims = [(nm, np.load(o["stages"][s])[..., ::-1]) for s, nm in STAGE_NAMES[:-1] if s in o["stages"]]
                 panels = [(nm, im) for nm, im in aligned] + [(STAGE_NAMES[-1][1], fin)] + stage_ims
-                ov = cv2.resize(fin, (OVERVIEW, round(OVERVIEW * H / W)), interpolation=cv2.INTER_AREA); cv2.imwrite(os.path.join(assets, f'{stem}-overview.jpg'), ov, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
-                tabs = [('Ours (final)', f'{stem}-overview.jpg')]                                         # the same overview of every program's final picture (registered to ours: the boxes fit all of them), to switch between
-                for i, (nm, im) in enumerate(aligned): fn = f'{stem}-overview-{i}.jpg'; cv2.imwrite(os.path.join(assets, fn), cv2.resize(im, (OVERVIEW, round(OVERVIEW * H / W)), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); tabs.insert(i, (nm, fn))
+                ov = cv2.resize(fin, (OVERVIEW, round(OVERVIEW * H / W)), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(os.path.join(assets, f"{stem}-overview.jpg"), ov, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
+                tabs = [
+                    ("Ours (final)", f"{stem}-overview.jpg")
+                ]  # the same overview of every program's final picture (registered to ours: the boxes fit all of them), to switch between
+                for i, (nm, im) in enumerate(aligned):
+                    fn = f"{stem}-overview-{i}.jpg"
+                    cv2.imwrite(
+                        os.path.join(assets, fn),
+                        cv2.resize(im, (OVERVIEW, round(OVERVIEW * H / W)), interpolation=cv2.INTER_AREA),
+                        [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q],
+                    )
+                    tabs.insert(i, (nm, fn))
                 blocks = []
                 for n, (cx, cy, kind) in enumerate(sel, 1):
-                    x0, y0 = int(round(cx / k)), int(round(cy / k)); x0 = min(max(0, x0), W - WIN[0]); y0 = min(max(0, y0), H - WIN[1]); tiles = []
-                    pad = 24; ya, yb, xa, xb = max(0, y0 - pad), min(H, y0 + WIN[1] + pad), max(0, x0 - pad), min(W, x0 + WIN[0] + pad); gref = cv2.cvtColor(fin[ya:yb, xa:xb], cv2.COLOR_BGR2GRAY).astype(np.float32)
+                    x0, y0 = int(round(cx / k)), int(round(cy / k))
+                    x0 = min(max(0, x0), W - WIN[0])
+                    y0 = min(max(0, y0), H - WIN[1])
+                    tiles = []
+                    pad = 24
+                    ya, yb, xa, xb = (
+                        max(0, y0 - pad),
+                        min(H, y0 + WIN[1] + pad),
+                        max(0, x0 - pad),
+                        min(W, x0 + WIN[0] + pad),
+                    )
+                    gref = cv2.cvtColor(fin[ya:yb, xa:xb], cv2.COLOR_BGR2GRAY).astype(np.float32)
                     for pi, (nm, im) in enumerate(panels):
-                        if pi < len(aligned):                                                                       # the others: the last few pixels of registration, from this very place
-                            dx, dy, resp = shift_between(gref, cv2.cvtColor(im[ya:yb, xa:xb], cv2.COLOR_BGR2GRAY).astype(np.float32))
-                            if resp > 0.05 and abs(dx) < pad and abs(dy) < pad: im = shifted(im, dx, dy)
-                        t = window(im, (x0, W), (y0, H), WIN).copy(); tiles.append(label(t, nm))
-                    cols = 3 if len(tiles) in (6, 9) else 4; rows = -(-len(tiles) // cols); pw, ph = WIN[0] * ZOOM, WIN[1] * ZOOM; sheet = np.zeros((rows * ph, cols * pw, 3), np.uint8)
-                    for i, t in enumerate(tiles): sheet[(i // cols) * ph:(i // cols + 1) * ph, (i % cols) * pw:(i % cols + 1) * pw] = t
-                    name = f'{stem}-crop{n}.jpg'; cv2.imwrite(os.path.join(assets, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
-                    blocks.append(dict(n=n, kind=kind, x=x0 / W, y=y0 / H, w=WIN[0] / W, h=WIN[1] / H, sheet=name, sheet_size=(cols * pw, rows * ph), names=[nm for nm, _ in panels], cols=cols, pw=pw, ph=ph))
-                metrics = metric_table([im for _, im in aligned] + [fin], [nm for nm, _ in aligned] + ['Ours (final)'])
-                data[stem] = dict(W=W, H=H, rec=o['rec'], blocks=blocks, metrics=metrics, tabs=tabs, names=[nm for nm, _ in aligned], files=sorted(f for f in os.listdir(assets) if f.startswith(stem + '-'))); cache_save(cdir, stem, stem_key(stem), data[stem], assets)
-                for f in o['stages'].values(): os.remove(f)
-            for stem in stems:                                                                        # the page: in the order of the pictures, from fresh or cached data (the HTML is always made again, so a change to it costs seconds)
+                        if pi < len(aligned):  # the others: the last few pixels of registration, from this very place
+                            dx, dy, resp = shift_between(
+                                gref, cv2.cvtColor(im[ya:yb, xa:xb], cv2.COLOR_BGR2GRAY).astype(np.float32)
+                            )
+                            if resp > 0.05 and abs(dx) < pad and abs(dy) < pad:
+                                im = shifted(im, dx, dy)
+                        t = window(im, (x0, W), (y0, H), WIN).copy()
+                        tiles.append(label(t, nm))
+                    cols = 3 if len(tiles) in (6, 9) else 4
+                    rows = -(-len(tiles) // cols)
+                    pw, ph = WIN[0] * ZOOM, WIN[1] * ZOOM
+                    sheet = np.zeros((rows * ph, cols * pw, 3), np.uint8)
+                    for i, t in enumerate(tiles):
+                        sheet[(i // cols) * ph : (i // cols + 1) * ph, (i % cols) * pw : (i % cols + 1) * pw] = t
+                    name = f"{stem}-crop{n}.jpg"
+                    cv2.imwrite(os.path.join(assets, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
+                    blocks.append(
+                        dict(
+                            n=n,
+                            kind=kind,
+                            x=x0 / W,
+                            y=y0 / H,
+                            w=WIN[0] / W,
+                            h=WIN[1] / H,
+                            sheet=name,
+                            sheet_size=(cols * pw, rows * ph),
+                            names=[nm for nm, _ in panels],
+                            cols=cols,
+                            pw=pw,
+                            ph=ph,
+                        )
+                    )
+                metrics = metric_table([im for _, im in aligned] + [fin], [nm for nm, _ in aligned] + ["Ours (final)"])
+                data[stem] = dict(
+                    W=W,
+                    H=H,
+                    rec=o["rec"],
+                    blocks=blocks,
+                    metrics=metrics,
+                    tabs=tabs,
+                    names=[nm for nm, _ in aligned],
+                    files=sorted(f for f in os.listdir(assets) if f.startswith(stem + "-")),
+                )
+                cache_save(cdir, stem, stem_key(stem), data[stem], assets)
+                for f in o["stages"].values():
+                    os.remove(f)
+            for stem in stems:  # the page: in the order of the pictures, from fresh or cached data (the HTML is always made again, so a change to it costs seconds)
                 d = data.get(stem)
-                if d is None: continue
-                for f in d['files']: shutil.copyfile(os.path.join(cdir, stem, f), os.path.join(assets, f)) if not os.path.exists(os.path.join(assets, f)) else None
-                legend.update({nm: OTHER_SETTINGS.get(nm, '') for nm in d['names']}); total_pics += 1
-                sh = shots[stem]; kind = f'{sh[0]} · {sh[1]}' + (f' · {sh[2]:g} mm' if sh[2] else '') + (f' · f/{sh[3]:g}' if sh[3] else '') + (f' · ISO {sh[4]:g}' if sh[4] else ''); tm = d['rec'].get('timing', []); perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()})); sections.append(render_picture(cfg, stem, whys.get(stem, ''), d['W'], d['H'], d['rec'], d['blocks'], d['metrics'], kind, stem in public, timing_html(tm, perf[-1]['ext']), d['tabs'])); nav.append((stem, f'{sh[1]} {stem}', stem in public))
-    finally: shutil.rmtree(work, ignore_errors=True)
-    if not sections: say('nothing to report on (no candidate photos)'); return 1
-    leg = ''.join(f'<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>' for k, v in legend.items())
+                if d is None:
+                    continue
+                for f in d["files"]:
+                    shutil.copyfile(os.path.join(cdir, stem, f), os.path.join(assets, f)) if not os.path.exists(
+                        os.path.join(assets, f)
+                    ) else None
+                legend.update({nm: OTHER_SETTINGS.get(nm, "") for nm in d["names"]})
+                total_pics += 1
+                sh = shots[stem]
+                kind = (
+                    f"{sh[0]} · {sh[1]}"
+                    + (f" · {sh[2]:g} mm" if sh[2] else "")
+                    + (f" · f/{sh[3]:g}" if sh[3] else "")
+                    + (f" · ISO {sh[4]:g}" if sh[4] else "")
+                )
+                tm = d["rec"].get("timing", [])
+                perf.append(dict(set=setname, stem=stem, timing=tm, ext={k: v.get(stem) for k, v in ext_times.items()}))
+                sections.append(
+                    render_picture(
+                        cfg,
+                        stem,
+                        whys.get(stem, ""),
+                        d["W"],
+                        d["H"],
+                        d["rec"],
+                        d["blocks"],
+                        d["metrics"],
+                        kind,
+                        stem in public,
+                        timing_html(tm, perf[-1]["ext"]),
+                        d["tabs"],
+                    )
+                )
+                nav.append((stem, f"{sh[1]} {stem}", stem in public))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if not sections:
+        say("nothing to report on (no candidate photos)")
+        return 1
+    leg = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in legend.items())
     page = f"""<!doctype html><meta charset=utf-8><title>stratastills: candidate photos compared</title><style>{CSS}</style><header><h1>Candidate photos: our pipeline against the camera and other raw tools</h1>
-<div class=note>Generated {time.strftime('%Y-%m-%d %H:%M')} by scripts/build_report.py. Each crop is a place where the programs disagree most, marked on the overview of the picture; the panels show the same place in every program and in ours at each stage. Crops are shown at {ZOOM}x of the final picture (the stages before the resize hold more pixels, so they look finer: the field of view is the same). Ours was made with the 'best' preset at JPEG quality {a.quality} (the quality of the comparison runs).</div>
-{"" if a.public_only else '<a id=autolink href="../auto/" hidden>Auto-process report (private)</a> '}<a href="../">All reports</a> {flag_header('neutral')}<label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{''.join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{perf_html(perf)}{''.join(sections)}</main>{flag_script('neutral')}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');t.previousElementSibling.querySelector('.ovimg').src=b.dataset.src}});const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f();fetch('../auto/').then(r=>{{const l=document.getElementById('autolink');if(r.ok&&l)l.hidden=false}}).catch(()=>{{}})</script>"""
-    open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(page)
-    size = sum(os.path.getsize(os.path.join(assets, f)) for f in os.listdir(assets)) + os.path.getsize(os.path.join(out, 'index.html'))
-    shutil.rmtree(final, ignore_errors=True); os.rename(out, final); write_landing(os.path.dirname(final)); say(f'report: {os.path.join(final, "index.html")} ({total_pics} pictures, {size / 1e6:.1f} MB)'); return 0
+<div class=note>Generated {time.strftime("%Y-%m-%d %H:%M")} by scripts/build_report.py. Each crop is a place where the programs disagree most, marked on the overview of the picture; the panels show the same place in every program and in ours at each stage. Crops are shown at {ZOOM}x of the final picture (the stages before the resize hold more pixels, so they look finer: the field of view is the same). Ours was made with the 'best' preset at JPEG quality {a.quality} (the quality of the comparison runs).</div>
+{"" if a.public_only else '<a id=autolink href="../auto/" hidden>Auto-process report (private)</a> '}<a href="../">All reports</a> {flag_header("neutral")}<label class=sw><input type=checkbox id=pubonly> only pictures with no person in them (could be public)</label><nav>{"".join(f'<a href="#{s}" class="{"pub" if pb else ""}">{html.escape(t)}</a>' for s, t, pb in nav)}</nav></header><main><h2>The other programs</h2><table class=s>{leg}</table>{perf_html(perf)}{"".join(sections)}</main>{flag_script("neutral")}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');t.previousElementSibling.querySelector('.ovimg').src=b.dataset.src}});const c=document.getElementById('pubonly'),f=()=>document.body.classList.toggle('pubonly',c.checked);c.checked=/[?&]public=1/.test(location.search);c.onchange=f;f();fetch('../auto/').then(r=>{{const l=document.getElementById('autolink');if(r.ok&&l)l.hidden=false}}).catch(()=>{{}})</script>"""
+    open(os.path.join(out, "index.html"), "w", encoding="utf-8").write(page)
+    size = sum(os.path.getsize(os.path.join(assets, f)) for f in os.listdir(assets)) + os.path.getsize(
+        os.path.join(out, "index.html")
+    )
+    shutil.rmtree(final, ignore_errors=True)
+    os.rename(out, final)
+    write_landing(os.path.dirname(final))
+    say(f"report: {os.path.join(final, 'index.html')} ({total_pics} pictures, {size / 1e6:.1f} MB)")
+    return 0
 
 
 def timing_html(timing, ext):
     """How long each program took on this picture on this machine, and which of our stages used the GPU."""
-    if not timing: return ''
-    tot = sum(t['seconds'] for t in timing); known = [t for t in timing if t['gpu'] is not None]; g = sum(1 for t in known if t['gpu'])
-    stages = ', '.join(f"{t['stage']} {t['seconds']:.1f} s {'GPU' if t['gpu'] else 'CPU' if t['gpu'] is False else '?'}" for t in timing)
-    others = ''.join(f"; {k} {v:.1f} s" for k, v in ext.items() if v is not None)
+    if not timing:
+        return ""
+    tot = sum(t["seconds"] for t in timing)
+    known = [t for t in timing if t["gpu"] is not None]
+    g = sum(1 for t in known if t["gpu"])
+    stages = ", ".join(
+        f"{t['stage']} {t['seconds']:.1f} s {'GPU' if t['gpu'] else 'CPU' if t['gpu'] is False else '?'}"
+        for t in timing
+    )
+    others = "".join(f"; {k} {v:.1f} s" for k, v in ext.items() if v is not None)
     return f"<p class=m><b>Time on this machine:</b> ours {tot:.1f} s ({stages}); the GPU was used in {g} of {len(known)} stages{others}</p>"
 
 
 def perf_html(perf):
     """The summary table of the times: per set the median seconds of ours and of the other programs, and per stage of ours where the time goes and how often the GPU took part."""
-    if not any(p['timing'] for p in perf): return ''
-    med = lambda v: float(np.median(v)) if v else float('nan'); rows = ''
-    for sn in dict.fromkeys(p['set'] for p in perf):
-        ps = [p for p in perf if p['set'] == sn and p['timing']]
-        rows += f"<tr><th>{html.escape(sn)} ({len(ps)})</th><td>{med([sum(t['seconds'] for t in p['timing']) for p in ps]):.1f}</td>" + ''.join(f"<td>{med([p['ext'][k] for p in ps if p['ext'].get(k) is not None]):.1f}</td>" for k in ('darktable', 'RawTherapee')) + '</tr>'
-    st = ''
-    for name in dict.fromkeys(t['stage'] for p in perf for t in p['timing']):
-        ts = [t for p in perf for t in p['timing'] if t['stage'] == name]; known = [t for t in ts if t['gpu'] is not None]
+    if not any(p["timing"] for p in perf):
+        return ""
+    med = lambda v: float(np.median(v)) if v else float("nan")
+    rows = ""
+    for sn in dict.fromkeys(p["set"] for p in perf):
+        ps = [p for p in perf if p["set"] == sn and p["timing"]]
+        rows += (
+            f"<tr><th>{html.escape(sn)} ({len(ps)})</th><td>{med([sum(t['seconds'] for t in p['timing']) for p in ps]):.1f}</td>"
+            + "".join(
+                f"<td>{med([p['ext'][k] for p in ps if p['ext'].get(k) is not None]):.1f}</td>"
+                for k in ("darktable", "RawTherapee")
+            )
+            + "</tr>"
+        )
+    st = ""
+    for name in dict.fromkeys(t["stage"] for p in perf for t in p["timing"]):
+        ts = [t for p in perf for t in p["timing"] if t["stage"] == name]
+        known = [t for t in ts if t["gpu"] is not None]
         st += f"<tr><th>{html.escape(name)}</th><td>{med([t['seconds'] for t in ts]):.1f}</td><td>{sum(1 for t in known if t['gpu'])} of {len(known)}</td></tr>"
     return f"<h2>Time per picture on this machine</h2><table class=t><tr><th></th><th>ours</th><th>darktable</th><th>RawTherapee</th></tr>{rows}</table><p class=m>Median seconds per picture, one at a time (the other programs' whole command line, start-up included).</p><table class=t><tr><th>our stage</th><th>median s</th><th>pictures where it used the GPU</th></tr>{st}</table>"
 
 
-def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind, public=True, timing='', tabs=()):
-    tabs_html = '<div class=tabs>' + ''.join('<button data-src="assets/%s"%s>%s</button>' % (fn, ' class=on' if fn.endswith('-overview.jpg') else '', html.escape(nm)) for nm, fn in tabs) + '</div>' if len(tabs) > 1 else ''
-    boxes = ''.join(f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>' for b in blocks); crops = []
+def render_picture(cfg, stem, why, W, H, rec, blocks, metrics, kind, public=True, timing="", tabs=()):
+    tabs_html = (
+        "<div class=tabs>"
+        + "".join(
+            '<button data-src="assets/%s"%s>%s</button>'
+            % (fn, " class=on" if fn.endswith("-overview.jpg") else "", html.escape(nm))
+            for nm, fn in tabs
+        )
+        + "</div>"
+        if len(tabs) > 1
+        else ""
+    )
+    boxes = "".join(
+        f'<div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"><b>{b["n"]}</b></div>'
+        for b in blocks
+    )
+    crops = []
     for b in blocks:
-        tiles = ''.join(f'<div style="width:{b["pw"]}px;height:{b["ph"]}px;background-image:url(assets/{b["sheet"]});background-position:-{(i % b["cols"]) * b["pw"]}px -{(i // b["cols"]) * b["ph"]}px"></div>' for i in range(len(b['names'])))
+        tiles = "".join(
+            f'<div style="width:{b["pw"]}px;height:{b["ph"]}px;background-image:url(assets/{b["sheet"]});background-position:-{(i % b["cols"]) * b["pw"]}px -{(i // b["cols"]) * b["ph"]}px"></div>'
+            for i in range(len(b["names"]))
+        )
         mini = f'<div class=ov style="width:300px"><img src="assets/{stem}-overview.jpg" width=300><div class=box style="left:{b["x"] * 100:.2f}%;top:{b["y"] * 100:.2f}%;width:{b["w"] * 100:.2f}%;height:{b["h"] * 100:.2f}%"></div></div>'
-        crops.append(f'<h3>Crop {b["n"]}: where the programs differ most in {html.escape(b["kind"])}</h3><div class=crop>{mini}<div class=sheet style="grid-template-columns:repeat({b["cols"]},{b["pw"]}px)">{tiles}</div></div>')
-    return f"""<section class="pic{' pub' if public else ''}" id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{' · ' + html.escape(why) if why else ''}</small></h2>{flag_widget(stem)}<div class=ov style="width:{fit_width(W, H)}"><img class=ovimg src="assets/{stem}-overview.jpg">{boxes}</div>{tabs_html}
-{timing}<details open><summary>What ours did, and the settings of each stage</summary>{settings_html(rec)}</details><details><summary>Numbers (scripts/compare_detail.py, on this picture)</summary>{metrics}<p class=m>sharp: edge crispness; ring/halo: sharpening artefacts; noise/cnoise: luminance and colour noise in flat areas; detail: texture kept against the noise.</p></details>{''.join(crops)}</section>"""
+        crops.append(
+            f'<h3>Crop {b["n"]}: where the programs differ most in {html.escape(b["kind"])}</h3><div class=crop>{mini}<div class=sheet style="grid-template-columns:repeat({b["cols"]},{b["pw"]}px)">{tiles}</div></div>'
+        )
+    return f"""<section class="pic{" pub" if public else ""}" id="{stem}"><h2>{html.escape(stem)} <small class=why>{html.escape(kind)} · {W}x{H} final{" · " + html.escape(why) if why else ""}</small></h2>{flag_widget(stem)}<div class=ov style="width:{fit_width(W, H)}"><img class=ovimg src="assets/{stem}-overview.jpg">{boxes}</div>{tabs_html}
+{timing}<details open><summary>What ours did, and the settings of each stage</summary>{settings_html(rec)}</details><details><summary>Numbers (scripts/compare_detail.py, on this picture)</summary>{metrics}<p class=m>sharp: edge crispness; ring/halo: sharpening artefacts; noise/cnoise: luminance and colour noise in flat areas; detail: texture kept against the noise.</p></details>{"".join(crops)}</section>"""
 
 
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0]); ap.add_argument('--rebuild', action='store_true', help='make every photo again, ignoring the cache in out/cache/'); ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'report', 'neutral')); ap.add_argument('--set', action='append', choices=sorted(SETS)); ap.add_argument('--min-lens', type=int, default=2, help='at least this many pictures of each lens'); ap.add_argument('--min-device', type=int, default=5, help='at least this many of each device'); ap.add_argument('--public-only', action='store_true', help='leave out the pictures that are not on the public list (docs/report_public.json): a report that may go public')
-    ap.add_argument('--all', action='store_true'); ap.add_argument('--stems'); ap.add_argument('--quality', type=int, default=95); ap.add_argument('--crops', type=int, default=3)
-    a = ap.parse_args(); a.set = a.set or list(SETS); sys.exit(build(a))
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--rebuild", action="store_true", help="make every photo again, ignoring the cache in out/cache/")
+    ap.add_argument("--out", default=os.path.join(ROOT, "out", "report", "neutral"))
+    ap.add_argument("--set", action="append", choices=sorted(SETS))
+    ap.add_argument("--min-lens", type=int, default=2, help="at least this many pictures of each lens")
+    ap.add_argument("--min-device", type=int, default=5, help="at least this many of each device")
+    ap.add_argument(
+        "--public-only",
+        action="store_true",
+        help="leave out the pictures that are not on the public list (docs/report_public.json): a report that may go public",
+    )
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--stems")
+    ap.add_argument("--quality", type=int, default=95)
+    ap.add_argument("--crops", type=int, default=3)
+    a = ap.parse_args()
+    a.set = a.set or list(SETS)
+    sys.exit(build(a))

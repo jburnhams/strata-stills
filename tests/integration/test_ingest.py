@@ -1,6 +1,7 @@
 """Tests for ingest.py over a real folder structure."""
-import os
+
 from stratastills import ingest
+
 
 def test_ingest_scan_shoot(shoot):
     shots = ingest.scan(shoot)
@@ -8,17 +9,17 @@ def test_ingest_scan_shoot(shoot):
 
     by = {s.stem: s for s in shots}
 
-    assert by['DJI_20250402190111_0001_D'].kind == "still"
-    assert by['DJI_20250402190111_0001_D'].jpeg.endswith('DJI_20250402190111_0001_D.JPG')
+    assert by["DJI_20250402190111_0001_D"].kind == "still"
+    assert by["DJI_20250402190111_0001_D"].jpeg.endswith("DJI_20250402190111_0001_D.JPG")
 
-    assert by['DJI_20250402190111_0001_D-Pano'].kind == "pano"
-    assert by['DJI_20250402190111_0001_D-Pano'].parent == 'DJI_20250402190111_0001_D'
-    assert by['DJI_20250402190111_0001_D-Pano'].raw.endswith('DJI_20250402190111_0001_D-Pano.dng')
+    assert by["DJI_20250402190111_0001_D-Pano"].kind == "pano"
+    assert by["DJI_20250402190111_0001_D-Pano"].parent == "DJI_20250402190111_0001_D"
+    assert by["DJI_20250402190111_0001_D-Pano"].raw.endswith("DJI_20250402190111_0001_D-Pano.dng")
 
-    assert by['DJI_20250402190211_0002_D'].kind == "still"
+    assert by["DJI_20250402190211_0002_D"].kind == "still"
 
-    assert by['DJI_20250402190511_0009_D'].kind == "video"
-    assert by['DJI_20250402190511_0009_D'].video.endswith('DJI_20250402190511_0009_D.MP4')
+    assert by["DJI_20250402190511_0009_D"].kind == "video"
+    assert by["DJI_20250402190511_0009_D"].video.endswith("DJI_20250402190511_0009_D.MP4")
 
 
 def test_ingest_scan_empty_folder(tmp_path):
@@ -29,7 +30,7 @@ def test_ingest_scan_ignored_and_unsupported_files(tmp_path):
     # .hidden, thumbs.db, foo.txt
     (tmp_path / ".hidden").touch()
     (tmp_path / "thumbs.db").touch()
-    (tmp_path / "Thumbs.DB").touch() # test case insensitivity
+    (tmp_path / "Thumbs.DB").touch()  # test case insensitivity
     (tmp_path / "desktop.ini").touch()
     (tmp_path / "foo.txt").touch()
     assert ingest.scan(str(tmp_path)) == []
@@ -56,15 +57,15 @@ def test_ingest_scan_sidecars_and_videos(tmp_path):
 def test_ingest_scan_derived_files(tmp_path):
     (tmp_path / "DJI_0001.JPG").touch()
     (tmp_path / "DJI_0001-Edit.jpg").touch()
-    (tmp_path / "DJI_0001-Edit.mp4").touch() # unsupported derived type
-    (tmp_path / "Orphan-Edit.jpg").touch() # derived file without parent
+    (tmp_path / "DJI_0001-Edit.mp4").touch()  # unsupported derived type
+    (tmp_path / "Orphan-Edit.jpg").touch()  # derived file without parent
 
     shots = ingest.scan(str(tmp_path))
     assert len(shots) == 2
 
     s0 = next(s for s in shots if s.stem == "DJI_0001")
     assert s0.derived == [("Edit", str(tmp_path / "DJI_0001-Edit.jpg"))]
-    assert len(s0.variants()) == 2 # jpeg, derived
+    assert len(s0.variants()) == 2  # jpeg, derived
 
     s1 = next(s for s in shots if s.stem == "Orphan")
     assert s1.derived == [("Edit", str(tmp_path / "Orphan-Edit.jpg"))]
@@ -74,9 +75,9 @@ def test_ingest_scan_derived_files(tmp_path):
 
 def test_ingest_scan_pano(tmp_path):
     (tmp_path / "DJI_0001.JPG").touch()
-    (tmp_path / "DJI_0001-Pano.jpg").touch() # Pano jpeg
+    (tmp_path / "DJI_0001-Pano.jpg").touch()  # Pano jpeg
     (tmp_path / "DJI_0002.JPG").touch()
-    (tmp_path / "DJI_0002-Pano.dng").touch() # Pano raw
+    (tmp_path / "DJI_0002-Pano.dng").touch()  # Pano raw
 
     shots = ingest.scan(str(tmp_path))
     assert len(shots) == 4

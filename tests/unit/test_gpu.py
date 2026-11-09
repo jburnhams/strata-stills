@@ -1,368 +1,767 @@
 """Each torch function in gpu.py is held to the CPU original in develop.py / detail.py (the reference), on random pictures with structure and noise. The tests run on every device there is: torch on the CPU always (so a machine with no GPU still checks the code), CUDA and Apple's MPS where present."""
-import cv2, numpy as np, pytest
 
-pytest.importorskip('torch')
-from stratastills import develop as D, gpu
+import cv2
+import numpy as np
+import pytest
+import torch  # noqa: F401  (a missing torch fails the test: CI installs it, see pyproject.toml)
+
+from stratastills import develop as D
+from stratastills import gpu
 
 
-@pytest.fixture(params=['cpu', 'cuda', 'mps'], autouse=True)
+@pytest.fixture(params=["cpu", "cuda", "mps"], autouse=True)
 def device(request):
     t = gpu.torch_()
-    if request.param == 'cuda' and not t.cuda.is_available(): pytest.skip('no CUDA')
-    if request.param == 'mps' and not (getattr(t.backends, 'mps', None) is not None and t.backends.mps.is_available()): pytest.skip('no MPS')
-    gpu.use(request.param); yield request.param; gpu.use(None)
+    if request.param == "cuda" and not t.cuda.is_available():
+        pytest.skip("no CUDA")
+    if request.param == "mps" and not (getattr(t.backends, "mps", None) is not None and t.backends.mps.is_available()):
+        pytest.skip("no MPS")
+    gpu.use(request.param)
+    yield request.param
+    gpu.use(None)
+
+
 H, W = 240, 320
 RNG = np.random.default_rng(0)
 
 
 def picture(seed=0, scale=1.0, noise=0.02):
     """A smooth, edgy, noisy float32 picture (H, W, 3) in 0..scale."""
-    rng = np.random.default_rng(seed); base = cv2.GaussianBlur(rng.random((H, W, 3)).astype(np.float32), (0, 0), 6) * 3 - 0.8
-    base[:, W // 2:] += 0.3; base[H // 2:, :W // 4] *= 0.4; return np.clip(base + rng.normal(0, noise, base.shape).astype(np.float32), 0, 1) * scale
+    rng = np.random.default_rng(seed)
+    base = cv2.GaussianBlur(rng.random((H, W, 3)).astype(np.float32), (0, 0), 6) * 3 - 0.8
+    base[:, W // 2 :] += 0.3
+    base[H // 2 :, : W // 4] *= 0.4
+    return np.clip(base + rng.normal(0, noise, base.shape).astype(np.float32), 0, 1) * scale
 
 
-def g(a): return gpu.to_gpu(a)
-def c(t): return gpu.to_numpy(t)
+def g(a):
+    return gpu.to_gpu(a)
 
 
-def inner(a, m=20): return a[m:-m, m:-m]
+def c(t):
+    return gpu.to_numpy(t)
 
 
-@pytest.mark.parametrize('r', [1, 2, 6, 14])
+def inner(a, m=20):
+    return a[m:-m, m:-m]
+
+
+@pytest.mark.parametrize("r", [1, 2, 6, 14])
 def test_box_filter_matches_opencv(r):
-    p = picture()[..., 0]; ref = cv2.boxFilter(p, -1, (2 * r + 1, 2 * r + 1), borderType=cv2.BORDER_REFLECT_101); out = c(gpu.box(g(p), r))
+    p = picture()[..., 0]
+    ref = cv2.boxFilter(p, -1, (2 * r + 1, 2 * r + 1), borderType=cv2.BORDER_REFLECT_101)
+    out = c(gpu.box(g(p), r))
     assert np.abs(out - ref).max() < 1e-5
 
 
-@pytest.mark.parametrize('sigma', [1.0, 2.0, 4.0, 8.0, 1.5])
+@pytest.mark.parametrize("sigma", [1.0, 2.0, 4.0, 8.0, 1.5])
 def test_gaussian_matches_opencv(sigma):
-    p = picture()[..., 1]; ref = cv2.GaussianBlur(p, (0, 0), sigma); out = c(gpu.gaussian(g(p), sigma)); assert np.abs(out - ref).max() < 2e-4
-    st = gpu.gaussian(g(picture()).contiguous(), sigma); assert st.shape == (3, H, W)                                    # a stack of planes at once
+    p = picture()[..., 1]
+    ref = cv2.GaussianBlur(p, (0, 0), sigma)
+    out = c(gpu.gaussian(g(p), sigma))
+    assert np.abs(out - ref).max() < 2e-4
+    st = gpu.gaussian(g(picture()).contiguous(), sigma)
+    assert st.shape == (3, H, W)  # a stack of planes at once
 
 
 def test_guided_filter_matches_the_cpu_one_away_from_the_border():
-    p = picture()[..., 0]; q = picture(1)[..., 1]
+    p = picture()[..., 0]
+    q = picture(1)[..., 1]
     for r, eps in ((2, 4e-4), (6, 1.5e-3), (14, 4e-3)):
-        ref = D._guided(p, q, r, eps); out = c(gpu.guided(g(p), g(q), r, eps)); assert np.abs(inner(out, 2 * r + 3) - inner(ref, 2 * r + 3)).max() < 5e-4 and np.abs(out - ref).mean() < 5e-4
+        ref = D._guided(p, q, r, eps)
+        out = c(gpu.guided(g(p), g(q), r, eps))
+        assert np.abs(inner(out, 2 * r + 3) - inner(ref, 2 * r + 3)).max() < 5e-4 and np.abs(out - ref).mean() < 5e-4
 
 
 def test_lut_matches_np_interp():
-    lut = np.cumsum(RNG.random(4096)).astype(np.float32); lut /= lut[-1]; x = RNG.random((3, 50, 60)).astype(np.float32); x[0, 0, :3] = (0.0, 1.0, 0.5)
-    ref = np.interp(x, np.linspace(0, 1, 4096), lut); out = gpu.apply_lut(gpu.torch_().from_numpy(x).to(gpu.dev()), gpu.torch_().from_numpy(lut).to(gpu.dev()), chunk=1000).cpu().numpy(); assert np.abs(out - ref).max() < 1e-6
+    lut = np.cumsum(RNG.random(4096)).astype(np.float32)
+    lut /= lut[-1]
+    x = RNG.random((3, 50, 60)).astype(np.float32)
+    x[0, 0, :3] = (0.0, 1.0, 0.5)
+    ref = np.interp(x, np.linspace(0, 1, 4096), lut)
+    out = (
+        gpu.apply_lut(gpu.torch_().from_numpy(x).to(gpu.dev()), gpu.torch_().from_numpy(lut).to(gpu.dev()), chunk=1000)
+        .cpu()
+        .numpy()
+    )
+    assert np.abs(out - ref).max() < 1e-6
 
 
 def test_shoulder_and_finish_match():
-    img = picture(2, scale=5.0); lut = np.cumsum(RNG.random(4096)).astype(np.float32); lut /= lut[-1]; lt = gpu.torch_().from_numpy(lut).to(gpu.dev())
+    img = picture(2, scale=5.0)
+    lut = np.cumsum(RNG.random(4096)).astype(np.float32)
+    lut /= lut[-1]
+    lt = gpu.torch_().from_numpy(lut).to(gpu.dev())
     assert np.abs(c(gpu.shoulder(g(img), D.KNEE, D.WHITE)) - D.shoulder(img)).max() < 1e-4
     assert np.abs(c(gpu.finish(g(img), lt, D.KNEE, D.WHITE)) - D.finish(img, lut)).max() < 5e-4
     assert np.abs(c(gpu.finish(g(img), None, D.KNEE, D.WHITE)) - D.finish(img, None)).max() < 5e-4
 
 
 def test_noise_map_matches():
-    img = picture(3, scale=0.5); npf = (0.004, 1e-6); ref = D.noise_map8(img, npf); out = c(gpu.noise_map8(g(img), npf)); assert np.abs(out - ref).max() < 0.05 * ref.max() and np.abs(out - ref).mean() < 0.01 * ref.mean()
+    img = picture(3, scale=0.5)
+    npf = (0.004, 1e-6)
+    ref = D.noise_map8(img, npf)
+    out = c(gpu.noise_map8(g(img), npf))
+    assert np.abs(out - ref).max() < 0.05 * ref.max() and np.abs(out - ref).mean() < 0.01 * ref.mean()
 
 
 def test_clean_colour_matches():
-    img = picture(4); sig = np.full((H, W), 8.0, np.float32); sig[:, W // 2:] = 3.0; ref = D.clean_colour(img, sig); out = c(gpu.clean_colour(g(img), g(sig)))
+    img = picture(4)
+    sig = np.full((H, W), 8.0, np.float32)
+    sig[:, W // 2 :] = 3.0
+    ref = D.clean_colour(img, sig)
+    out = c(gpu.clean_colour(g(img), g(sig)))
     assert np.abs(inner(out) - inner(ref)).max() < 2e-3 and np.abs(out - ref).mean() < 2e-4
 
 
 def test_core_luma_matches():
-    img = picture(5); sig = np.full((H, W), 8.0, np.float32); ref = D.core_luma(img, sig); out = c(gpu.core_luma(g(img), g(sig), D.BAND_CORE)); assert np.abs(inner(out) - inner(ref)).max() < 2e-3 and np.abs(out - ref).mean() < 2e-4
+    img = picture(5)
+    sig = np.full((H, W), 8.0, np.float32)
+    ref = D.core_luma(img, sig)
+    out = c(gpu.core_luma(g(img), g(sig), D.BAND_CORE))
+    assert np.abs(inner(out) - inner(ref)).max() < 2e-3 and np.abs(out - ref).mean() < 2e-4
 
 
 def test_highlight_detail_matches():
-    img = picture(6) * 0.4 + 0.55; ref = D.highlight_detail(np.clip(img, 0, 1), 0.8); out = c(gpu.highlight_detail(g(np.clip(img, 0, 1)), 0.8)); assert np.abs(inner(out) - inner(ref)).max() < 3e-3 and np.abs(out - ref).mean() < 3e-4
+    img = picture(6) * 0.4 + 0.55
+    ref = D.highlight_detail(np.clip(img, 0, 1), 0.8)
+    out = c(gpu.highlight_detail(g(np.clip(img, 0, 1)), 0.8))
+    assert np.abs(inner(out) - inner(ref)).max() < 3e-3 and np.abs(out - ref).mean() < 3e-4
 
 
 def test_gain_map_and_warp_match():
-    img = picture(7); m = (1 + RNG.random((8, 8, 3)) * 2).astype(np.float32); ref, rf = D.apply_gain_map(img.copy(), m, 0, 3); out, of = gpu.apply_gain_map(g(img), m, 0, 3)
+    img = picture(7)
+    m = (1 + RNG.random((8, 8, 3)) * 2).astype(np.float32)
+    ref, rf = D.apply_gain_map(img.copy(), m, 0, 3)
+    out, of = gpu.apply_gain_map(g(img), m, 0, 3)
     assert np.abs(c(out) - ref).max() < 2e-5 and np.abs(c(of) - rf).max() < 2e-5
-    coef = np.array([[0.953, -4e-5, 6e-4, -4e-4, 0, 0], [0.953, 0, 0, 0, 0, 0], [0.9532, -6.6e-4, 2.8e-4, 1.2e-4, 0, 0]]); a = D.warp_rectilinear(img, coef, (0.5, 0.5)); b = c(gpu.warp_rectilinear(g(img), coef, (0.5, 0.5)))
+    coef = np.array(
+        [[0.953, -4e-5, 6e-4, -4e-4, 0, 0], [0.953, 0, 0, 0, 0, 0], [0.9532, -6.6e-4, 2.8e-4, 1.2e-4, 0, 0]]
+    )
+    a = D.warp_rectilinear(img, coef, (0.5, 0.5))
+    b = c(gpu.warp_rectilinear(g(img), coef, (0.5, 0.5)))
     assert np.abs(inner(a, 10) - inner(b, 10)).max() < 0.02 and np.abs(a - b).mean() < 1.5e-3
 
 
 def test_local_tone_matches():
-    img = picture(8, scale=0.3) + 0.01; ref = D.local_tone(img, 0.35, 1200, 0.55); out = c(gpu.local_tone(g(img), 0.35, 0.55)); rel = np.abs(out - ref) / (ref + 1e-3)
+    img = picture(8, scale=0.3) + 0.01
+    ref = D.local_tone(img, 0.35, 1200, 0.55)
+    out = c(gpu.local_tone(g(img), 0.35, 0.55))
+    rel = np.abs(out - ref) / (ref + 1e-3)
     assert rel.mean() < 0.01 and np.percentile(rel, 99) < 0.05 and gpu.local_tone(g(img), 0, 0.55).shape == (3, H, W)
 
 
 def test_median_and_quantile_by_sorting():
-    x = gpu.torch_().from_numpy(RNG.random((9, 11)).astype(np.float32)).to(gpu.dev()); v = np.sort(x.cpu().numpy().ravel())
-    assert gpu._median(x) == pytest.approx(float(v[(v.size - 1) // 2])) and gpu.quantile(x, 0.995) == pytest.approx(float(v[round(0.995 * (v.size - 1))])) and gpu.quantile(x, 0.0) == pytest.approx(float(v[0]))
+    x = gpu.torch_().from_numpy(RNG.random((9, 11)).astype(np.float32)).to(gpu.dev())
+    v = np.sort(x.cpu().numpy().ravel())
+    assert (
+        gpu._median(x) == pytest.approx(float(v[(v.size - 1) // 2]))
+        and gpu.quantile(x, 0.995) == pytest.approx(float(v[round(0.995 * (v.size - 1))]))
+        and gpu.quantile(x, 0.0) == pytest.approx(float(v[0]))
+    )
 
 
 def test_the_lens_warp_falls_back_to_the_cpu_where_bicubic_sampling_is_missing(monkeypatch):
-    img = picture(7); coef = np.array([[0.953, -4e-5, 6e-4, -4e-4, 0, 0]] * 3); monkeypatch.setattr(gpu, '_cubic_ok', False)
-    out = c(gpu.warp_rectilinear(g(img), coef, (0.5, 0.5))); assert np.abs(out - D.warp_rectilinear(img, coef, (0.5, 0.5))).max() < 1e-6                            # exactly the CPU result
+    img = picture(7)
+    coef = np.array([[0.953, -4e-5, 6e-4, -4e-4, 0, 0]] * 3)
+    monkeypatch.setattr(gpu, "_cubic_ok", False)
+    out = c(gpu.warp_rectilinear(g(img), coef, (0.5, 0.5)))
+    assert np.abs(out - D.warp_rectilinear(img, coef, (0.5, 0.5))).max() < 1e-6  # exactly the CPU result
 
 
 def test_device_choice(monkeypatch):
-    monkeypatch.setenv('STRATASTILLS_DEVICE', 'cpu'); gpu.use(None); assert gpu.dev().type == 'cpu' and not gpu.available()                                        # torch on the CPU is for tests: callers use the CPU code, not this
-    monkeypatch.delenv('STRATASTILLS_DEVICE'); monkeypatch.setenv('STRATASTILLS_GPU', '0'); gpu.use(None); assert not gpu.available()
-    with pytest.raises(RuntimeError): gpu.dev()
-    monkeypatch.delenv('STRATASTILLS_GPU'); gpu.use('cpu'); assert gpu.dev().type == 'cpu' and gpu.cubic_ok()
+    monkeypatch.setenv("STRATASTILLS_DEVICE", "cpu")
+    gpu.use(None)
+    assert (
+        gpu.dev().type == "cpu" and not gpu.available()
+    )  # torch on the CPU is for tests: callers use the CPU code, not this
+    monkeypatch.delenv("STRATASTILLS_DEVICE")
+    monkeypatch.setenv("STRATASTILLS_GPU", "0")
+    gpu.use(None)
+    assert not gpu.available()
+    with pytest.raises(RuntimeError):
+        gpu.dev()
+    monkeypatch.delenv("STRATASTILLS_GPU")
+    gpu.use("cpu")
+    assert gpu.dev().type == "cpu" and gpu.cubic_ok()
 
 
 def test_a_uint16_raw_goes_to_the_device_as_floats():
-    a = RNG.integers(0, 65536, (6, 8, 3), dtype=np.uint16); a[0, 0] = (0, 65535, 40000); out = c(gpu.to_gpu_u16(a).permute(1, 2, 0)) if False else gpu.to_gpu_u16(a).permute(1, 2, 0).cpu().numpy()
+    a = RNG.integers(0, 65536, (6, 8, 3), dtype=np.uint16)
+    a[0, 0] = (0, 65535, 40000)
+    out = c(gpu.to_gpu_u16(a).permute(1, 2, 0)) if False else gpu.to_gpu_u16(a).permute(1, 2, 0).cpu().numpy()
     assert np.abs(out - a.astype(np.float32) / 65535.0).max() < 1e-6 and out[0, 0, 1] == 1.0
 
 
 def synthetic_dng(monkeypatch, h=240, w=320, seed=3):
     """A fake DNG for D.develop: a LibRaw-like uint16 picture and the tags of a real Mini 4 Pro file (colour matrices, noise profile, tone curve, a gain map and a warp)."""
     import struct
-    rng = np.random.default_rng(seed); base = cv2.GaussianBlur(rng.random((h, w, 3)).astype(np.float32), (0, 0), 5) * 2.2 - 0.4; base[:, w // 2:] *= 1.6; raw = (np.clip(base * 0.06 + 0.01 + rng.normal(0, 0.002, base.shape), 0, 1) * 65535).astype(np.uint16)
-    cm = tuple(v for x in ((12758, 10000), (-6160, 10000), (916, 10000), (-5992, 10000), (14682, 10000), (5340, 10000), (-251, 10000), (792, 10000), (9511, 10000)) for v in x)
-    gm = (1 + np.linspace(0, 1, 8 * 8 * 3).reshape(8, 8, 3) * 3).astype('>f4'); gp = struct.pack('>10I', 0, 0, h, w, 0, 3, 1, 1, 8, 8) + struct.pack('>4d', 1 / 7, 1 / 7, 0.0, 0.0) + struct.pack('>I', 3) + gm.tobytes()
-    wp = struct.pack('>I', 3) + b''.join(struct.pack('>6d', *cf) for cf in ((0.953, -4e-5, 6e-4, -4e-4, 0, 0), (0.953, 0, 0, 0, 0, 0), (0.9532, -6.6e-4, 2.8e-4, 1.2e-4, 0, 0))) + struct.pack('>2d', 0.5, 0.5)
-    ops = struct.pack('>I', 2) + struct.pack('>IIII', 9, 0x01030000, 0, len(gp)) + gp + struct.pack('>IIII', 1, 0x01030000, 0, len(wp)) + wp
-    tags = dict(ColorMatrix1=cm, ColorMatrix2=cm, AsShotNeutral=(4096, 9776, 4096, 4096, 4096, 6393), BaselineExposure=(19, 100), NoiseProfile=(0.0004, 1e-7), ProfileToneCurve=tuple(v for x in np.linspace(0, 1, 64) for v in (x, x ** 0.6)), OpcodeList3=ops)
-    monkeypatch.setattr(D, 'read_dng_tags', lambda p, lens='auto': tags); monkeypatch.setattr(D, '_raw_u16', lambda p, half: raw.copy()); monkeypatch.setattr(D.denoise_ai, 'available', lambda m=None: False)
+
+    rng = np.random.default_rng(seed)
+    base = cv2.GaussianBlur(rng.random((h, w, 3)).astype(np.float32), (0, 0), 5) * 2.2 - 0.4
+    base[:, w // 2 :] *= 1.6
+    raw = (np.clip(base * 0.06 + 0.01 + rng.normal(0, 0.002, base.shape), 0, 1) * 65535).astype(np.uint16)
+    cm = tuple(
+        v
+        for x in (
+            (12758, 10000),
+            (-6160, 10000),
+            (916, 10000),
+            (-5992, 10000),
+            (14682, 10000),
+            (5340, 10000),
+            (-251, 10000),
+            (792, 10000),
+            (9511, 10000),
+        )
+        for v in x
+    )
+    gm = (1 + np.linspace(0, 1, 8 * 8 * 3).reshape(8, 8, 3) * 3).astype(">f4")
+    gp = (
+        struct.pack(">10I", 0, 0, h, w, 0, 3, 1, 1, 8, 8)
+        + struct.pack(">4d", 1 / 7, 1 / 7, 0.0, 0.0)
+        + struct.pack(">I", 3)
+        + gm.tobytes()
+    )
+    wp = (
+        struct.pack(">I", 3)
+        + b"".join(
+            struct.pack(">6d", *cf)
+            for cf in (
+                (0.953, -4e-5, 6e-4, -4e-4, 0, 0),
+                (0.953, 0, 0, 0, 0, 0),
+                (0.9532, -6.6e-4, 2.8e-4, 1.2e-4, 0, 0),
+            )
+        )
+        + struct.pack(">2d", 0.5, 0.5)
+    )
+    ops = (
+        struct.pack(">I", 2)
+        + struct.pack(">IIII", 9, 0x01030000, 0, len(gp))
+        + gp
+        + struct.pack(">IIII", 1, 0x01030000, 0, len(wp))
+        + wp
+    )
+    tags = dict(
+        ColorMatrix1=cm,
+        ColorMatrix2=cm,
+        AsShotNeutral=(4096, 9776, 4096, 4096, 4096, 6393),
+        BaselineExposure=(19, 100),
+        NoiseProfile=(0.0004, 1e-7),
+        ProfileToneCurve=tuple(v for x in np.linspace(0, 1, 64) for v in (x, x**0.6)),
+        OpcodeList3=ops,
+    )
+    monkeypatch.setattr(D, "read_dng_tags", lambda p, lens="auto": tags)
+    monkeypatch.setattr(D, "_raw_u16", lambda p, half: raw.copy())
+    monkeypatch.setattr(D.denoise_ai, "available", lambda m=None: False)
     return raw
 
 
-@pytest.mark.parametrize('denoise', ['auto', 'chroma', 'off'])
+@pytest.mark.parametrize("denoise", ["auto", "chroma", "off"])
 def test_the_whole_development_agrees_with_the_cpu_one(monkeypatch, denoise):
-    synthetic_dng(monkeypatch); cpu = D.develop('x.dng', denoise=denoise, backend='cpu'); out = D.develop('x.dng', denoise=denoise, backend='gpu')
+    synthetic_dng(monkeypatch)
+    cpu = D.develop("x.dng", denoise=denoise, backend="cpu")
+    out = D.develop("x.dng", denoise=denoise, backend="gpu")
     assert out.shape == cpu.shape and out.dtype == np.float32 and np.isfinite(out).all()
-    d = np.abs(out - cpu); assert d.mean() < 2.5e-3 and np.percentile(d, 99.9) < 0.05, (d.mean(), np.percentile(d, 99.9))
+    d = np.abs(out - cpu)
+    assert d.mean() < 2.5e-3 and np.percentile(d, 99.9) < 0.05, (d.mean(), np.percentile(d, 99.9))
 
 
 def test_develop_picks_the_gpu_only_when_there_is_one_and_the_option_is_one_it_does(monkeypatch):
-    class CpuPath(Exception): pass                                                                                    # (a StopIteration raised inside a generator becomes a RuntimeError on Python 3.11)
+    class CpuPath(Exception):
+        pass  # (a StopIteration raised inside a generator becomes a RuntimeError on Python 3.11)
 
-    def cpu_path(*a, **k): calls.append('cpu'); raise CpuPath()
-    synthetic_dng(monkeypatch); calls = []; monkeypatch.setattr(D, '_develop_gpu', lambda *a: calls.append('gpu') or np.zeros((2, 2, 3), np.float32)); monkeypatch.setattr(D, 'develop_parts', cpu_path)
-    monkeypatch.setattr(gpu, 'available', lambda: True); D.develop('x.dng'); D.develop('x.dng', denoise='chroma'); D.develop('x.dng', denoise='ai'); D.develop('x.dng', denoise='classical'); assert calls == ['gpu'] * 4        # 'ai' (the model on the card's result) and 'classical' too
-    for kw in (dict(denoise=3.0), dict(backend='cpu')):
-        with pytest.raises(CpuPath): D.develop('x.dng', **kw)
-    monkeypatch.setattr(gpu, 'available', lambda: False)
-    with pytest.raises(CpuPath): D.develop('x.dng')
-    assert D.develop('x.dng', backend='gpu').shape == (2, 2, 3)
+    def cpu_path(*a, **k):
+        calls.append("cpu")
+        raise CpuPath()
+
+    synthetic_dng(monkeypatch)
+    calls = []
+    monkeypatch.setattr(D, "_develop_gpu", lambda *a: calls.append("gpu") or np.zeros((2, 2, 3), np.float32))
+    monkeypatch.setattr(D, "develop_parts", cpu_path)
+    monkeypatch.setattr(gpu, "available", lambda: True)
+    D.develop("x.dng")
+    D.develop("x.dng", denoise="chroma")
+    D.develop("x.dng", denoise="ai")
+    D.develop("x.dng", denoise="classical")
+    assert calls == ["gpu"] * 4  # 'ai' (the model on the card's result) and 'classical' too
+    for kw in (dict(denoise=3.0), dict(backend="cpu")):
+        with pytest.raises(CpuPath):
+            D.develop("x.dng", **kw)
+    monkeypatch.setattr(gpu, "available", lambda: False)
+    with pytest.raises(CpuPath):
+        D.develop("x.dng")
+    assert D.develop("x.dng", backend="gpu").shape == (2, 2, 3)
 
 
 def test_sharpening_matches_the_cpu_filter_and_picture():
     from stratastills import detail
-    rng = np.random.default_rng(2); f = np.linspace(0.002, 0.498, 128); m = np.exp(-2 * np.pi ** 2 * 1.6 ** 2 * f ** 2); img = np.clip(picture(9) * 0.6 + 0.2, 0, 1)
+
+    rng = np.random.default_rng(2)
+    f = np.linspace(0.002, 0.498, 128)
+    m = np.exp(-2 * np.pi**2 * 1.6**2 * f**2)
+    img = np.clip(picture(9) * 0.6 + 0.2, 0, 1)
     for scale in (1.0, 0.746):
-        g_cpu = detail.sharpen_gain(f, m, (H, W), scale, amount=1.5); g_dev = gpu.sharpen_gain(f, m, (H, W), scale, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF).cpu().numpy(); assert np.abs(g_dev - g_cpu[:, :W // 2 + 1]).max() < 2e-4
-    ref = detail.sharpen(img, detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)); out = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF))); assert np.abs(out - ref).max() < 2e-3
-    a = detail.sharpen_picture(img, f, m, 0.746, 1.5, backend='cpu'); b = detail._sharpen_picture_gpu(img, f, m, 0.746, 1.5); assert np.abs(a - b).max() < 3e-3 and np.abs(a - b).mean() < 1e-4
-    flat = np.full((64, 64, 3), 0.4, np.float32); assert np.allclose(detail._sharpen_picture_gpu(flat, f, m, 1.0, 1.5), 0.4, atol=1e-3)
+        g_cpu = detail.sharpen_gain(f, m, (H, W), scale, amount=1.5)
+        g_dev = gpu.sharpen_gain(f, m, (H, W), scale, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF).cpu().numpy()
+        assert np.abs(g_dev - g_cpu[:, : W // 2 + 1]).max() < 2e-4
+    ref = detail.sharpen(img, detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5))
+    out = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF)))
+    assert np.abs(out - ref).max() < 2e-3
+    a = detail.sharpen_picture(img, f, m, 0.746, 1.5, backend="cpu")
+    b = detail._sharpen_picture_gpu(img, f, m, 0.746, 1.5)
+    assert np.abs(a - b).max() < 3e-3 and np.abs(a - b).mean() < 1e-4
+    flat = np.full((64, 64, 3), 0.4, np.float32)
+    assert np.allclose(detail._sharpen_picture_gpu(flat, f, m, 1.0, 1.5), 0.4, atol=1e-3)
 
 
-@pytest.mark.parametrize('blend', [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("blend", [0.0, 0.5, 1.0])
 def test_finish_with_the_hue_preserving_tone_curve_matches(blend):
-    img = picture(11, scale=3.0); lut = np.cumsum(RNG.random(4096)).astype(np.float32); lut /= lut[-1]; lut = np.sqrt(lut); lt = gpu.torch_().from_numpy(lut).to(gpu.dev())
+    img = picture(11, scale=3.0)
+    lut = np.cumsum(RNG.random(4096)).astype(np.float32)
+    lut /= lut[-1]
+    lut = np.sqrt(lut)
+    lt = gpu.torch_().from_numpy(lut).to(gpu.dev())
     assert np.abs(c(gpu.finish(g(img), lt, D.KNEE, D.WHITE, blend)) - D.finish(img, lut, blend)).max() < 1e-3
 
 
 def test_hue_sat_map_and_chroma_limit_match():
-    x = (RNG.random((50, 60, 3)) * 1.5).astype(np.float32); tb = np.stack([RNG.normal(0, 8, (36, 10)), 1 + RNG.normal(0, .1, (36, 10)), 1 + RNG.normal(0, .05, (36, 10))], -1).astype(np.float32)
-    assert np.abs(c(gpu.apply_hue_sat_map(g(x), gpu.torch_().from_numpy(tb).to(gpu.dev()), rows=16)) - D.apply_hue_sat_map(x, tb)).max() < 1e-4
-    y = RNG.random((50, 60, 3)).astype(np.float32); assert np.abs(c(gpu.limit_chroma(g(y), 0.2, 0.45)) - D.limit_chroma(y, 0.2, 0.45)).max() < 1e-4
+    x = (RNG.random((50, 60, 3)) * 1.5).astype(np.float32)
+    tb = np.stack(
+        [RNG.normal(0, 8, (36, 10)), 1 + RNG.normal(0, 0.1, (36, 10)), 1 + RNG.normal(0, 0.05, (36, 10))], -1
+    ).astype(np.float32)
+    assert (
+        np.abs(
+            c(gpu.apply_hue_sat_map(g(x), gpu.torch_().from_numpy(tb).to(gpu.dev()), rows=16))
+            - D.apply_hue_sat_map(x, tb)
+        ).max()
+        < 1e-4
+    )
+    y = RNG.random((50, 60, 3)).astype(np.float32)
+    assert np.abs(c(gpu.limit_chroma(g(y), 0.2, 0.45)) - D.limit_chroma(y, 0.2, 0.45)).max() < 1e-4
 
 
 def test_the_tiled_development_agrees_with_the_whole_picture_one(monkeypatch):
     from stratastills import gpu_tiled as T
-    synthetic_dng(monkeypatch, h=520, w=680); u16 = D._raw_u16('x.dng', False)
-    whole = D._develop_gpu_on_device('x.dng', u16, False, 'auto', 'auto', 0.35, D.HIGHLIGHT_CONTRAST, {}); a, b = {}, {}
-    D._develop_gpu_on_device('x.dng', u16, False, 'auto', 'auto', 0.35, D.HIGHLIGHT_CONTRAST, a); tiled = T.develop_tiled('x.dng', u16, 'auto', 'auto', 0.35, D.HIGHLIGHT_CONTRAST, b, tile=192, halo=T.HALO)
-    assert tiled.shape == whole.shape and tiled.dtype == np.float32 and np.isfinite(tiled).all() and np.abs(a['luma'] - b['luma']).max() < 1e-6
-    d = np.abs(tiled - whole); assert d.mean() < 1.5e-3 and np.percentile(d, 99.9) < 0.04, (d.mean(), np.percentile(d, 99.9))
-    seam = np.zeros(d.shape[:2], bool); seam[190:194] = True; seam[:, 190:194] = True; assert d[seam].mean() < 3 * d.mean() + 1e-3                              # no seams where the tiles meet
+
+    synthetic_dng(monkeypatch, h=520, w=680)
+    u16 = D._raw_u16("x.dng", False)
+    whole = D._develop_gpu_on_device("x.dng", u16, False, "auto", "auto", 0.35, D.HIGHLIGHT_CONTRAST, {})
+    a, b = {}, {}
+    D._develop_gpu_on_device("x.dng", u16, False, "auto", "auto", 0.35, D.HIGHLIGHT_CONTRAST, a)
+    tiled = T.develop_tiled("x.dng", u16, "auto", "auto", 0.35, D.HIGHLIGHT_CONTRAST, b, tile=192, halo=T.HALO)
+    assert (
+        tiled.shape == whole.shape
+        and tiled.dtype == np.float32
+        and np.isfinite(tiled).all()
+        and np.abs(a["luma"] - b["luma"]).max() < 1e-6
+    )
+    d = np.abs(tiled - whole)
+    assert d.mean() < 1.5e-3 and np.percentile(d, 99.9) < 0.04, (d.mean(), np.percentile(d, 99.9))
+    seam = np.zeros(d.shape[:2], bool)
+    seam[190:194] = True
+    seam[:, 190:194] = True
+    assert d[seam].mean() < 3 * d.mean() + 1e-3  # no seams where the tiles meet
 
 
 def test_a_picture_too_big_for_the_card_is_developed_in_tiles_and_otherwise_not(monkeypatch):
     from stratastills import gpu_tiled as T
-    synthetic_dng(monkeypatch, h=120, w=160); calls = []; monkeypatch.setattr(T, 'develop_tiled', lambda *a, **k: calls.append('tiled') or np.zeros((120, 160, 3), np.float32))
-    monkeypatch.setattr(gpu, 'max_pixels', lambda: 1000); D.develop('x.dng', backend='gpu'); assert calls == ['tiled']
-    calls.clear(); monkeypatch.setattr(gpu, 'max_pixels', lambda: None); D.develop('x.dng', backend='gpu'); assert calls == []
-    monkeypatch.setattr(gpu, 'max_pixels', lambda: 4800); monkeypatch.setattr(T, 'develop_tiled', lambda *a, **k: (_ for _ in ()).throw(T.Unsupported('x'))); out = D.develop('x.dng', backend='gpu'); assert out.shape[0] * out.shape[1] <= 4800     # falls back to a reduced copy
+
+    synthetic_dng(monkeypatch, h=120, w=160)
+    calls = []
+    monkeypatch.setattr(
+        T, "develop_tiled", lambda *a, **k: calls.append("tiled") or np.zeros((120, 160, 3), np.float32)
+    )
+    monkeypatch.setattr(gpu, "max_pixels", lambda: 1000)
+    D.develop("x.dng", backend="gpu")
+    assert calls == ["tiled"]
+    calls.clear()
+    monkeypatch.setattr(gpu, "max_pixels", lambda: None)
+    D.develop("x.dng", backend="gpu")
+    assert calls == []
+    monkeypatch.setattr(gpu, "max_pixels", lambda: 4800)
+    monkeypatch.setattr(T, "develop_tiled", lambda *a, **k: (_ for _ in ()).throw(T.Unsupported("x")))
+    out = D.develop("x.dng", backend="gpu")
+    assert out.shape[0] * out.shape[1] <= 4800  # falls back to a reduced copy
 
 
 def test_the_cpu_tiled_development_agrees_with_the_whole_picture_one(monkeypatch):
     from stratastills import cpu_tiled
-    synthetic_dng(monkeypatch, h=520, w=680); u16 = D._raw_u16('x.dng', False); a, b = {}, {}
-    for denoise in ('auto', 'chroma', 'off'):
-        whole = D.develop('x.dng', denoise=denoise, backend='cpu', analysis=a); tiled = cpu_tiled.develop_tiled('x.dng', u16, 'auto', denoise, 0.35, D.HIGHLIGHT_CONTRAST, b, tile=192)
-        assert tiled.shape == whole.shape and tiled.dtype == np.float32 and np.isfinite(tiled).all() and np.abs(a['luma'] - b['luma']).max() < 1e-5
-        d = np.abs(tiled - whole); assert d.mean() < 1.5e-3 and np.percentile(d, 99.9) < 0.04, (denoise, d.mean(), np.percentile(d, 99.9))
-        seam = np.zeros(d.shape[:2], bool); seam[190:194] = True; seam[:, 190:194] = True; assert d[seam].mean() < 3 * d.mean() + 1e-3
+
+    synthetic_dng(monkeypatch, h=520, w=680)
+    u16 = D._raw_u16("x.dng", False)
+    a, b = {}, {}
+    for denoise in ("auto", "chroma", "off"):
+        whole = D.develop("x.dng", denoise=denoise, backend="cpu", analysis=a)
+        tiled = cpu_tiled.develop_tiled("x.dng", u16, "auto", denoise, 0.35, D.HIGHLIGHT_CONTRAST, b, tile=192)
+        assert (
+            tiled.shape == whole.shape
+            and tiled.dtype == np.float32
+            and np.isfinite(tiled).all()
+            and np.abs(a["luma"] - b["luma"]).max() < 1e-5
+        )
+        d = np.abs(tiled - whole)
+        assert d.mean() < 1.5e-3 and np.percentile(d, 99.9) < 0.04, (denoise, d.mean(), np.percentile(d, 99.9))
+        seam = np.zeros(d.shape[:2], bool)
+        seam[190:194] = True
+        seam[:, 190:194] = True
+        assert d[seam].mean() < 3 * d.mean() + 1e-3
 
 
 def test_the_cpu_development_goes_through_tiles_when_memory_is_short(monkeypatch):
     from stratastills import cpu_tiled, resources
-    synthetic_dng(monkeypatch, h=120, w=160); calls = []; monkeypatch.setattr(cpu_tiled, 'develop_tiled', lambda *a, **k: calls.append(a[-1] if len(a) > 7 else k.get('tile')) or np.zeros((120, 160, 3), np.float32))
-    monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu'); assert calls == [512]
-    calls.clear(); monkeypatch.setattr(resources, 'cpu_tile', lambda px: None); D.develop('x.dng', backend='cpu'); assert calls == []
-    monkeypatch.setattr(resources, 'cpu_tile', lambda px: 512); D.develop('x.dng', backend='cpu', denoise=4.0); assert calls == []                                          # a numeric denoise is not tiled
+
+    synthetic_dng(monkeypatch, h=120, w=160)
+    calls = []
+    monkeypatch.setattr(
+        cpu_tiled,
+        "develop_tiled",
+        lambda *a, **k: calls.append(a[-1] if len(a) > 7 else k.get("tile")) or np.zeros((120, 160, 3), np.float32),
+    )
+    monkeypatch.setattr(resources, "cpu_tile", lambda px: 512)
+    D.develop("x.dng", backend="cpu")
+    assert calls == [512]
+    calls.clear()
+    monkeypatch.setattr(resources, "cpu_tile", lambda px: None)
+    D.develop("x.dng", backend="cpu")
+    assert calls == []
+    monkeypatch.setattr(resources, "cpu_tile", lambda px: 512)
+    D.develop("x.dng", backend="cpu", denoise=4.0)
+    assert calls == []  # a numeric denoise is not tiled
 
 
 def test_hue_look_matches():
-    y = (RNG.random((50, 60, 3)) * 0.9 + 0.05).astype(np.float32); h = 24; tab = np.dstack([RNG.normal(0, 8, (h, len(D.LOOK_CHROMA))), 1 + RNG.normal(0, 0.1, (h, len(D.LOOK_CHROMA)))]).astype(np.float32); lut = (0.5 + RNG.random(64)).astype(np.float32)
-    for look in ((lut, tab), (None, tab), (lut, None)): assert np.abs(c(gpu.chroma_scale(g(y), gpu.look_to(look, gpu.dev()))) - D.chroma_scale(y, look)).max() < 2e-4
+    y = (RNG.random((50, 60, 3)) * 0.9 + 0.05).astype(np.float32)
+    h = 24
+    tab = np.dstack(
+        [RNG.normal(0, 8, (h, len(D.LOOK_CHROMA))), 1 + RNG.normal(0, 0.1, (h, len(D.LOOK_CHROMA)))]
+    ).astype(np.float32)
+    lut = (0.5 + RNG.random(64)).astype(np.float32)
+    for look in ((lut, tab), (None, tab), (lut, None)):
+        assert np.abs(c(gpu.chroma_scale(g(y), gpu.look_to(look, gpu.dev()))) - D.chroma_scale(y, look)).max() < 2e-4
 
 
 def test_the_matched_tone_made_on_the_card_agrees_with_the_cpu_route(monkeypatch):
     from stratastills import tonematch
-    synthetic_dng(monkeypatch); lin = D.develop_parts('x.dng', half=False, ev=0.0, recover=0.0)['linear']; y = lin @ D._W; yenc = np.clip((y * 4.0) ** 0.5, 0, 1)
-    jpg = (np.clip(yenc[..., None] + (D.srgb_oetf(np.clip(lin, 0, 1)) - D.srgb_oetf(np.clip(y, 0, 1))[..., None]) * 0.7, 0, 1) * 255 + 0.5).astype(np.uint8)
-    monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: jpg); a_cpu, a_gpu = {}, {}
-    cpu = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='cpu', analysis=a_cpu); gp = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a_gpu)
-    assert a_cpu['tone'] and a_gpu['tone'] and set(a_gpu['tone']) == {'curve', 'chroma'}
-    ck = np.asarray(a_cpu['tone']['curve']).reshape(-1, 2); gk = np.asarray(a_gpu['tone']['curve']).reshape(-1, 2)
-    for v in (0.02, 0.1, 0.3): assert abs(np.interp(v, ck[:, 0], ck[:, 1]) - np.interp(v, gk[:, 0], gk[:, 1])) < 0.03                                                     # the same curve, from a half-size CPU development and from the full one shrunk on the card
-    d = np.abs(gp - cpu); assert gp.shape == cpu.shape and d.mean() < 0.01, d.mean()
+
+    synthetic_dng(monkeypatch)
+    lin = D.develop_parts("x.dng", half=False, ev=0.0, recover=0.0)["linear"]
+    y = lin @ D._W
+    yenc = np.clip((y * 4.0) ** 0.5, 0, 1)
+    jpg = (
+        np.clip(
+            yenc[..., None] + (D.srgb_oetf(np.clip(lin, 0, 1)) - D.srgb_oetf(np.clip(y, 0, 1))[..., None]) * 0.7, 0, 1
+        )
+        * 255
+        + 0.5
+    ).astype(np.uint8)
+    monkeypatch.setattr(tonematch, "embedded_jpeg", lambda path: jpg)
+    a_cpu, a_gpu = {}, {}
+    cpu = D.develop("x.dng", ev="auto", recover="auto", tone="match", backend="cpu", analysis=a_cpu)
+    gp = D.develop("x.dng", ev="auto", recover="auto", tone="match", backend="gpu", analysis=a_gpu)
+    assert a_cpu["tone"] and a_gpu["tone"] and set(a_gpu["tone"]) == {"curve", "chroma"}
+    ck = np.asarray(a_cpu["tone"]["curve"]).reshape(-1, 2)
+    gk = np.asarray(a_gpu["tone"]["curve"]).reshape(-1, 2)
+    for v in (0.02, 0.1, 0.3):
+        assert (
+            abs(np.interp(v, ck[:, 0], ck[:, 1]) - np.interp(v, gk[:, 0], gk[:, 1])) < 0.03
+        )  # the same curve, from a half-size CPU development and from the full one shrunk on the card
+    d = np.abs(gp - cpu)
+    assert gp.shape == cpu.shape and d.mean() < 0.01, d.mean()
 
 
 def test_no_usable_preview_falls_back_to_the_fixed_lightness_rule(monkeypatch):
     from stratastills import tonematch
-    synthetic_dng(monkeypatch); monkeypatch.setattr(tonematch, 'embedded_jpeg', lambda path: None); a = {}
-    auto = D.develop('x.dng', ev='auto', recover='auto', tone='match', backend='gpu', analysis=a); assert a['tone'] is None and np.allclose(auto, D.develop('x.dng', ev='auto', recover=0.35, backend='gpu'), atol=1e-6)
-    assert np.isfinite(D.develop('x.dng', ev='match', recover='auto', tone='match', backend='gpu', analysis={})).all()
+
+    synthetic_dng(monkeypatch)
+    monkeypatch.setattr(tonematch, "embedded_jpeg", lambda path: None)
+    a = {}
+    auto = D.develop("x.dng", ev="auto", recover="auto", tone="match", backend="gpu", analysis=a)
+    assert a["tone"] is None and np.allclose(
+        auto, D.develop("x.dng", ev="auto", recover=0.35, backend="gpu"), atol=1e-6
+    )
+    assert np.isfinite(D.develop("x.dng", ev="match", recover="auto", tone="match", backend="gpu", analysis={})).all()
 
 
 def test_the_sharpening_activity_mask_matches_and_spares_the_flat_areas():
     from stratastills import detail
-    y = picture(3)[..., 1]; ref = detail.activity(y, detail.SHARPEN_MASK); out = c(gpu.activity(g(y), detail.SHARPEN_MASK)); assert np.abs(out - ref).max() < 2e-2 and ref.min() >= 0 and ref.max() <= 1 and detail.activity(y, None).min() == 1
-    rng = np.random.default_rng(5); flat = np.full((H, W), 0.4, np.float32) + rng.normal(0, 0.004, (H, W)).astype(np.float32); edge = flat.copy(); edge[:, W // 2:] += 0.3
-    assert detail.activity(flat, detail.SHARPEN_MASK).mean() < 0.15 and detail.activity(edge, detail.SHARPEN_MASK)[:, W // 2 - 2:W // 2 + 2].min() > 0.5                                 # noise of 1 level is left alone, a step of 77 levels gets the full boost
-    img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)
-    a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK); b = c(gpu.sharpen(g(img), gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF), mask=detail.SHARPEN_MASK)); assert np.abs(a - b).max() < 3e-3
+
+    y = picture(3)[..., 1]
+    ref = detail.activity(y, detail.SHARPEN_MASK)
+    out = c(gpu.activity(g(y), detail.SHARPEN_MASK))
+    assert np.abs(out - ref).max() < 2e-2 and ref.min() >= 0 and ref.max() <= 1 and detail.activity(y, None).min() == 1
+    rng = np.random.default_rng(5)
+    flat = np.full((H, W), 0.4, np.float32) + rng.normal(0, 0.004, (H, W)).astype(np.float32)
+    edge = flat.copy()
+    edge[:, W // 2 :] += 0.3
+    assert (
+        detail.activity(flat, detail.SHARPEN_MASK).mean() < 0.15
+        and detail.activity(edge, detail.SHARPEN_MASK)[:, W // 2 - 2 : W // 2 + 2].min() > 0.5
+    )  # noise of 1 level is left alone, a step of 77 levels gets the full boost
+    img = np.dstack([picture(4)[..., 0]] * 3)
+    f = np.array([0.0, 0.1, 0.25, 0.5])
+    m = np.array([1.0, 0.9, 0.6, 0.3])
+    gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=1.5)
+    a = detail.sharpen(img, gain, mask=detail.SHARPEN_MASK)
+    b = c(
+        gpu.sharpen(
+            g(img),
+            gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 1.5, detail.ROLLOFF),
+            mask=detail.SHARPEN_MASK,
+        )
+    )
+    assert np.abs(a - b).max() < 3e-3
 
 
 def test_the_soft_limit_and_no_limit_of_the_sharpening_match():
     from stratastills import detail
-    img = np.dstack([picture(4)[..., 0]] * 3); f = np.array([0.0, 0.1, 0.25, 0.5]); m = np.array([1.0, 0.9, 0.6, 0.3]); gg = gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 3.0, detail.ROLLOFF); gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=3.0)
+
+    img = np.dstack([picture(4)[..., 0]] * 3)
+    f = np.array([0.0, 0.1, 0.25, 0.5])
+    m = np.array([1.0, 0.9, 0.6, 0.3])
+    gg = gpu.sharpen_gain(f, m, (H, W), 1.0, detail.NOISE_TERM, 4.0, 3.0, detail.ROLLOFF)
+    gain = detail.sharpen_gain(f, m, (H, W), 1.0, amount=3.0)
     for overshoot, knee in ((0.0, 0.03), (None, 0.0)):
-        a = detail.sharpen(img, gain, overshoot=overshoot, knee=knee); b = c(gpu.sharpen(g(img), gg, overshoot=overshoot, knee=knee)); assert np.abs(a - b).max() < 3e-3
+        a = detail.sharpen(img, gain, overshoot=overshoot, knee=knee)
+        b = c(gpu.sharpen(g(img), gg, overshoot=overshoot, knee=knee))
+        assert np.abs(a - b).max() < 3e-3
     hard, soft = detail.sharpen(img, gain, overshoot=0.0), detail.sharpen(img, gain, overshoot=0.0, knee=0.03)
-    assert np.abs(soft - hard).max() <= 0.03 + 1e-4 and len(np.unique(np.round(soft[..., 0], 4))) > len(np.unique(np.round(hard[..., 0], 4)))   # never more than the knee beyond the range, and fewer pixels pinned to one value
+    assert np.abs(soft - hard).max() <= 0.03 + 1e-4 and len(np.unique(np.round(soft[..., 0], 4))) > len(
+        np.unique(np.round(hard[..., 0], 4))
+    )  # never more than the knee beyond the range, and fewer pixels pinned to one value
 
 
 def test_blind_noise_finds_the_noise_of_a_picture_on_the_cpu_and_the_card():
-    rng = np.random.default_rng(2); base = np.dstack([cv2.GaussianBlur(rng.random((H, W)).astype(np.float32), (0, 0), 12)] * 3) * 0.5 + 0.25
+    rng = np.random.default_rng(2)
+    base = np.dstack([cv2.GaussianBlur(rng.random((H, W)).astype(np.float32), (0, 0), 12)] * 3) * 0.5 + 0.25
     for sigma in (0.5, 2.0, 5.0):
-        img = np.clip(base + rng.normal(0, sigma / 255, base.shape).astype(np.float32), 0, 1); a = D.blind_noise(img); b = gpu.blind_noise(g(img))
-        assert abs(a - sigma * 0.8) < 0.45 * sigma + 0.15 and abs(a - b) < 0.1 * a + 0.05, (sigma, a, b)                                                       # the luminance of three equal noisy channels carries the noise of one; the flattest quarter is a little under it
+        img = np.clip(base + rng.normal(0, sigma / 255, base.shape).astype(np.float32), 0, 1)
+        a = D.blind_noise(img)
+        b = gpu.blind_noise(g(img))
+        assert abs(a - sigma * 0.8) < 0.45 * sigma + 0.15 and abs(a - b) < 0.1 * a + 0.05, (
+            sigma,
+            a,
+            b,
+        )  # the luminance of three equal noisy channels carries the noise of one; the flattest quarter is a little under it
 
 
 def test_auto_denoise_brings_the_model_in_on_a_noisy_picture_only(monkeypatch):
     from stratastills import denoise_ai
-    synthetic_dng(monkeypatch); a = {}; monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); called = []; monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: called.append(1) or rgb)          # (after synthetic_dng, which says the weights are not there)
-    for backend in ('cpu', 'gpu'):
-        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert called and a['ai'] is True                      # noisy enough (threshold 0)
-        called.clear(); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 1e9); D.develop('x.dng', denoise='auto', backend=backend, analysis=a); assert not called and a['ai'] is False and a['blind_noise'] > 0
-        called.clear(); D.develop('x.dng', denoise='classical', backend=backend, analysis=a); assert not called and a['ai'] is False
-        called.clear(); D.develop('x.dng', denoise='ai', backend=backend, analysis=a); assert called and a['ai'] is True
-    monkeypatch.setenv('STRATASTILLS_AI', '0'); monkeypatch.setattr(D, 'AUTO_AI_NOISE', 0.0); monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0); called.clear(); D.develop('x.dng', denoise='auto', analysis=a); assert not called              # switched off
+
+    synthetic_dng(monkeypatch)
+    a = {}
+    monkeypatch.setenv("STRATASTILLS_AI", "1")
+    monkeypatch.setattr(denoise_ai, "available", lambda model=None: True)
+    called = []
+    monkeypatch.setattr(
+        denoise_ai, "adaptive", lambda rgb, sig, model, strength: called.append(1) or rgb
+    )  # (after synthetic_dng, which says the weights are not there)
+    for backend in ("cpu", "gpu"):
+        called.clear()
+        monkeypatch.setattr(D, "AUTO_AI_NOISE", 0.0)
+        monkeypatch.setattr(D, "AUTO_AI_LEFT", 0.0)
+        D.develop("x.dng", denoise="auto", backend=backend, analysis=a)
+        assert called and a["ai"] is True  # noisy enough (threshold 0)
+        called.clear()
+        monkeypatch.setattr(D, "AUTO_AI_NOISE", 1e9)
+        D.develop("x.dng", denoise="auto", backend=backend, analysis=a)
+        assert not called and a["ai"] is False and a["blind_noise"] > 0
+        called.clear()
+        D.develop("x.dng", denoise="classical", backend=backend, analysis=a)
+        assert not called and a["ai"] is False
+        called.clear()
+        D.develop("x.dng", denoise="ai", backend=backend, analysis=a)
+        assert called and a["ai"] is True
+    monkeypatch.setenv("STRATASTILLS_AI", "0")
+    monkeypatch.setattr(D, "AUTO_AI_NOISE", 0.0)
+    monkeypatch.setattr(D, "AUTO_AI_LEFT", 0.0)
+    called.clear()
+    D.develop("x.dng", denoise="auto", analysis=a)
+    assert not called  # switched off
 
 
 def test_the_tiled_route_brings_the_model_in_too(monkeypatch):
-    from stratastills import denoise_ai, gpu_tiled as T
-    synthetic_dng(monkeypatch, h=240, w=320); u16 = D._raw_u16('x.dng', False); monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True); seen = []
-    monkeypatch.setattr(denoise_ai, 'adaptive', lambda rgb, sig, model, strength: seen.append(np.shape(sig)) or rgb)
-    monkeypatch.setattr(D, 'AUTO_AI_LEFT', 0.0)
-    for threshold, denoise, want in ((0.0, 'auto', True), (1e9, 'auto', False), (1e9, 'ai', True)):
-        seen.clear(); a = {}; monkeypatch.setattr(D, 'AUTO_AI_NOISE', threshold); T.develop_tiled('x.dng', u16, 'auto', denoise, 0.35, D.HIGHLIGHT_CONTRAST, a, tile=192)
-        assert bool(seen) is want and a['ai'] is want and a['blind_noise'] > 0 and (not want or seen[0] == (240, 320)), (threshold, denoise, seen, a)
+    from stratastills import denoise_ai
+    from stratastills import gpu_tiled as T
+
+    synthetic_dng(monkeypatch, h=240, w=320)
+    u16 = D._raw_u16("x.dng", False)
+    monkeypatch.setenv("STRATASTILLS_AI", "1")
+    monkeypatch.setattr(denoise_ai, "available", lambda model=None: True)
+    seen = []
+    monkeypatch.setattr(denoise_ai, "adaptive", lambda rgb, sig, model, strength: seen.append(np.shape(sig)) or rgb)
+    monkeypatch.setattr(D, "AUTO_AI_LEFT", 0.0)
+    for threshold, denoise, want in ((0.0, "auto", True), (1e9, "auto", False), (1e9, "ai", True)):
+        seen.clear()
+        a = {}
+        monkeypatch.setattr(D, "AUTO_AI_NOISE", threshold)
+        T.develop_tiled("x.dng", u16, "auto", denoise, 0.35, D.HIGHLIGHT_CONTRAST, a, tile=192)
+        assert (
+            bool(seen) is want and a["ai"] is want and a["blind_noise"] > 0 and (not want or seen[0] == (240, 320))
+        ), (threshold, denoise, seen, a)
 
 
 def test_auto_leaves_the_model_out_when_the_clean_up_already_did_it(monkeypatch):
     from stratastills import denoise_ai
-    monkeypatch.setenv('STRATASTILLS_AI', '1'); monkeypatch.setattr(denoise_ai, 'available', lambda model=None: True)
-    assert not D._auto_ai(2.4, lambda: 0.5) and D._auto_ai(2.4, lambda: 1.1) and D._auto_ai(2.4) and not D._auto_ai(1.0, lambda: 9)     # a DJI file (2.4 before, 0.5 after) against an A7C one at ISO 1600 (2.1, 1.05)
-    assert D._auto_ai(8.0, lambda: 0.0)                                                                                              # cored to nothing: the estimate fails, the picture is noisy
+
+    monkeypatch.setenv("STRATASTILLS_AI", "1")
+    monkeypatch.setattr(denoise_ai, "available", lambda model=None: True)
+    assert (
+        not D._auto_ai(2.4, lambda: 0.5)
+        and D._auto_ai(2.4, lambda: 1.1)
+        and D._auto_ai(2.4)
+        and not D._auto_ai(1.0, lambda: 9)
+    )  # a DJI file (2.4 before, 0.5 after) against an A7C one at ISO 1600 (2.1, 1.05)
+    assert D._auto_ai(8.0, lambda: 0.0)  # cored to nothing: the estimate fails, the picture is noisy
 
 
-class FakeOOM(RuntimeError): pass
-FakeOOM.__name__ = 'OutOfMemoryError'
+class FakeOOM(RuntimeError):
+    pass
+
+
+FakeOOM.__name__ = "OutOfMemoryError"
 
 
 def test_is_oom():
-    assert gpu.is_oom(FakeOOM('x')) and gpu.is_oom(RuntimeError('CUDA out of memory. Tried to allocate')) and not gpu.is_oom(RuntimeError('bad shape')) and not gpu.is_oom(ValueError('out of memory'))
+    assert (
+        gpu.is_oom(FakeOOM("x"))
+        and gpu.is_oom(RuntimeError("CUDA out of memory. Tried to allocate"))
+        and not gpu.is_oom(RuntimeError("bad shape"))
+        and not gpu.is_oom(ValueError("out of memory"))
+    )
 
 
 def test_out_of_memory_falls_back_to_smaller_tiles_then_cpu(monkeypatch):
-    calls = []; monkeypatch.setattr(gpu, 'available', lambda: True)
+    calls = []
+    monkeypatch.setattr(gpu, "available", lambda: True)
 
-    def fake_gpu(path, half, ev, denoise, recover, hc, analysis=None, tone=None, lens='auto', smaller=False): calls.append(('gpu', smaller)); raise FakeOOM('out of memory')
-    monkeypatch.setattr(D, '_develop_gpu', fake_gpu)
-    monkeypatch.setattr(D, '_raw_u16', lambda p, half=False: (_ for _ in ()).throw(KeyError('reached the CPU')))
-    with pytest.raises(KeyError): D.develop('x.dng', tone=None)
-    assert calls == [('gpu', False), ('gpu', True)]
-    calls.clear(); monkeypatch.setattr(D, '_develop_gpu', lambda *a, **k: (_ for _ in ()).throw(ValueError('not memory')))
-    with pytest.raises(ValueError): D.develop('x.dng', tone=None)
+    def fake_gpu(path, half, ev, denoise, recover, hc, analysis=None, tone=None, lens="auto", smaller=False):
+        calls.append(("gpu", smaller))
+        raise FakeOOM("out of memory")
+
+    monkeypatch.setattr(D, "_develop_gpu", fake_gpu)
+    monkeypatch.setattr(D, "_raw_u16", lambda p, half=False: (_ for _ in ()).throw(KeyError("reached the CPU")))
+    with pytest.raises(KeyError):
+        D.develop("x.dng", tone=None)
+    assert calls == [("gpu", False), ("gpu", True)]
+    calls.clear()
+    monkeypatch.setattr(D, "_develop_gpu", lambda *a, **k: (_ for _ in ()).throw(ValueError("not memory")))
+    with pytest.raises(ValueError):
+        D.develop("x.dng", tone=None)
     with pytest.raises(FakeOOM):
-        monkeypatch.setattr(D, '_develop_gpu', fake_gpu); D.develop('x.dng', tone=None, backend='gpu')
+        monkeypatch.setattr(D, "_develop_gpu", fake_gpu)
+        D.develop("x.dng", tone=None, backend="gpu")
 
 
 def test_sharpen_out_of_memory_falls_back_to_cpu(monkeypatch):
     from stratastills import detail
-    monkeypatch.setattr(detail, '_sharpen_picture_gpu', lambda *a: (_ for _ in ()).throw(FakeOOM('out of memory')))
-    monkeypatch.setattr(gpu, 'available', lambda: True)
-    p = picture(); f = np.linspace(0.01, 0.5, 20); m = np.linspace(1, 0.2, 20)
-    out = detail.sharpen_picture(p, f, m, 0.5, amount=1.0); assert out.shape == p.shape
-    with pytest.raises(FakeOOM): detail.sharpen_picture(p, f, m, 0.5, backend='gpu')
+
+    monkeypatch.setattr(detail, "_sharpen_picture_gpu", lambda *a: (_ for _ in ()).throw(FakeOOM("out of memory")))
+    monkeypatch.setattr(gpu, "available", lambda: True)
+    p = picture()
+    f = np.linspace(0.01, 0.5, 20)
+    m = np.linspace(1, 0.2, 20)
+    out = detail.sharpen_picture(p, f, m, 0.5, amount=1.0)
+    assert out.shape == p.shape
+    with pytest.raises(FakeOOM):
+        detail.sharpen_picture(p, f, m, 0.5, backend="gpu")
 
 
 def test_mps_takes_one_picture_at_a_time(monkeypatch):
     import types
-    monkeypatch.setattr(gpu, 'dev', lambda: types.SimpleNamespace(type='mps')); monkeypatch.setattr(gpu, '_cuda_total', lambda: None); monkeypatch.setattr(gpu, '_slots', None)
-    assert gpu.whole_slots() == 1 and gpu.tile_slots() == 1 and not gpu.tiling_pays(4) and gpu.plan_workers() == 2           # two threads on the Apple GPU at once aborted the process (macOS CI)
+
+    monkeypatch.setattr(gpu, "dev", lambda: types.SimpleNamespace(type="mps"))
+    monkeypatch.setattr(gpu, "_cuda_total", lambda: None)
+    monkeypatch.setattr(gpu, "_slots", None)
+    assert (
+        gpu.whole_slots() == 1 and gpu.tile_slots() == 1 and not gpu.tiling_pays(4) and gpu.plan_workers() == 2
+    )  # two threads on the Apple GPU at once aborted the process (macOS CI)
 
 
 def test_a_blur_in_strips_is_the_same_as_one_pass(monkeypatch):
     import numpy as np
-    t = gpu.torch_(); x = t.from_numpy(np.random.default_rng(3).random((3, 90, 70), dtype=np.float32)).to(gpu.dev()); whole = gpu.gaussian(x, 2.5).cpu()
-    monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 4000); strips = gpu.gaussian(x, 2.5).cpu()                                       # a workspace this small makes strips of 8 rows and columns
+
+    t = gpu.torch_()
+    x = t.from_numpy(np.random.default_rng(3).random((3, 90, 70), dtype=np.float32)).to(gpu.dev())
+    whole = gpu.gaussian(x, 2.5).cpu()
+    monkeypatch.setattr(gpu, "CONV_WORKSPACE", 4000)
+    strips = gpu.gaussian(x, 2.5).cpu()  # a workspace this small makes strips of 8 rows and columns
     assert float((whole - strips).abs().max()) < 1e-5
 
 
 def test_conv_in_strips_is_the_same_as_one_convolution(monkeypatch):
     import numpy as np
-    t = gpu.torch_(); rng = np.random.default_rng(5); y = t.from_numpy(rng.random((1, 1, 70, 50), dtype=np.float32)).to(gpu.dev())
-    monkeypatch.setattr(gpu, 'CONV_WORKSPACE', 1000)                                                                          # strips of 8 rows
+
+    t = gpu.torch_()
+    rng = np.random.default_rng(5)
+    y = t.from_numpy(rng.random((1, 1, 70, 50), dtype=np.float32)).to(gpu.dev())
+    monkeypatch.setattr(gpu, "CONV_WORKSPACE", 1000)  # strips of 8 rows
     for shape in ((3, 3), (1, 9), (9, 1)):
-        k = t.from_numpy(rng.random((1, 1) + shape, dtype=np.float32)).to(gpu.dev()); assert float((gpu.conv(y, k) - t.nn.functional.conv2d(y, k)).abs().max()) < 1e-4
+        k = t.from_numpy(rng.random((1, 1) + shape, dtype=np.float32)).to(gpu.dev())
+        assert float((gpu.conv(y, k) - t.nn.functional.conv2d(y, k)).abs().max()) < 1e-4
 
 
 def test_a_radeon_780m_gets_the_gfx1100_override_before_torch_loads_unless_the_user_set_one(tmp_path, monkeypatch):
-    node = tmp_path / '1'; node.mkdir(); (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110003\n')
-    monkeypatch.delenv('HSA_OVERRIDE_GFX_VERSION', raising=False)
-    assert gpu.amd_env(str(tmp_path)) == {'HSA_OVERRIDE_GFX_VERSION': '11.0.0'} and gpu.amd_env(str(tmp_path / 'none')) == {}
-    (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110000\n'); assert gpu.amd_env(str(tmp_path)) == {}              # gfx1100 has kernels of its own
-    (node / 'properties').write_text('vendor_id 4098\ngfx_target_version 110003\n'); monkeypatch.setenv('HSA_OVERRIDE_GFX_VERSION', '10.3.0'); assert gpu.amd_env(str(tmp_path)) == {}
+    node = tmp_path / "1"
+    node.mkdir()
+    (node / "properties").write_text("vendor_id 4098\ngfx_target_version 110003\n")
+    monkeypatch.delenv("HSA_OVERRIDE_GFX_VERSION", raising=False)
+    assert (
+        gpu.amd_env(str(tmp_path)) == {"HSA_OVERRIDE_GFX_VERSION": "11.0.0"}
+        and gpu.amd_env(str(tmp_path / "none")) == {}
+    )
+    (node / "properties").write_text("vendor_id 4098\ngfx_target_version 110000\n")
+    assert gpu.amd_env(str(tmp_path)) == {}  # gfx1100 has kernels of its own
+    (node / "properties").write_text("vendor_id 4098\ngfx_target_version 110003\n")
+    monkeypatch.setenv("HSA_OVERRIDE_GFX_VERSION", "10.3.0")
+    assert gpu.amd_env(str(tmp_path)) == {}
 
 
 def test_dark_specks_are_dropped_alike_on_the_card_and_only_where_the_picture_is_noisy():
     from stratastills import develop
-    rng = np.random.default_rng(9); img = np.dstack([np.full((H, W), 0.5)] * 3).astype(np.float32) + rng.normal(0, 0.005, (H, W, 3)).astype(np.float32); img[10, 10] -= 0.3; img[30, 40] += 0.3
+
+    rng = np.random.default_rng(9)
+    img = np.dstack([np.full((H, W), 0.5)] * 3).astype(np.float32) + rng.normal(0, 0.005, (H, W, 3)).astype(np.float32)
+    img[10, 10] -= 0.3
+    img[30, 40] += 0.3
     noisy, quiet = np.full((H, W), 8.0, np.float32), np.full((H, W), 1.0, np.float32)
-    a = develop.drop_dark_specks(img, noisy); b = c(gpu.drop_dark_specks(g(img), g(noisy))); assert np.abs(a - b).max() < 1e-4
-    assert abs(a[10, 10, 0] - 0.5) < 0.03 and a[30, 40, 0] > 0.75 and np.array_equal(develop.drop_dark_specks(img, quiet), np.clip(img, 0, 1))      # the dark speck lifted, the bright one kept, nothing done to a quiet picture
+    a = develop.drop_dark_specks(img, noisy)
+    b = c(gpu.drop_dark_specks(g(img), g(noisy)))
+    assert np.abs(a - b).max() < 1e-4
+    assert (
+        abs(a[10, 10, 0] - 0.5) < 0.03
+        and a[30, 40, 0] > 0.75
+        and np.array_equal(develop.drop_dark_specks(img, quiet), np.clip(img, 0, 1))
+    )  # the dark speck lifted, the bright one kept, nothing done to a quiet picture
 
 
-@pytest.mark.parametrize('size', [(216, 300), (180, 252), (330, 460), (240, 336)])
+@pytest.mark.parametrize("size", [(216, 300), (180, 252), (330, 460), (240, 336)])
 def test_lanczos4_resize_is_opencv_inter_lanczos4(size):
-    p = picture(7); ref = cv2.resize(p, (size[1], size[0]), interpolation=cv2.INTER_LANCZOS4); out = c(gpu.resize_cv_lanczos4(g(p), size))      # g() gives (3, H, W), c() brings it back to (H, W, 3)
+    p = picture(7)
+    ref = cv2.resize(p, (size[1], size[0]), interpolation=cv2.INTER_LANCZOS4)
+    out = c(gpu.resize_cv_lanczos4(g(p), size))  # g() gives (3, H, W), c() brings it back to (H, W, 3)
     assert out.shape == ref.shape and np.abs(out - ref).max() < 2e-5
 
 
-@pytest.mark.parametrize('size', [(120, 160), (60, 80), (101, 139), (79, 53)])
+@pytest.mark.parametrize("size", [(120, 160), (60, 80), (101, 139), (79, 53)])
 def test_area_resize_is_opencv_inter_area(size):
-    p = picture(8); ref = cv2.resize(p, (size[1], size[0]), interpolation=cv2.INTER_AREA); out = c(gpu.resize_cv_area(g(p), size))
+    p = picture(8)
+    ref = cv2.resize(p, (size[1], size[0]), interpolation=cv2.INTER_AREA)
+    out = c(gpu.resize_cv_area(g(p), size))
     assert out.shape == ref.shape and np.abs(out - ref).max() < 2e-5
 
 
 def test_the_area_weights_are_built_in_float32_for_the_device():
-    w = gpu._area_weights(250, 60, gpu.dev()); assert w.dtype == gpu.torch_().float32 and abs(float(w.sum(1).mean()) - 1) < 1e-5
+    w = gpu._area_weights(250, 60, gpu.dev())
+    assert w.dtype == gpu.torch_().float32 and abs(float(w.sum(1).mean()) - 1) < 1e-5
 
 
 def test_sharpen_can_leave_its_result_on_the_device():
     from stratastills import detail
-    img = picture(9); f = np.linspace(0.001, 0.5, 64); m = np.clip(1 - 1.4 * f, 0.2, 1)
-    a = detail._sharpen_picture_gpu(img, f, m, 1.0, 1.0); t = detail._sharpen_picture_gpu(g(img), f, m, 1.0, 1.0, keep_on_device=True)
+
+    img = picture(9)
+    f = np.linspace(0.001, 0.5, 64)
+    m = np.clip(1 - 1.4 * f, 0.2, 1)
+    a = detail._sharpen_picture_gpu(img, f, m, 1.0, 1.0)
+    t = detail._sharpen_picture_gpu(g(img), f, m, 1.0, 1.0, keep_on_device=True)
     assert not isinstance(t, np.ndarray) and np.abs(c(t) - a).max() < 1e-6

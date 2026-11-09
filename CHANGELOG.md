@@ -1,0 +1,17 @@
+# Changelog
+
+Newest first, grouped by day. One entry per change, in the same commit or PR as the change.
+
+## 2026-11-09
+
+**Move the Python side to uv, ruff, pyright and the shared strata-python gate (branch `claude/project-thread-iw7199`)**
+Jonathan asked for every Python project to use the same tooling as [python-app-template](https://github.com/jburnhams/python-app-template): uv, ruff with `ruff format`, pyright and ty, one `scripts/check` gate, and dependencies kept current. Behaviour of the program is unchanged.
+
+- `pyproject.toml`, `uv.lock`: **new** `[project]`, a `dev` group (test tooling, plus the database packages, so `tests/unit/db` runs everywhere instead of skipping), `vision` and `research` groups, git sources for `strata-python`, `omarchy-db` and `strata-models-client`, tool configuration (ruff `E,F,I,B,UP,SIM,RUF,C4,PT,S,TID` with `pytest.importorskip` banned, pyright strict ratchet starting at `__init__.py`, ty). `requirements*.txt`: **removed**. torch is deliberately **not locked**: the right build depends on the card (`scripts/setup_torch.py`), so CI installs the CPU build after `uv sync` (`.github/actions/torch-cpu`, **new**) and the lock holds no CUDA wheel.
+- ruff: line length 120 (was 400) and `ruff format` over `src`, `tests` and `scripts` (a mechanical, behaviour-free rewrite of 181 files), import sorting, and the rule set above. B904, B905, RUF059, B023, B007, F841, C416 and a few S rules are ignored for the existing code with a reason in `pyproject.toml`; B023 and F841 are the ones to clean first, they can hide bugs.
+- `pyproject.toml` coverage floor 89 -> 88 (correction to the "only ratchets up" rule, with no test removed): `ruff format` splits the one-line `if x: return y` of the old dense style into two lines, and coverage counts lines, so the same unexecuted branches count twice (3490 -> 5485 statements; 90.9% -> 88.8% on the same 480 tests). Ratchet it up from here.
+- `tests/**`: `pytest.importorskip("torch" | "spandrel" | "omarchy_db" | "pgvector")` replaced by plain imports, so a missing dependency fails the test instead of skipping it (CI installs them). Still skipped, deliberately visible in `-ra`: the CUDA and MPS tests (no such device on a runner) and the denoise tests that need downloaded weights; making those explicit switches is a follow-up.
+- `.github/workflows/unit.yml`, `integration.yml`, `database.yml`: uv; `strata-check --fast` once on Linux 3.13; current action versions. `upgrade-strata-python.yml`: **new**, weekly PR that moves the library pin after the gate. `.github/dependabot.yml`: **new**, daily, minor and patch grouped, no ignores, for Actions, npm (`/web`) and uv.
+- `scripts/check`: **new**. `scripts/setup_env.sh`, `setup_env.ps1`: build the environment with uv (`uv venv --seed`, `uv sync --locked --no-dev --inexact`, then `setup_torch.py`); `--inexact` keeps pip and the torch build that was just installed.
+- `README.md`, `AGENTS.md`, `tests/README.md`, `tests/unit/README.md`, messages in `cli.py` and the store modules: commands for uv.
+- Not done: `strata_python`'s settings, server skeleton and `oslib` are not adopted here (this app has its own settings with source roots and no `oslib`), and the strata-python pytest plugin is not enabled because `tests/conftest.py` already isolates the home, projects folder and network; both are follow-ups.

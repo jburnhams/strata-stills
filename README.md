@@ -5,7 +5,7 @@ Takes raw(ish) still photos (DJI drone DNG + JPEG today; other cameras to follow
 ## Quick start
 
 ```bash
-py -3.13 -m venv .venv && .venv\Scripts\pip install -r requirements.txt   # once (Windows); Python 3.14 also works for the light dependencies
+uv sync                                                                  # once: .venv from uv.lock (scripts/setup_env.* also installs the torch build for the card)
 ./stratastills doctor                                                        # checks the environment
 ./stratastills scan "\\Server\Drone\20250402 - Hazelmere" --info            # the shots in a folder: raw/JPEG pairs, panoramas, videos, gimbal pitch
 ```
@@ -30,10 +30,10 @@ A 48 MP raw is developed, levelled, resized, sharpened and written in about 15 s
 ## Tests
 
 ```bash
-pip install -r requirements-test.txt
-pytest tests/unit --cov                 # unit tests + coverage (CI gates on it)
-pytest tests/integration -n auto        # CLI, pipelines and HTTP API on synthetic photos
-ruff check src tests
+uv sync                                 # .venv from uv.lock, with the test tooling; torch is not locked (scripts/setup_torch.py, or the CPU build as CI does: see pyproject.toml)
+scripts/check                           # the one gate: lockfile, ruff, ruff format, pyright, ty, then the unit tests with coverage (--fast skips the tests, --fix applies ruff)
+uv run pytest tests/unit --cov          # unit tests + coverage (CI gates on it)
+uv run pytest tests/integration -n auto # CLI, pipelines and HTTP API on synthetic photos
 cd web && npm run test:coverage:gate    # web tests against the coverage floors
 ```
 
