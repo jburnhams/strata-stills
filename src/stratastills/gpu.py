@@ -123,7 +123,18 @@ def lease(note, vram_gb=None):
     finally:
         with _lease_lock:
             _lease_held[0] -= 1
-            if _lease_held[0] == 0 and _lease_held[1] is not None: _lease_held[1].release(); _lease_held[1] = None
+            if _lease_held[0] == 0 and _lease_held[1] is not None:
+                _give_back_memory(); _lease_held[1].release(); _lease_held[1] = None
+
+
+def _give_back_memory():
+    """Before the lease goes back: drop the cached denoise nets and return torch's cached blocks to the card, so the memory the lease made room
+    for is really free for strata-models (the server process stays up between batches and would otherwise keep gigabytes reserved)."""
+    with contextlib.suppress(Exception):
+        from stratastills import denoise_ai
+        denoise_ai._models.clear()
+    import gc; gc.collect()
+    with contextlib.suppress(Exception): free()                  # never in the way of giving the lease back
 
 
 def cubic_ok():

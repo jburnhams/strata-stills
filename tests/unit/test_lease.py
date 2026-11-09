@@ -23,6 +23,7 @@ def fake_client(log, running=True):
 
 @pytest.fixture
 def cuda(monkeypatch):
+    monkeypatch.setattr(gpu, '_give_back_memory', gpu._give_back_memory)
     monkeypatch.delenv('STRATASTILLS_LEASE', raising=False)
     monkeypatch.setattr(gpu, 'available', lambda: True)
     monkeypatch.setattr(gpu, 'dev', lambda: types.SimpleNamespace(type='cuda'))
@@ -40,6 +41,15 @@ def test_a_lease_is_taken_once_for_nested_blocks_and_worker_threads(cuda, monkey
         t = threading.Thread(target=worker); t.start(); t.join()                                  # a batch worker thread shares the same lease
         assert seen == [l]
     assert log == [('acquire', 'strata-stills', None, 'arena build'), 'release'] and gpu._lease_held == [0, None]
+
+
+def test_the_card_memory_is_returned_before_the_lease_goes_back(cuda, monkeypatch):
+    from stratastills import denoise_ai
+    log = []; monkeypatch.setitem(sys.modules, 'strata_models_client', fake_client(log))
+    monkeypatch.setattr(gpu, 'free', lambda: log.append('empty_cache'))
+    monkeypatch.setitem(denoise_ai._models, 'scunet', object())
+    with gpu.lease('batch'): pass
+    assert log[1:] == ['empty_cache', 'release'] and 'scunet' not in denoise_ai._models
 
 
 def test_the_lease_is_given_back_when_the_block_fails(cuda, monkeypatch):
