@@ -2,6 +2,7 @@
 reading and developing the source at full size, measuring its real detail (cached in the project), choosing the export size, and writing the JPEG or 16 bit TIFF with the sRGB profile and the camera's EXIF (orientation reset).
 Nothing is ever written into a source folder.
 """
+import threading
 import json, os
 
 import cv2, numpy as np
@@ -79,6 +80,23 @@ def _app_segments(exif, icc):
 NVJPEG_MIN_PIXELS = 10_000_000       # below this Pillow is as fast or faster (measured on the RTX 3060: a 2.6 MP picture 0.06 s with Pillow, 0.23 s with nvJPEG, whose fixed cost is about 0.2 s; 13 MP 0.31 s against 0.25 s, 16 MP 0.47 s against 0.25 s)
 
 
+_nvjpeg_lock = threading.Lock()
+
+
+def _decodes(data, ref=None, tol=12.0):
+    """True when the JPEG bytes decode completely and, given `ref` (a small uint8 (h, w, 3) RGB copy of the picture that was encoded), look like it: a damaged entropy stream often decodes without any error but with grey blocks from the damage onwards, so the decoded picture, reduced to `ref`'s size, must be within `tol` grey levels of it on average (JPEG at q90 differs by 1-2)."""
+    import io
+    from PIL import Image
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            if ref is not None: im.draft('RGB', (max(1, ref.shape[1]), max(1, ref.shape[0])))                    # a reduced decode (DCT scaling): fast, and still reads the whole entropy stream
+            im.load(); got = np.asarray(im.convert('RGB'))
+    except Exception: return False
+    if ref is None: return True
+    got = cv2.resize(got, (ref.shape[1], ref.shape[0]), interpolation=cv2.INTER_AREA)
+    return float(np.abs(got.astype(np.float32) - ref.astype(np.float32)).mean()) <= tol
+
+
 def encode_jpeg_gpu(rgb, quality, exif=None, icc=None):
     """The picture (float 0..1: a (H, W, 3) array, or a (3, H, W) tensor on the device) as JPEG bytes made by the card's encoder (nvJPEG through torchvision: 4:4:4, no Huffman optimisation, so a file about 1 % larger than Pillow's `optimize`, and decoded pixels within 3 levels of Pillow's at the same quality), with the Exif and ICC segments put after the JFIF one. None when the picture is under NVJPEG_MIN_PIXELS, there is no CUDA card, torchvision or nvJPEG, STRATASTILLS_NVJPEG=0, or anything fails: the caller writes with Pillow (the reference)."""
     if os.environ.get('STRATASTILLS_NVJPEG', '1').strip().lower() in ('0', 'false', 'off', 'no'): return None
@@ -88,10 +106,11 @@ def encode_jpeg_gpu(rgb, quality, exif=None, icc=None):
         if shape[0] * shape[1] < NVJPEG_MIN_PIXELS or not gpu.available() or gpu.dev().type != 'cuda': return None
         from torchvision.io import encode_jpeg
         t = gpu.torch_()
-        with gpu.slot():
+        with gpu.slot(), _nvjpeg_lock:                                                                                    # one encode at a time in this process, after the picture's kernels have finished: with other work on the card the encoder returned full-size files whose bitstream was corrupt ('bad Huffman code', 'premature end of data segment'), which decode as flat grey (arena build, 2026-11-09)
             x = rgb if isinstance(rgb, t.Tensor) else gpu.to_gpu(rgb)
-            u8 = (x.clamp(0, 1) * 255 + 0.5).to(t.uint8).contiguous(); data = bytes(encode_jpeg(u8, quality=int(quality)).cpu().numpy().tobytes()); del u8
-        if data[:2] != b'\xff\xd8': return None
+            u8 = (x.clamp(0, 1) * 255 + 0.5).to(t.uint8).contiguous(); t.cuda.synchronize(); data = bytes(encode_jpeg(u8, quality=int(quality)).cpu().numpy().tobytes())
+            ref = t.nn.functional.avg_pool2d(u8[None].float(), 8)[0].round().to(t.uint8).permute(1, 2, 0).cpu().numpy(); del u8           # an 1/8 copy to check the file against
+        if data[:2] != b'\xff\xd8' or not _decodes(data, ref): return None                                                    # a corrupt bitstream is never written: the caller encodes with Pillow instead
         i = 2
         if data[2:4] == b'\xff\xe0': i = 4 + int.from_bytes(data[4:6], 'big')                                              # after the JFIF segment
         return data[:i] + _app_segments(exif, icc) + data[i:]
