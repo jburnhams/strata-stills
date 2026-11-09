@@ -1,0 +1,17 @@
+name: Database
+
+# The photos schema (src/stratastills/db): migrations (dbtool check) and tests/unit/db on SQLite and on a throwaway PostgreSQL 18 with
+# pgvector, through the shared workflow in jburnhams/database. The unit workflow does not install the database packages, so this is where
+# those tests run in CI.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  database:
+    uses: jburnhams/database/.github/workflows/app-db.yml@main
+    with:
+      install: pip install -r requirements-test.txt -r requirements-db.txt
+      tests: tests/unit/db
