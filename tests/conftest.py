@@ -20,6 +20,7 @@ def isolated_env(tmp_path_factory, monkeypatch):
     monkeypatch.setenv('STRATASTILLS_HOME', str(base / 'stratastills-home')); monkeypatch.setenv('STRATASTILLS_PROJECTS', str(base / 'projects'))
     for k in TUNING: monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv('STRATASTILLS_NSFW', '0')                                # the nudity filter needs its model: off here; tests/unit/test_nsfw.py turns it on with a fake detector
+    monkeypatch.setenv('STRATASTILLS_LEASE', '0')                               # never a lease from a strata-models service running on the developer's machine (it can wait behind another app's for an hour); tests/unit/test_lease.py turns it on with a fake client
     monkeypatch.setenv('STRATASTILLS_AI', '0')                                  # `denoise: auto` brings the learned model in on a noisy picture: not in the tests (the weights may not be there); the tests of that turn it on
     return base
 
