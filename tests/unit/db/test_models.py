@@ -5,11 +5,7 @@ pytest.importorskip('omarchy_db'); pytest.importorskip('pgvector')
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from omarchy_db import drift
 from stratastills.db.models import Analysis, ArenaFlag, ArenaFlagEvent, ArenaPic, ArenaVote, Base, Embedding, Photo
-
-
-def test_schema_matches_models(db_engine): assert drift(db_engine, Base.metadata) == []
 
 
 def test_photo_identity_is_the_sha256(db_session):

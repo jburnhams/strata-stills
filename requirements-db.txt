@@ -1,4 +1,4 @@
 # The shared database (src/stratastills/db): optional until the app uses it.
-omarchy-db @ git+ssh://git@github.com/jburnhams/database#subdirectory=python
+omarchy-db @ git+https://github.com/jburnhams/database#subdirectory=python
 pgvector
 psycopg[binary]
