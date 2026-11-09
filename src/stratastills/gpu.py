@@ -244,15 +244,17 @@ _slots_lock = threading.Lock()
 
 
 def _semaphore(tiled=None):
-    """The device's slot semaphore for the mode (whole pictures or tiles; the batch's by default), made once per mode (under a lock: several threads ask at the start of a batch, and two semaphores would make a release go to the wrong one)."""
+    """The device's slot semaphore for the mode (whole pictures or tiles; the batch's by default) and the strata-models lease held (its size caps
+    the slots: a semaphore sized for the whole card before a lease must not be shared by the work done under an 8 GB lease), made once per mode
+    and lease size (under a lock: several threads ask at the start of a batch, and two semaphores would make a release go to the wrong one)."""
     global _slots
-    tiled = _tiled_batch if tiled is None else tiled
+    tiled = _tiled_batch if tiled is None else tiled; key = (tiled, _lease_cap)
     with _slots_lock:
         if _slots is None: _slots = {}
-        if tiled not in _slots:
+        if key not in _slots:
             n = os.environ.get('STRATASTILLS_GPU_SLOTS'); k = max(1, int(n)) if n else tile_slots() if tiled else whole_slots()
-            _slots[tiled] = threading.BoundedSemaphore(k); _slots[tiled].n = k
-        return _slots[tiled]
+            _slots[key] = threading.BoundedSemaphore(k); _slots[key].n = k
+        return _slots[key]
 
 
 def slots():

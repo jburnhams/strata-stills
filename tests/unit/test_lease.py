@@ -88,3 +88,13 @@ def test_a_sized_lease_caps_what_this_process_plans_with(cuda, monkeypatch):
     assert gpu._cuda_total() == 11e9
     gpu._lease_cap = 4e9; assert gpu._cuda_total() == 4e9
     gpu._lease_cap = None
+
+
+def test_slots_made_before_a_lease_are_not_shared_by_work_under_it(cuda, monkeypatch):
+    monkeypatch.setattr(gpu, '_slots', None); monkeypatch.delenv('STRATASTILLS_GPU_SLOTS', raising=False)
+    t = types.SimpleNamespace(cuda=types.SimpleNamespace(mem_get_info=lambda: (24e9, 24e9), memory_reserved=lambda: 0))
+    monkeypatch.setattr(gpu, 'torch_', lambda: t); monkeypatch.setattr(gpu, '_tiled_batch', False)
+    assert gpu.slots() == 3                                                                   # 24 GB: three whole pictures
+    log = []; monkeypatch.setitem(sys.modules, 'strata_models_client', fake_client(log))
+    with gpu.lease('full-size view'): assert gpu.slots() == 1                                 # under the 8 GB lease: one
+    assert gpu.slots() == 3
