@@ -92,7 +92,10 @@ def main():
 
     def produce(chunk):
         """The neutral develop of a chunk of pictures (GPU-heavy): [(item, developed pictures, exif)], one per picture."""
-        raws = [rows[idx[i]]['raw'] for i, _, _ in chunk]; dev = LRR.neutral(raws, work, say, a.rebuild); ex = D.exif_of(raws); return [(item, dev, ex) for item in chunk]
+        raws = [rows[idx[i]]['raw'] for i, _, _ in chunk]; dev = LRR.neutral(raws, work, say, a.rebuild, retry_now=a.serial or not deferring[0]); ex = D.exif_of(raws); return [(item, dev, ex) for item in chunk]          # in a parallel build a blank develop is not retried beside the other workers but deferred to a pass on its own (below)
+
+    deferring = [True]                                                                                                                        # False during the pass on its own: a develop still blank there is retried at once
+    written = set()                                                                                                                            # (picture, version) actually written in this run
 
     def make(job):
         """The versions of one picture (CPU-heavy: registration, the look, JPEG)."""
@@ -109,7 +112,7 @@ def main():
         d = os.path.join(root, 'img', sid); os.makedirs(d, exist_ok=True); entry = pool.get(sid, {})
         for n in need:
             img = AV.VARIANTS[n](c); assert img.shape[:2] == fin.shape[:2], f'{sid}/{n}: {img.shape[:2]} is not the final\'s {fin.shape[:2]}: all versions must be on the same crop'; f = os.path.join(d, f'{n}.jpg'); tmp = os.path.join(d, f'{n}.tmp.jpg'); cv2.imwrite(tmp, img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q]); os.replace(tmp, f); entry[n] = dict(file=f'img/{sid}/{n}.jpg', hash=hashlib.sha1(open(f, 'rb').read()).hexdigest()[:16], key=keys[n])
-        with lock: pool[sid] = entry; save_json(pf, pool); done = len(pool)
+        with lock: pool[sid] = entry; save_json(pf, pool); done = len(pool); written.update((sid, n) for n in need)
         say(f'  {sid}: {", ".join(need)} in {time.time() - t0:.0f} s ({done} pictures)')
 
     gw, cw = AS.auto_workers(gpu_slots=_gpu_slots()); gw = a.gpu_workers if a.gpu_workers is not None else gw; cw = a.cpu_workers if a.cpu_workers is not None else cw
@@ -117,10 +120,18 @@ def main():
     if not a.serial and cw + gw > 1 and cvt > 0: cv2.setNumThreads(cvt)                                                                                           # each worker's cv2 calls use two threads, not all the cores
     chunks = [todo[s:s + a.chunk] for s in range(0, len(todo), a.chunk)]; say(f'{len(chunks)} chunks of up to {a.chunk}; ' + ('serial' if a.serial else f'{gw} GPU + {cw} CPU workers'))
     def failed(kind, what, e): say(f'  {kind} FAILED ({type(e).__name__}: {e}): ' + (', '.join(sid for _, sid, _ in what) if kind == 'chunk' else what[0][1]))
-    try: st = AS.run(chunks, produce, make, gpu_workers=gw, cpu_workers=cw, serial=a.serial, on_error=failed)
+    try:
+        st = AS.run(chunks, produce, make, gpu_workers=gw, cpu_workers=cw, serial=a.serial, on_error=failed)
+        again = [t for t in todo if rows[idx[t[0]]]['raw'] in set(LRR.deferred)]
+        if again:                                                                                                                                 # the deferred blank develops, now with nothing else on the card
+            say(f'{len(again)} pictures whose develop came out blank: making them again on their own'); LRR.deferred.clear()
+            deferring[0] = False; st2 = AS.run([again[s:s + a.chunk] for s in range(0, len(again), a.chunk)], produce, make, serial=True, on_error=failed); st['items'] += st2['items']
     finally: shutil.rmtree(work, ignore_errors=True)
     say(f'{st["items"]} pictures made in {st["seconds"]:.0f} s' + (f'; FAILED: {st["failed_chunks"]} chunks, {st["failed_items"]} pictures' if st['failed_chunks'] or st['failed_items'] else ''))
-    say(f'pool: {len(pool)} pictures'); return 0
+    from stratastills import images
+    asked = {(sid, n) for _, sid, need in todo for n in need}; bad = sorted((asked - written) | {(sid, n) for sid, n in written if images.readable_jpeg(os.path.join(root, pool[sid][n]['file'])) is None})                 # every requested version must have been written in this run, decode and not be one flat value          # every picture made in this run must decode and must not be one flat value
+    if bad: say(f'{len(bad)} versions missing, blank or unreadable: ' + ', '.join(f'{s}/{n}' for s, n in bad[:20]) + '\nremake them with: --serial --rebuild --only ' + ' '.join(f'--pic {s}' for s in sorted({s for s, _ in bad})))
+    say(f'pool: {len(pool)} pictures'); return 1 if bad else 0
 
 
 if __name__ == '__main__':

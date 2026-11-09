@@ -63,3 +63,13 @@ def test_the_size_of_a_dng_is_its_biggest_level_and_is_remembered_per_file_state
 def test_the_size_of_an_ordinary_picture_comes_from_pillow(tmp_path):
     p = str(tmp_path / 'p.png'); cv2.imwrite(p, np.zeros((7, 11, 3), np.uint8))
     assert images.dims(p) == (11, 7)
+
+
+def test_readable_jpeg_refuses_missing_truncated_and_blank_pictures(tmp_path):
+    import cv2, numpy as np
+    from stratastills import images
+    good = np.tile(np.linspace(0, 255, 64, dtype=np.uint8)[None, :, None], (48, 1, 3)); g = tmp_path / 'good.jpg'; cv2.imwrite(str(g), good)
+    assert images.readable_jpeg(str(g)) is not None and images.readable_jpeg(str(tmp_path / 'missing.jpg')) is None
+    flat = tmp_path / 'flat.jpg'; cv2.imwrite(str(flat), np.full((48, 64, 3), 167, np.uint8)); assert images.readable_jpeg(str(flat)) is None
+    cut = tmp_path / 'cut.jpg'; cut.write_bytes(g.read_bytes()[: len(g.read_bytes()) // 2]); assert images.readable_jpeg(str(cut)) is None
+    dark = tmp_path / 'dark.jpg'; d = np.full((48, 64, 3), 10, np.uint8); d[::4, ::4] = 30; cv2.imwrite(str(dark), d); assert images.readable_jpeg(str(dark)) is not None

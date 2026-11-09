@@ -123,3 +123,13 @@ def working(project_dir, path, px=2048):
         im = cv2.imread(p)
         if im is not None: return im
     im = load(path, px); write_jpeg(p, im); return im
+
+
+def readable_jpeg(path, min_std=0.5):
+    """The picture at `path` as BGR, or None when it is missing, truncated (Pillow refuses to finish decoding it) or blank (one flat value: the grey picture's std under `min_std`; a real night picture still has a few levels). Used before a develop is cached or served, so a bad one (two GPU workers at once wrote blank neutral pictures, 2026-11-09) is made again instead of being kept."""
+    from PIL import Image
+    try:
+        with Image.open(path) as im: im.load()
+    except Exception: return None
+    im = cv2.imread(path)
+    return im if im is not None and float(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).std()) >= min_std else None

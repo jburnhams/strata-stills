@@ -2,10 +2,10 @@
   python scripts/build_lr_report.py [--n 30] [--out out/report/auto] [--stems DSC01234,...] [--seed 1]
 Served by the app at /report/auto/, a peer of the neutral report (/report/neutral/, build_report.py). The automatic processing that matches the person's edits; the Lightroom export is the reference it learns from, and the report will grow with the auto-process as it supersedes this first model. PRIVATE: the pictures are the person's own, people included; never make this public.
 Needs candidates/personal/ (scripts/lr_dataset.py pairs, catalogue, features)."""
-import argparse, hashlib, html, json, os, shutil, subprocess, sys, tempfile, time
+import argparse, hashlib, html, json, os, shutil, subprocess, sys, tempfile, threading, time
 import cv2, numpy as np
 sys.path.insert(0, os.path.dirname(__file__)); sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-from stratastills import framing as FR
+from stratastills import framing as FR, images
 import build_report as BR, lr_dataset as D, lr_look as LK, lr_tmodel as TM, lr_ftarget as FT
 
 ROOT = BR.ROOT
@@ -44,12 +44,28 @@ def pick(cats, test, n, rng, X, names):
 def i_shoot(i): return SHOOTS[i]
 
 
-def neutral(raws, work, say, rebuild=False):
+deferred = []                                                                                                                                  # raws whose develop came out blank while other GPU work ran beside it: the caller develops them again once alone (build_arena does, after its parallel pass)
+_alone = threading.Lock()                                                                                                                         # a retried develop runs with no other retry beside it
+
+
+def readable(path, min_std=0.5): return images.readable_jpeg(path, min_std)                                                       # stratastills.images: None for a missing, truncated or blank picture
+
+
+
+def _develop_alone(raw, work):
+    """The 'best' neutral of one raw in a project of its own (the retry of a bad develop) -> its generate() record."""
+    from stratastills import projects as P, pipeline as PL
+    src = os.path.join(work, 'retry-%d' % time.time_ns()); os.makedirs(src); os.symlink(raw, os.path.join(src, os.path.basename(raw)))
+    pid = P.create('lr-retry-%d' % time.time_ns(), [src])['id']; it = P.source_items(pid, P.source_id(P.load(pid)['sources'][0]['path']))[0]
+    return PL.generate(pid, it['id'], preset='best', options=dict(quality=95, level=False, size='native'), progress=lambda m: None)
+
+
+def neutral(raws, work, say, rebuild=False, retry_now=True):
     """Our pipeline's 'best' preset, without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
     cdir = os.path.join(BR.ROOT, 'out', 'cache', 'report-auto-neutral'); os.makedirs(cdir, exist_ok=True); out = {}; todo = []
     key = lambda r: hashlib.sha1(json.dumps([BR.CACHE_VERSION, BR.code_hash(), r, os.path.getsize(r), int(os.path.getmtime(r))]).encode()).hexdigest()
     for r in raws:
-        base = os.path.join(cdir, key(r)); im = None if rebuild or not os.path.exists(base + '.json') else cv2.imread(base + '.jpg')
+        base = os.path.join(cdir, key(r)); im = None if rebuild or not os.path.exists(base + '.json') else readable(base + '.jpg')
         if im is not None: out[r] = (im, json.load(open(base + '.json', encoding='utf-8')))
         else: todo.append(r)
     say(f'neutral pictures: {len(out)} cached, {len(todo)} to make')
@@ -66,7 +82,21 @@ def neutral(raws, work, say, rebuild=False):
         t0 = time.time()
         try: rec = PL.generate(pid, it['id'], preset='best', options=dict(quality=95, level=False, size='native'), progress=lambda m: None)
         except Exception as e: say(f'  {os.path.basename(r)}: FAILED ({type(e).__name__}: {e})'); continue
-        out[r] = (cv2.imread(rec['file']), rec); base = os.path.join(cdir, key(r)); shutil.copyfile(rec['file'], base + '.jpg'); json.dump(rec, open(base + '.json', 'w', encoding='utf-8'), default=str); say(f'  {os.path.basename(r)}: neutral in {time.time() - t0:.0f} s')
+        im = readable(rec['file'])
+        if im is None:                                                                                                                            # a blank or truncated develop (seen with two arena workers on the card at once): once more on its own, and never cached when still bad
+            say(f'  {os.path.basename(r)}: blank or unreadable develop' + (', making it again on its own' if retry_now else ''))
+            try:                                                                                                                                  # keep the evidence (picture and record: which stages ran on the card) for the open bug
+                keep = os.path.join(os.path.expanduser('~/work/strata-stills/blank-develops'), '%d_%s' % (time.time_ns(), os.path.basename(r))); os.makedirs(keep, exist_ok=True)
+                if os.path.exists(rec['file']): shutil.copyfile(rec['file'], os.path.join(keep, 'develop.jpg'))
+                json.dump(dict(rec, env={k: v for k, v in os.environ.items() if k.startswith('STRATASTILLS')}), open(os.path.join(keep, 'record.json'), 'w'), default=str)
+            except Exception: pass
+            if not retry_now: deferred.append(r); say(f'  {os.path.basename(r)}: deferred until the parallel work is done'); continue
+            with _alone:                                                                                                                          # a fresh one-picture project, so nothing of the bad run is reused
+                try: rec = _develop_alone(r, work)
+                except Exception as e: say(f'  {os.path.basename(r)}: FAILED ({type(e).__name__}: {e})'); continue
+            im = readable(rec['file'])
+            if im is None: say(f'  {os.path.basename(r)}: FAILED (blank develop twice; not cached)'); continue
+        out[r] = (im, rec); base = os.path.join(cdir, key(r)); tmp = base + '.tmp.jpg'; shutil.copyfile(rec['file'], tmp); os.replace(tmp, base + '.jpg'); json.dump(rec, open(base + '.json', 'w', encoding='utf-8'), default=str); say(f'  {os.path.basename(r)}: neutral in {time.time() - t0:.0f} s')
     return out
 
 
