@@ -37,7 +37,10 @@ def status(pid, path):
 def _build(pid, path, f):
     try:
         if images.is_camera_raw(path):
-            try: rgb = develop.develop(path, half=False); arr = np.ascontiguousarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)[:, :, ::-1])
+            from stratastills import gpu
+            try:
+                with gpu.lease('full-size view'): rgb = develop.develop(path, half=False)
+                arr = np.ascontiguousarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)[:, :, ::-1])
             except Exception: arr = images.load(path, 100000)                                    # a Lightroom linear DNG, or a raw LibRaw cannot develop: its biggest embedded level
         else: arr = images.load(path, 100000)
         tmp = f + '.tmp.npy'; np.save(tmp, arr); os.replace(tmp, f)

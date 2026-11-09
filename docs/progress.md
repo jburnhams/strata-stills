@@ -1,5 +1,8 @@
 # Progress log
 
+## 2026-11-09: the GPU lease (strata-models)
+Branch `strata-models-lease`. strata-models now owns the RTX 3060 for model work on omarchy; `gpu.lease(note)` asks it for the whole card for a block and gives it back at the end, so nothing else runs on the GPU meanwhile (the cause of the grey, truncated arena pictures of 2026-11-08). Taken around: a batch of pictures (`pipeline.run_batch`'s pool), a full-size develop (`fullres`), and the whole of `scripts/build_arena.py`. Blocks nest and the batch's worker threads share one lease. It steps aside, and the block runs as before, without CUDA, without `strata-models-client` installed, when the service is not running, or with `STRATASTILLS_LEASE=0`. Interactive single develops in the web app do not take it (short, and a held arena lease would make them wait an hour). Tests: `tests/unit/test_lease.py`.
+
 ## 2026-10-22: scaffold
 
 - Mirrored strata-360's layout, tooling (pytest/ruff/coverage floor, GitHub Actions unit workflow, `stratastills.cmd` launcher) and dependency choices. Only Python 3.14 is installed on this machine; the light dependencies (numpy 2.5, scipy, OpenCV 5.0, Pillow, rawpy 0.27) install and pass on it. strata-360 pins 3.13 because of torch and the model packages: install 3.13 (`winget install Python.Python.3.13`) before adding the detector stages.

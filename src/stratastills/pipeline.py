@@ -437,5 +437,5 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
         else:
             with lock: done[0] += 1
         if progress: progress(done[0] + len(failed), total, f'{short} done')
-    with resources.batch(n), (gpu.batch(n) if gpu.available() else contextlib.nullcontext()), ThreadPoolExecutor(n) as ex: list(ex.map(lambda a: work(*a), todo))
+    with gpu.lease(f'{total} pictures') if todo else contextlib.nullcontext(), resources.batch(n), (gpu.batch(n) if gpu.available() else contextlib.nullcontext()), ThreadPoolExecutor(n) as ex: list(ex.map(lambda a: work(*a), todo))
     return dict(done=done[0], failed=failed, total=total, workers=n)
