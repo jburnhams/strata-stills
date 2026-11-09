@@ -96,6 +96,47 @@ def available():
     return _device is not False and _device.type in ('cuda', 'mps')
 
 
+_lease_lock = threading.Lock()
+_lease_held = [0, None]          # how many blocks in this process hold it, the strata-models lease itself
+
+
+@contextlib.contextmanager
+def lease(note, vram_gb=None):
+    """The GPU for this block, lent by strata-models (the service that owns the card on omarchy and runs every app's model jobs): it waits until the
+    card is free, frees the memory its models hold, and runs nothing else until the block ends. Without it another program on the card made the
+    arena build write grey, truncated pictures (2026-11-08). Blocks nest and threads share one lease (the batch's workers are all this app).
+    No CUDA device, no client installed, the service not running, or STRATASTILLS_LEASE=0: the block simply runs."""
+    if os.environ.get('STRATASTILLS_LEASE') == '0' or not available() or dev().type != 'cuda':
+        yield None; return
+    try: import strata_models_client as sm
+    except ImportError:
+        yield None; return
+    with _lease_lock:
+        if _lease_held[0] == 0:
+            try:
+                if not sm.available(): raise sm.Unavailable('not running')
+                print(f'waiting for the GPU (strata-models lease: {note})', flush=True)
+                _lease_held[1] = sm.acquire('strata-stills', vram_gb=vram_gb, note=note)
+            except sm.Unavailable: _lease_held[1] = None
+        _lease_held[0] += 1
+    try: yield _lease_held[1]
+    finally:
+        with _lease_lock:
+            _lease_held[0] -= 1
+            if _lease_held[0] == 0 and _lease_held[1] is not None:
+                _give_back_memory(); _lease_held[1].release(); _lease_held[1] = None
+
+
+def _give_back_memory():
+    """Before the lease goes back: drop the cached denoise nets and return torch's cached blocks to the card, so the memory the lease made room
+    for is really free for strata-models (the server process stays up between batches and would otherwise keep gigabytes reserved)."""
+    with contextlib.suppress(Exception):
+        from stratastills import denoise_ai
+        denoise_ai._models.clear()
+    import gc; gc.collect()
+    with contextlib.suppress(Exception): free()                  # never in the way of giving the lease back
+
+
 def cubic_ok():
     """Whether grid_sample does bicubic on this device (CUDA and CPU yes; Metal has lacked it): probed once with a tiny picture; the lens warp falls back to OpenCV on the CPU if not."""
     global _cubic_ok

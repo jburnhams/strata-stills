@@ -14,3 +14,4 @@ tifffile                       # Lightroom linear DNG and the 16 bit TIFF export
 imagecodecs                    # JPEG XL inside those DNGs
 nudenet                        # the nudity filter (nsfw.py, on by default): local ONNX detector, weights inside the package
 onnxruntime                    # runs it
+strata-models-client @ git+https://github.com/jburnhams/strata-models#subdirectory=client   # gpu.lease: hold the GPU through strata-models (omarchy) during batches; optional, standard library only

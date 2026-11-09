@@ -123,4 +123,6 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    from stratastills import gpu
+    with gpu.lease('arena build'): code = main()                    # the whole build holds the GPU: another program on the card made it write grey, truncated pictures
+    sys.exit(code)
