@@ -38,4 +38,10 @@ def auto5(c):                                                                   
     return LK.apply_look(c.neu, c.pred, dict(zip(c.names, c.x)), colour=NM.predict_params(c.neu, c.x), face=c.face)[0]
 
 
-VARIANTS = {'lightroom': lightroom, 'camera': camera, 'neutral': neutral, 'auto1': auto1, 'auto2': auto2, 'auto3': auto3, 'auto4': auto4, 'auto5': auto5}
+def auto6(c):                                                                                                                                     # auto4 (the network's whole transform) then face first (scripts/lr_face_first.py): the main real face's skin moved toward the predicted skin of the final, half of it on the whole picture and most of the rest on the face alone (feathered)
+    import lr_face_first as FF
+    out = auto4(c)
+    return FF.apply(out, c.neu, c.x, c.face2)[0] if getattr(c, 'face2', None) is not None else out
+
+
+VARIANTS = {'lightroom': lightroom, 'camera': camera, 'neutral': neutral, 'auto1': auto1, 'auto2': auto2, 'auto3': auto3, 'auto4': auto4, 'auto5': auto5, 'auto6': auto6}
