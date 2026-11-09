@@ -32,6 +32,12 @@ def dji_fields(xmp):
     return out
 
 
+def dji_for(path):
+    """`dji_fields` of the file at `path`, from the files (the XMP in its head, as ever) or, switched on in settings, from the database (meta_store.py)."""
+    from stratastills import meta_store
+    return meta_store.get().dji(path)
+
+
 def parse_time(s):
     """A datetime from an XMP / EXIF time stamp ('2025-04-02T19:01:11+01:00', '2025-04-02T19:01:30.1+01:00' or '2025:04:02 19:01:11'); None when unreadable. Timezone-aware when it carries an offset."""
     if not s: return None

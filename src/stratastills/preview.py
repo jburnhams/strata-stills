@@ -16,7 +16,7 @@ def _ctx(item):
     """What the transforms need to know about the shot: is it a straight-down one (from the DJI gimbal pitch in the XMP of a JPEG that belongs to it)."""
     for v in item['variants']:
         if v['ext'] in ('.jpg', '.jpeg'):
-            d = meta.dji_fields(meta.read_xmp(v['path']))
+            d = meta.dji_for(v['path'])
             if d: return dict(nadir=meta.is_nadir(d), pitch=d.get('GimbalPitchDegree'))
     return dict(nadir=False, pitch=None)
 
