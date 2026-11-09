@@ -5,7 +5,9 @@ import cv2
 import numpy as np
 
 from stratastills import develop as D
-from stratastills.gpu_tiled import _opcodes, boxes
+from stratastills.gpu_tiled import Unsupported, _opcodes, boxes
+
+__all__ = ["Unsupported"]  # develop.py catches cpu_tiled.Unsupported: the same exception as gpu_tiled's, re-exported
 
 HALO = 128
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
