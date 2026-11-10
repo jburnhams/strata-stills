@@ -115,3 +115,20 @@ def test_readable_jpeg_refuses_missing_truncated_and_blank_pictures(tmp_path):
     d[::4, ::4] = 30
     cv2.imwrite(str(dark), d)
     assert images.readable_jpeg(str(dark)) is not None
+
+
+def test_same_scene_and_noise_blown(tmp_path):
+    import cv2
+    import numpy as np
+
+    from stratastills import images
+
+    yy, xx = np.mgrid[0:96, 0:128]
+    ref = np.dstack([(xx * 2 + yy).astype(np.uint8)] * 3)
+    stripes = np.dstack([((yy // 6 % 2) * 200).astype(np.uint8)] * 3)
+    assert images.same_scene(np.clip(ref * 0.8 + 10, 0, 255).astype(np.uint8), ref)
+    assert not images.same_scene(stripes, ref)
+    assert not images.same_scene(np.full_like(ref, 90), ref)
+    static = np.random.default_rng(0).integers(0, 255, ref.shape).astype(np.uint8)
+    assert images.noise_blown(static, ref) and not images.noise_blown(ref, ref)
+    assert cv2 is not None
