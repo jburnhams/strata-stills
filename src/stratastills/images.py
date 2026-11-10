@@ -189,6 +189,10 @@ def same_scene(im, ref, min_corr=0.3):
 
 
 def noise_blown(out, base, factor=4.0):
-    """True when `out` has far more fine detail (Laplacian std) than the picture it was made from: a transform that amplified noise to static (2015-07-17_DSC04869 auto4)."""
-    lap = lambda im: float(cv2.Laplacian(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY), cv2.CV_32F).std())
-    return lap(out) > factor * max(lap(base), 2.0)
+    """True when `out` has far more fine detail than the picture it was made from, relative to its own contrast (Laplacian std over grey std, so a plain exposure lift is not flagged): a transform that amplified noise to static (2015-07-17_DSC04869 auto4)."""
+
+    def rel(im):
+        g = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(g, cv2.CV_32F).std()) / max(float(g.std()), 8.0)
+
+    return rel(out) > factor * max(rel(base), 0.02)

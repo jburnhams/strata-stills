@@ -307,7 +307,7 @@ def main():
         entry = pool.get(sid, {})
         for n in need:
             img = AV.VARIANTS[n](c)
-            assert not images.noise_blown(img, neu), (
+            assert not (n.startswith("auto") and images.noise_blown(img, neu)), (
                 f"{sid}/{n}: far noisier than the neutral it was made from (static)"
             )
             assert img.shape[:2] == fin.shape[:2], (

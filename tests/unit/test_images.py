@@ -131,4 +131,6 @@ def test_same_scene_and_noise_blown(tmp_path):
     assert not images.same_scene(np.full_like(ref, 90), ref)
     static = np.random.default_rng(0).integers(0, 255, ref.shape).astype(np.uint8)
     assert images.noise_blown(static, ref) and not images.noise_blown(ref, ref)
+    assert not images.noise_blown(np.clip(ref * 0.2, 0, 255).astype(np.uint8), ref)
+    assert not images.noise_blown(ref, np.clip(ref * 0.2, 0, 255).astype(np.uint8))
     assert cv2 is not None
