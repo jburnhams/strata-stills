@@ -33,6 +33,7 @@ Not gated. `pytest tests/integration -n auto --cov --cov-fail-under=0 --cov-repo
 | `cli.py` | `test_cli.py`: doctor, scan (shots, kinds, drone metadata), project and source commands, settings, a real process |
 | `pipeline.py`, `develop.py`, `lineardng.py`, `inputs.py`, `match.py` | `test_pipeline_end_to_end.py`: a JPEG shot, a levelled oblique shot, a linear DNG panorama, rules, tiled against whole on both code paths |
 | `server/app.py` | `test_server_api.py`: browse, generate, download, a rule, pipeline and setting updates, API edge cases, index/reports, missing items, apply/generate failure jobs, missing sources |
+| `arena.py`, `server/app.py` | `test_arena.py`: arena workflows, pool sets, voting, priority reading, alerts, and ratings math |
 | `projects.py` | `test_projects.py`: UNC path handling, source folder management, missing/invalid project IDs, depth limit |
 | `ingest.py` | `test_ingest.py`: folder scanning, finding and grouping items, handling derived files and panos |
 | `export.py`, `fullres.py` | `test_export.py`: sizing, cache reading/writing, writing JPEGs and TIFFs with EXIF, background full resolution image rendering |
