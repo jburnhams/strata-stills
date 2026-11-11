@@ -778,12 +778,9 @@ def _unbiased_dark(path, r, kw, user_black):
         any_ = (a64 > 0) & (
             b64 < 65535
         )  # pixels neither decode clipped: they map through the same straight line, however dark the frame
-        if m.sum() > 200:
-            k = np.polyfit(a64[m], b64[m], 1)[
-                0
-            ]  # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
-        else:
-            k = k_exact
+        k = (
+            np.polyfit(a64[m], b64[m], 1)[0] if m.sum() > 200 else k_exact
+        )  # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
         if lo.sum() > 200:
             o = float(
                 np.median(b64[lo] - k * a64[lo])
