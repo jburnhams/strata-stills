@@ -18,7 +18,7 @@ import numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 17
+VERSION = 18  # 18: a frame too dark to fit the pedestal falls back to LibRaw's own decode (_unbiased_dark), so cached renders of such frames must be remade
 D65 = np.array([0.95047, 1.0, 1.08883])
 D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array(
