@@ -18,7 +18,7 @@ import numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 17
+VERSION = 18  # 18: the pedestal offset of a near-black frame is read off the decodes, not left at 0 (green starfields)
 D65 = np.array([0.95047, 1.0, 1.08883])
 D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array(
