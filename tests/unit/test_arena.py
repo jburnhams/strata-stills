@@ -127,3 +127,21 @@ def test_load_priorities_reads_the_file_or_says_none(tmp_path):
     assert arena.load_priorities(str(tmp_path)) == {"interest": {"auto6": 2}}
     (tmp_path / "priorities.json").write_text("[1]")
     assert arena.load_priorities(str(tmp_path)) is None
+
+
+def test_current_votes_keep_votes_on_the_pictures_shown_now_or_judged_the_same():
+    pool = {
+        "p": {
+            "x": dict(file="x", hash="x2", same=["x1"], changed=50),
+            "y": dict(file="y", hash="y1"),
+        }
+    }
+    vs = [
+        dict(pic="p", a="x", b="y", winner="a", t=10, ha="x1", hb="y1"),  # an earlier render judged the same
+        dict(pic="p", a="x", b="y", winner="a", t=60, ha="x0", hb="y1"),  # a render from before a real change
+        dict(pic="p", a="y", b="x", winner="a", t=60, ha="y1", hb="x2"),  # the current pictures
+        dict(pic="p", a="x", b="y", winner="b", t=10),  # no hashes, cast before the last real change
+        dict(pic="p", a="x", b="y", winner="b", t=70),  # no hashes, cast after it
+        dict(pic="gone", a="x", b="y", winner="b", t=1, ha="?", hb="?"),  # a picture no longer in the pool
+    ]
+    assert [vs.index(v) for v in arena.current_votes(vs, pool)] == [0, 2, 4, 5]

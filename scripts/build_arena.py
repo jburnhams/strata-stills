@@ -28,6 +28,7 @@ import lr_ftarget as FT
 import lr_look as LK
 import lr_tmodel as TM
 
+from stratastills import arena_revision as AREV
 from stratastills import images, settings
 
 DISPLAY = 1400
@@ -316,10 +317,20 @@ def main():
             f = os.path.join(d, f"{n}.jpg")
             tmp = os.path.join(d, f"{n}.tmp.jpg")
             cv2.imwrite(tmp, img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
+            h = hashlib.sha1(open(tmp, "rb").read()).hexdigest()[:16]
+            prev = entry.get(n)
+            share = (
+                AREV.change(cv2.imread(f) if os.path.isfile(f) else None, cv2.imread(tmp))
+                if prev and prev.get("hash") != h
+                else 0.0
+            )  # the old picture is read before it is replaced: the size of the change decides whether its votes keep counting
             os.replace(tmp, f)
-            entry[n] = dict(
-                file=f"img/{sid}/{n}.jpg", hash=hashlib.sha1(open(f, "rb").read()).hexdigest()[:16], key=keys[n]
-            )
+            entry[n] = dict(file=f"img/{sid}/{n}.jpg", hash=h, key=keys[n], **AREV.revise(prev, h, share, time.time()))
+            if prev and prev.get("hash") != h:
+                say(
+                    f"  {sid}/{n}: {share:.1%} of the picture changed: "
+                    + ("votes kept" if share <= AREV.KEEP else "earlier votes no longer count")
+                )
         with lock:
             pool[sid] = entry
             save_json(pf, pool)

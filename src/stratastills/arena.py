@@ -2,8 +2,10 @@
 
 Pure logic (no server, no images): pair choice, Elo and Bradley-Terry ratings. The server (server/app.py) holds the pool and the votes (`out/arena/`), scripts/build_arena.py makes the pictures.
 
-Pool: {picture: {variant: {'file': relative path, 'hash': str}}}; a picture is offered only with the variants it has, and two variants whose pictures are identical (same hash) are never paired (a picture with no face gets the same pixels from two variants that differ only for faces).
-Vote: {'pic', 'a', 'b' (variants as shown left and right), 'winner': 'a' | 'b' | 'tie', 't' (unix time), 'ms' (time to decide)}."""
+Pool: {picture: {variant: {'file': relative path, 'hash': str, 'same'?: [earlier hashes], 'changed'?: unix time, 'change'?: share}}}; a picture is offered only with the variants it has, and two variants whose pictures are identical (same hash) are never paired (a picture with no face gets the same pixels from two variants that differ only for faces).
+Vote: {'pic', 'a', 'b' (variants as shown left and right), 'winner': 'a' | 'b' | 'tie', 't' (unix time), 'ms' (time to decide), 'ha', 'hb' (the hashes of the two pictures shown; votes before 2026-11-11 have none)}.
+
+Revisions: a variant remade by new code gets a new picture. scripts/build_arena.py measures how much it changed (`arena_revision.change`: the share of pixels a person could tell apart) and, when that is small, lists the old hash in the entry's `same`, so the votes on the old picture keep counting; otherwise `same` starts empty and `changed` is the time of the remake. `current_votes` keeps only the votes on pictures still shown (or judged the same), and every rating and the pair choice use those, so a remade variant is rated on what it looks like now."""
 
 import json
 import math
@@ -66,6 +68,25 @@ def alerts(events, pool=None):
 
 def open_alerts(events):
     return {(a["pic"], a["variant"]) for a in alerts(events) if not a["resolved"]}
+
+
+def counts_now(entry, h, t):
+    """Whether a vote on the picture with hash `h` (None for a vote from before hashes were recorded, cast at time `t`) still counts for this pool entry: the hash is the current one or one judged the same; an unhashed vote counts when it is not older than the entry's last real change. No entry (a picture or variant gone from the pool) keeps the vote: nothing says it changed."""
+    if not entry:
+        return True
+    if h is not None:
+        return h == entry.get("hash") or h in (entry.get("same") or ())
+    return t >= (entry.get("changed") or 0)
+
+
+def current_votes(votes, pool):
+    """The votes that are about the pictures the pool shows now (see `counts_now`), in the same order."""
+    return [
+        v
+        for v in votes
+        if counts_now((pool.get(v["pic"]) or {}).get(v["a"]), v.get("ha"), v.get("t", 0))
+        and counts_now((pool.get(v["pic"]) or {}).get(v["b"]), v.get("hb"), v.get("t", 0))
+    ]
 
 
 def score(v):

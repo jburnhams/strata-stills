@@ -29,7 +29,7 @@ def arena(tmp_path, monkeypatch):
     for n in ("lr", "auto1"):
         (a / "img" / f"{n}.jpg").write_bytes(b"jpg-" + n.encode())
     (a / "pool.json").write_text(
-        '{"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "b", "key": "k1"}}}'
+        '{"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "b", "key": "k1", "same": ["b0"], "changed": 9.5, "change": 0.01}}}'
     )
     return a
 
@@ -47,14 +47,16 @@ def store(request, arena, db_url, db_session, monkeypatch):
 
 def test_the_store_contract(store):
     assert (
-        store.pool()["p1"]["auto1"] == {"file": "img/auto1.jpg", "hash": "b", "key": "k1"}
+        store.pool()["p1"]["auto1"]
+        == {"file": "img/auto1.jpg", "hash": "b", "key": "k1", "same": ["b0"], "changed": 9.5, "change": 0.01}
         and store.retired() == set()
         and store.votes() == []
         and store.undo() is None
     )
-    store.add_vote(dict(pic="p1", a="lr", b="auto1", winner="a", t=1.5, ms=7))
+    store.add_vote(dict(pic="p1", a="lr", b="auto1", winner="a", t=1.5, ms=7, ha="a", hb="b"))
     store.add_vote(dict(pic="p1", a="auto1", b="lr", winner="tie", t=2.5, ms=8))
     assert [v["winner"] for v in store.votes()] == ["a", "tie"] and store.votes()[0]["ms"] == 7
+    assert (store.votes()[0]["ha"], store.votes()[0]["hb"]) == ("a", "b") and "ha" not in store.votes()[1]
     gone, left = store.undo()
     assert gone["winner"] == "tie" and left == 1 and len(store.votes()) == 1
     store.add_alert_event(

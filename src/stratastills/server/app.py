@@ -219,7 +219,7 @@ def create_app():
         pool, retired = arena_pool(), arena_retired()
         pick = AR.pick_pair(
             pool,
-            arena_votes(),
+            AR.current_votes(arena_votes(), pool),
             random.Random(),
             retired,
             {w for w in want.split(",") if w} or None,
@@ -232,7 +232,9 @@ def create_app():
         pic, a, b = pick
         token = secrets.token_urlsafe(9)
         with arena_lock:
-            pending[token] = dict(pic=pic, a=a, b=b, t0=time.time())
+            pending[token] = dict(
+                pic=pic, a=a, b=b, t0=time.time(), ha=pool[pic][a].get("hash"), hb=pool[pic][b].get("hash")
+            )  # the pictures shown: a vote counts for them, and for a remake only while it is judged the same (arena.current_votes)
             while len(pending) > 300:
                 pending.pop(next(iter(pending)))
         return dict(
@@ -273,6 +275,8 @@ def create_app():
                 winner={"left": "a", "right": "b", "tie": "tie"}[body.choice],
                 t=round(time.time(), 1),
                 ms=body.ms,
+                ha=q["ha"],
+                hb=q["hb"],
             )
         )
         return dict(ok=True, votes=len(arena_votes()))
@@ -376,8 +380,9 @@ def create_app():
 
     @app.get("/api/arena/ratings")
     def arena_ratings():
-        votes, retired = arena_votes(), arena_retired()
+        every, retired = arena_votes(), arena_retired()
         pool = arena_pool()
+        votes = AR.current_votes(every, pool)  # only the votes on pictures still shown, or remade with a small change
         bt = AR.bradley_terry(votes, retired)
         ci = AR.bootstrap(votes, retired, n=100)
         e = AR.elo(votes, retired)
@@ -388,6 +393,7 @@ def create_app():
         names = sorted(set(bt) | {k for vs in pool.values() for k in vs} - retired, key=lambda k: -bt.get(k, 0))
         return dict(
             votes=len(votes),
+            superseded_votes=len(every) - len(votes),
             pictures=len(pool),
             voted_pictures=len({v["pic"] for v in votes}),
             retired=sorted(retired),

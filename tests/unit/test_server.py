@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -169,6 +171,27 @@ def test_the_arena_offers_blind_pairs_records_votes_and_rates(client, tmp_path, 
         and client.get("/api/arena/next?set=none").status_code == 404
         and client.get("/api/arena/next?set=missing").status_code == 404
     )
+
+
+def test_a_vote_remembers_the_pictures_shown_and_stops_counting_when_one_is_remade(client, tmp_path, monkeypatch):
+    arena = tmp_path / "arena"
+    (arena / "img").mkdir(parents=True)
+    monkeypatch.setenv("STRATASTILLS_ARENA", str(arena))
+    for n in ("lr", "auto1"):
+        (arena / "img" / f"{n}.jpg").write_bytes(b"jpg-" + n.encode())
+    pool = {"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "b"}}}
+    (arena / "pool.json").write_text(json.dumps(pool))
+    p = client.get("/api/arena/next").json()
+    client.post("/api/arena/vote", json=dict(token=p["token"], choice="left"))
+    v = json.loads((arena / "votes.jsonl").read_text())
+    assert {v["ha"], v["hb"]} == {"a", "b"} and pool["p1"][v["a"]]["hash"] == v["ha"]
+    pool["p1"]["auto1"].update(hash="c", same=["b"])  # remade, judged the same picture
+    (arena / "pool.json").write_text(json.dumps(pool))
+    assert client.get("/api/arena/ratings").json()["votes"] == 1
+    pool["p1"]["auto1"].update(hash="d", same=[], changed=1.0)  # remade with a real change
+    (arena / "pool.json").write_text(json.dumps(pool))
+    r = client.get("/api/arena/ratings").json()
+    assert r["votes"] == 0 and r["superseded_votes"] == 1
 
 
 def test_arena_alerts_hide_a_version_until_resolved_and_are_listed_with_metadata(client, tmp_path, monkeypatch):

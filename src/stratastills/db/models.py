@@ -293,6 +293,9 @@ class ArenaEntry(Base):
     key: Mapped[str | None] = mapped_column(default=None)
     built_at: Mapped[datetime | None] = mapped_column(default=None)
     superseded_at: Mapped[datetime | None] = mapped_column(default=None)
+    revision: Mapped[dict | None] = mapped_column(
+        sa.JSON(none_as_null=True), default=None
+    )  # {same: [earlier hashes whose votes still count], changed: unix time of the last real change, change: share of pixels changed} (arena_revision)
 
 
 class ArenaVote(Base):
