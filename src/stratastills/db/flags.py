@@ -76,7 +76,7 @@ class DbStore:
                     removed_at=None,
                 )
                 if r is None:
-                    s.add(ReportFlag(report=report, pic=pic, **vals))
+                    s.add(ReportFlag(report=report, pic=pic, **vals))  # pyright: ignore[reportArgumentType]
                 else:
                     for k, v in vals.items():
                         setattr(r, k, v)

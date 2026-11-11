@@ -165,6 +165,10 @@ class DbStore:
             sources = self._sources(s, p)
             for c in s.scalars(select(ItemChoice).where(ItemChoice.project_id == p.id)):
                 ph = s.get(Photo, c.photo_id)
+                if ph is None:
+                    continue
+                if ph is None:
+                    continue
                 for f in s.scalars(
                     select(File).where(File.photo_id == ph.id, File.role == "raw", File.current.is_(True))
                 ):  # only the photo's current files: a superseded version names nothing
@@ -258,7 +262,7 @@ class DbStore:
                     info=rec,
                 )
                 if r is None:
-                    s.add(Render(cache_key=key, kind="generated", **vals))
+                    s.add(Render(cache_key=key, kind="generated", **vals))  # pyright: ignore[reportArgumentType]
                 else:
                     for k, v in vals.items():
                         setattr(r, k, v)

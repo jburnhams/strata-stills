@@ -565,8 +565,9 @@ def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_th
     )  # blue: its true mean is 20; clipping the noise at black put it near 60
 
 
-def test_a_near_black_frame_has_its_pedestal_taken_off_with_no_mid_tones_to_fit_on(monkeypatch):
-    """A starfield (NEX-5N, ISO 3200, 8 raw levels over black: 2016-08-06_DSC09908) has no mid-tone pixels, so the fit used to fall back to k=1, o=0, keeping the pedestal, a different one per channel (pure green neutral)."""
+def test_a_frame_too_dark_to_fit_the_pedestal_still_has_it_taken_off(monkeypatch):
+    """With no mid-tones to fit k and o on (a starfield, 2016-08-06_DSC09908: pure green neutral), the slope is the exact one from the white and black levels and the
+    offset is read off the pixels neither decode clipped: never the pedestal left in with o = 0 (lifted black and a white-balance cast, review of #20)."""
     import contextlib
     import sys
     import types
@@ -574,13 +575,14 @@ def test_a_near_black_frame_has_its_pedestal_taken_off_with_no_mid_tones_to_fit_
 
     rng = np.random.default_rng(5)
     h, w = 64, 96
-    true = np.tile(np.array([14.0, 25.0, 12.0]), (h, w, 1))  # raw levels over black, per channel
-    noise = rng.normal(0, 3, (h, w, 3))
-    gain = np.array([1.9, 1.0, 2.2])
+    true = np.zeros((h, w, 3))
+    true[:] = (40, 400, 20)  # deep shadow everywhere: nothing in the fitting ranges
+    noise = rng.normal(0, 150, (h, w, 3))
+    gain = np.array([1.5, 1.0, 2.7])
 
     def decode(ub, half):
         k = (16383 - 512) / (16383 - ub)
-        v = (true + noise) * k * gain * 4 + (512 - ub) * 65535 / (16383 - ub) * gain
+        v = (true + noise) * k + (512 - ub) * 65535 / (16383 - ub) * gain
         v = v[::2, ::2] if half else v
         return np.clip(v, 0, 65535).astype(np.uint16)
 
@@ -599,8 +601,9 @@ def test_a_near_black_frame_has_its_pedestal_taken_off_with_no_mid_tones_to_fit_
     mod.HighlightMode = NS(Blend=0)
     monkeypatch.setitem(sys.modules, "rawpy", mod)
     out = D._raw_u16("x.arw", False).reshape(-1, 3).astype(float).mean(0)
-    want = np.array([14.0, 25.0, 12.0]) * gain * 4 * (16383 - 512) / (16383 - 512) * 1.0
-    assert np.all(np.abs(out - want) < 0.25 * want)  # each channel near its own signal, none left carrying the pedestal
+    assert np.all(
+        np.abs(out - (40, 400, 20)) < (12, 12, 12)
+    )  # each channel near its own signal; the pedestal would add about 1000 x gain
 
 
 def test_libraw_decodes_with_a_fixed_openmp_thread_count_in_whatever_thread(monkeypatch):
