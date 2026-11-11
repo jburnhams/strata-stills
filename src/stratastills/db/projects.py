@@ -262,7 +262,7 @@ class DbStore:
                     info=rec,
                 )
                 if r is None:
-                    s.add(Render(cache_key=key, kind="generated", **vals))  # type: ignore  # pyright: ignore[reportArgumentType]
+                    s.add(Render(cache_key=key, kind="generated", **vals))  # pyright: ignore[reportArgumentType]
                 else:
                     for k, v in vals.items():
                         setattr(r, k, v)
