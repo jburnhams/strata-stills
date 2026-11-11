@@ -174,3 +174,25 @@ def readable_jpeg(path, min_std=0.5):
         return None
     im = cv2.imread(path)
     return im if im is not None and float(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).std()) >= min_std else None
+
+
+def _thumb(im, n=48):
+    return cv2.resize(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY), (n, n), interpolation=cv2.INTER_AREA).astype(np.float64)
+
+
+def same_scene(im, ref, min_corr=0.3):
+    """True when `im` shows the structure of `ref` (48 px grey thumbnails correlate at least `min_corr`). The catch for a develop that is neither blank nor truncated but garbage (colour stripes, 2023-08-27_DSC04491 and 2024-06-06_DSC06876 on 2026-11-09): `ref` is the camera's own preview of the same frame. Real edits keep well above 0.3 against it; the garbage was -0.01..0.21."""
+    a, b = _thumb(im), _thumb(ref)
+    if a.std() < 1e-6 or b.std() < 1e-6:
+        return False
+    return bool(np.corrcoef(a.ravel(), b.ravel())[0, 1] >= min_corr)
+
+
+def noise_blown(out, base, factor=4.0):
+    """True when `out` has far more fine detail than the picture it was made from, relative to its own contrast (Laplacian std over grey std, so a plain exposure lift is not flagged): a transform that amplified noise to static (2015-07-17_DSC04869 auto4)."""
+
+    def rel(im):
+        g = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(g, cv2.CV_32F).std()) / max(float(g.std()), 8.0)
+
+    return rel(out) > factor * max(rel(base), 0.02)

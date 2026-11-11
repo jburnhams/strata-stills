@@ -28,7 +28,7 @@ import lr_ftarget as FT
 import lr_look as LK
 import lr_tmodel as TM
 
-from stratastills import settings
+from stratastills import images, settings
 
 DISPLAY = 1400
 JPEG_Q = 88
@@ -267,6 +267,10 @@ def main():
             if camera is not None
             else (neu, "", r1)
         )
+        if camera is not None and not images.same_scene(neu, cam):
+            raise RuntimeError(
+                f"{sid}: the neutral develop does not match the camera picture (a garbage GPU develop: remake it with --rebuild)"
+            )
         x0, y0, x1, y1 = max(r1[0], r2[0]), max(r1[1], r2[1]), min(r1[2], r2[2]), min(r1[3], r2[3])
         sx0, sy0, sx1, sy1 = smear_rect(neu)
         x0, y0, x1, y1 = max(x0, sx0), max(y0, sy0), min(x1, sx1), min(y1, sy1)
@@ -303,6 +307,9 @@ def main():
         entry = pool.get(sid, {})
         for n in need:
             img = AV.VARIANTS[n](c)
+            assert not (n.startswith("auto") and images.noise_blown(img, neu)), (
+                f"{sid}/{n}: far noisier than the neutral it was made from (static)"
+            )
             assert img.shape[:2] == fin.shape[:2], (
                 f"{sid}/{n}: {img.shape[:2]} is not the final's {fin.shape[:2]}: all versions must be on the same crop"
             )
@@ -360,7 +367,6 @@ def main():
             else ""
         )
     )
-    from stratastills import images
 
     asked = {(sid, n) for _, sid, need in todo for n in need}
     bad = sorted(
