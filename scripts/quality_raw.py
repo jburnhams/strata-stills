@@ -153,6 +153,7 @@ def measure(pid, item, path):
         elif name == "sharpen":
             st["fin"] = s.rgb.copy()
         st["tone"] = s.rec.get("tone")
+        st["level"] = s.rec.get("level")
 
     PL.generate(
         pid,
@@ -166,6 +167,13 @@ def measure(pid, item, path):
     fin = st.get("fin", st["pre"])
     out = curve_measures(st["tone"], ref)
     out.update(develop_measures(st["dev"], ref))
+    lv = st.get("level") or {}
+    if lv.get(
+        "applied"
+    ):  # the level stage turned the developed picture: the final's flat/textured masks need the same turn of the reference
+        from stratastills import transforms
+
+        ref = transforms.rotate_fill(ref, lv["angle"])
     out.update(final_measures(st["pre"], fin, ref))
     return out
 
@@ -200,11 +208,12 @@ if __name__ == "__main__":
     sid = P.source_id(P.load(pid)["sources"][0]["path"])
     items = {i["stem"]: i for i in P.source_items(pid, sid)}
     store = json.load(open(a.json)) if os.path.exists(a.json) else {}
-    rows, flagged = {}, 0
+    rows, flagged, failed = {}, 0, []
     for s in stems:
         it = items.get(s)
         if not it:
             print(s, "missing")
+            failed.append(s)
             continue
         try:
             m = measure(
@@ -224,6 +233,7 @@ if __name__ == "__main__":
             )
         except Exception as e:
             print(s, "failed:", e)
+            failed.append(s)
             continue
         rows[s] = m
         bad = worse(m, store[s]) if s in store else []
@@ -245,4 +255,6 @@ if __name__ == "__main__":
         if store
         else "no stored numbers yet: run with --accept"
     )
-    sys.exit(1 if flagged and not a.accept else 0)
+    if failed:  # a picture that could not be measured is a failed check, not a pass: a recipe change that breaks processing must not read as "0 of 0 worse"
+        print(f"{len(failed)} could not be measured: {' '.join(failed)}")
+    sys.exit(1 if failed or (flagged and not a.accept) else 0)
