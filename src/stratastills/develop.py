@@ -766,19 +766,26 @@ def _unbiased_dark(path, r, kw, user_black):
                 np.float32
             )
 
-    b = r.postprocess(**dict(kw, user_black=user_black)).astype(np.float32)
     ah, bh = half_decode(), half_decode(user_black)
-    out = np.empty(b.shape, np.float32)
+    fits = []
     for c in range(3):
         a64, b64 = ah[..., c].astype(np.float64), bh[..., c].astype(np.float64)
         m = (a64 > 2000) & (a64 < 60000)
-        k = (
-            np.polyfit(a64[m], b64[m], 1)[0] if m.sum() > 200 else 1.0
-        )  # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
         lo = (a64 > 1000) & (a64 < 20000)
-        o = (
-            float(np.median(b64[lo] - k * a64[lo])) if lo.sum() > 200 else 0.0
+        if m.sum() <= 200 or lo.sum() <= 200:
+            return r.postprocess(
+                **kw
+            )  # too few mid-tones to fit this channel's mapping (a very dark frame, a weak channel): without k and o the pedestal cannot be taken off, so LibRaw's own decode, never one with the pedestal left in (lifted black, a cast)
+        k = np.polyfit(a64[m], b64[m], 1)[
+            0
+        ]  # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
+        o = float(
+            np.median(b64[lo] - k * a64[lo])
         )  # the offset from the low mid-tones (well above the noise, so not clipped): the fit's intercept, extrapolated from the whole range, was tens of levels off and tinted the deepest shadows
+        fits.append((k, o))
+    b = r.postprocess(**dict(kw, user_black=user_black)).astype(np.float32)
+    out = np.empty(b.shape, np.float32)
+    for c, (k, o) in enumerate(fits):
         v = np.where(b[..., c] >= 65535 - 0.5, 65535.0, (b[..., c] - o) / k)
         vs = cv2.GaussianBlur(v, (0, 0), DARK_BLUR)
         neg = v[v < 0]
