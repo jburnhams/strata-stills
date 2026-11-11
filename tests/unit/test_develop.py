@@ -545,6 +545,7 @@ def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_th
     class R:
         sizes = NS(iwidth=w, iheight=h, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=0)
         black_level_per_channel = [512] * 4
+        white_level = 16383
 
         def postprocess(self, half_size=False, user_black=512, **kw):
             return decode(user_black, half_size)
@@ -562,6 +563,44 @@ def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_th
     assert (
         abs(kept[2] - 20) < 15 and clipped[2] > 50
     )  # blue: its true mean is 20; clipping the noise at black put it near 60
+
+
+def test_a_near_black_frame_has_its_pedestal_taken_off_with_no_mid_tones_to_fit_on(monkeypatch):
+    """A starfield (NEX-5N, ISO 3200, 8 raw levels over black: 2016-08-06_DSC09908) has no mid-tone pixels, so the fit used to fall back to k=1, o=0, keeping the pedestal, a different one per channel (pure green neutral)."""
+    import contextlib
+    import sys
+    import types
+    from types import SimpleNamespace as NS
+
+    rng = np.random.default_rng(5)
+    h, w = 64, 96
+    true = np.tile(np.array([14.0, 25.0, 12.0]), (h, w, 1))  # raw levels over black, per channel
+    noise = rng.normal(0, 3, (h, w, 3))
+    gain = np.array([1.9, 1.0, 2.2])
+
+    def decode(ub, half):
+        k = (16383 - 512) / (16383 - ub)
+        v = (true + noise) * k * gain * 4 + (512 - ub) * 65535 / (16383 - ub) * gain
+        v = v[::2, ::2] if half else v
+        return np.clip(v, 0, 65535).astype(np.uint16)
+
+    class R:
+        sizes = NS(iwidth=w, iheight=h, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=0)
+        black_level_per_channel = [512] * 4
+        white_level = 16383
+
+        def postprocess(self, half_size=False, user_black=512, **kw):
+            return decode(user_black, half_size)
+
+    mod = types.ModuleType("rawpy")
+    mod.imread = lambda p: contextlib.nullcontext(R())
+    mod.ColorSpace = NS(raw=0)
+    mod.DemosaicAlgorithm = NS(DHT=0)
+    mod.HighlightMode = NS(Blend=0)
+    monkeypatch.setitem(sys.modules, "rawpy", mod)
+    out = D._raw_u16("x.arw", False).reshape(-1, 3).astype(float).mean(0)
+    want = np.array([14.0, 25.0, 12.0]) * gain * 4 * (16383 - 512) / (16383 - 512) * 1.0
+    assert np.all(np.abs(out - want) < 0.25 * want)  # each channel near its own signal, none left carrying the pedestal
 
 
 def test_libraw_decodes_with_a_fixed_openmp_thread_count_in_whatever_thread(monkeypatch):
