@@ -1,5 +1,6 @@
 """The arena on the database: the store contract for both stores, and the server on schema photos (SQLite here; `--pg` on the real thing)."""
 
+import hashlib
 import json
 
 import pytest
@@ -12,6 +13,10 @@ from stratastills import arena_store
 from stratastills.db import importer
 from stratastills.db.models import ArenaFlagEvent, ArenaVote
 from stratastills.server.app import create_app
+
+H = {
+    n: hashlib.sha1(b"jpg-" + n.encode()).hexdigest()[:16] for n in ("lr", "auto1")
+}  # pool hashes are those of the files' bytes, as build_arena writes them (the server records the hash of what it served)
 
 
 @pytest.fixture
@@ -28,9 +33,8 @@ def arena(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATASTILLS_ARENA", str(a))
     for n in ("lr", "auto1"):
         (a / "img" / f"{n}.jpg").write_bytes(b"jpg-" + n.encode())
-    (a / "pool.json").write_text(
-        '{"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "b", "key": "k1"}}}'
-    )
+    auto1 = {"file": "img/auto1.jpg", "hash": H["auto1"], "key": "k1", "same": ["b0"], "changed": 9.5, "change": 0.01}
+    (a / "pool.json").write_text(json.dumps({"p1": {"lr": {"file": "img/lr.jpg", "hash": H["lr"]}, "auto1": auto1}}))
     return a
 
 
@@ -47,14 +51,16 @@ def store(request, arena, db_url, db_session, monkeypatch):
 
 def test_the_store_contract(store):
     assert (
-        store.pool()["p1"]["auto1"] == {"file": "img/auto1.jpg", "hash": "b", "key": "k1"}
+        store.pool()["p1"]["auto1"]
+        == {"file": "img/auto1.jpg", "hash": H["auto1"], "key": "k1", "same": ["b0"], "changed": 9.5, "change": 0.01}
         and store.retired() == set()
         and store.votes() == []
         and store.undo() is None
     )
-    store.add_vote(dict(pic="p1", a="lr", b="auto1", winner="a", t=1.5, ms=7))
+    store.add_vote(dict(pic="p1", a="lr", b="auto1", winner="a", t=1.5, ms=7, ha="a", hb="b"))
     store.add_vote(dict(pic="p1", a="auto1", b="lr", winner="tie", t=2.5, ms=8))
     assert [v["winner"] for v in store.votes()] == ["a", "tie"] and store.votes()[0]["ms"] == 7
+    assert (store.votes()[0]["ha"], store.votes()[0]["hb"]) == ("a", "b") and "ha" not in store.votes()[1]
     gone, left = store.undo()
     assert gone["winner"] == "tie" and left == 1 and len(store.votes()) == 1
     store.add_alert_event(
@@ -86,7 +92,14 @@ def test_undo_in_the_database_marks_the_vote_and_keeps_the_row(arena, db_url, db
 def test_a_rebuilt_picture_supersedes_the_old_entry(arena, db_url, db_session, monkeypatch):
     importer.write(db_session, importer.plan(str(arena)))
     (arena / "pool.json").write_text(
-        '{"p1": {"lr": {"file": "img/lr.jpg", "hash": "a"}, "auto1": {"file": "img/auto1.jpg", "hash": "NEW", "key": "k2"}}}'
+        json.dumps(
+            {
+                "p1": {
+                    "lr": {"file": "img/lr.jpg", "hash": H["lr"]},
+                    "auto1": {"file": "img/auto1.jpg", "hash": "NEW", "key": "k2"},
+                }
+            }
+        )
     )
     added = importer.write(db_session, importer.plan(str(arena)))
     assert added["arena_entry"] == 1
@@ -143,6 +156,30 @@ def test_a_render_that_returns_is_active_again(arena, db_url, db_session, monkey
     _pool(arena, lr="a", auto1="A")
     importer.write(db_session, importer.plan(str(arena)))
     assert arena_store.get().pool()["p1"]["auto1"]["hash"] == "A"
+
+
+def test_a_render_that_returns_takes_the_revision_the_pool_gives_it_now(arena, db_url, db_session, monkeypatch):
+    monkeypatch.setenv("STRATASTILLS_DATABASE_URL", db_url)
+    arena_store._stores.clear()
+
+    def write(h, **rev):
+        (arena / "pool.json").write_text(
+            json.dumps(
+                {"p1": {"lr": dict(file="img/lr.jpg", hash="a"), "auto1": dict(file="img/auto1.jpg", hash=h, **rev)}}
+            )
+        )
+        importer.write(db_session, importer.plan(str(arena)))
+        return arena_store.get().pool()["p1"]["auto1"]
+
+    assert "changed" not in write("A")
+    write("B", same=[], changed=10.0, change=0.5)
+    back = write(
+        "A", same=[], changed=20.0, change=0.5
+    )  # A again, a big change from B: votes before 20.0 no longer count
+    assert back["hash"] == "A" and back["changed"] == 20.0
+    assert write("A", same=["x"], changed=20.0, change=0.01)["same"] == [
+        "x"
+    ]  # the same active row follows the pool too
 
 
 def test_a_picture_dropped_from_the_pool_is_no_longer_offered_but_kept(arena, db_url, db_session, monkeypatch):

@@ -6,6 +6,7 @@ API (JSON): GET /api/report (is there a visual report) and GET /report/ (the rep
 GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 
+import hashlib
 import os
 import random
 import re
@@ -219,7 +220,7 @@ def create_app():
         pool, retired = arena_pool(), arena_retired()
         pick = AR.pick_pair(
             pool,
-            arena_votes(),
+            AR.current_votes(arena_votes(), pool),
             random.Random(),
             retired,
             {w for w in want.split(",") if w} or None,
@@ -232,7 +233,9 @@ def create_app():
         pic, a, b = pick
         token = secrets.token_urlsafe(9)
         with arena_lock:
-            pending[token] = dict(pic=pic, a=a, b=b, t0=time.time())
+            pending[token] = dict(
+                pic=pic, a=a, b=b, t0=time.time(), ha=pool[pic][a].get("hash"), hb=pool[pic][b].get("hash")
+            )  # the pictures shown: a vote counts for them, and for a remake only while it is judged the same (arena.current_votes)
             while len(pending) > 300:
                 pending.pop(next(iter(pending)))
         return dict(
@@ -249,7 +252,10 @@ def create_app():
         f = os.path.realpath(os.path.join(root, rel))
         if os.path.commonpath([root, f]) != root or not os.path.isfile(f):
             raise HTTPException(404, "no picture")
-        return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
+        data = open(f, "rb").read()
+        with arena_lock:  # the vote is for the bytes served, whatever the pool said at /next (a remake in between, or a database pool not yet re-imported)
+            q["ha" if side == "left" else "hb"] = hashlib.sha1(data).hexdigest()[:16]
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
     @app.post("/api/arena/vote")
     def arena_vote(body: VoteIn):
@@ -273,6 +279,8 @@ def create_app():
                 winner={"left": "a", "right": "b", "tie": "tie"}[body.choice],
                 t=round(time.time(), 1),
                 ms=body.ms,
+                ha=q["ha"],
+                hb=q["hb"],
             )
         )
         return dict(ok=True, votes=len(arena_votes()))
@@ -376,8 +384,9 @@ def create_app():
 
     @app.get("/api/arena/ratings")
     def arena_ratings():
-        votes, retired = arena_votes(), arena_retired()
+        every, retired = arena_votes(), arena_retired()
         pool = arena_pool()
+        votes = AR.current_votes(every, pool)  # only the votes on pictures still shown, or remade with a small change
         bt = AR.bradley_terry(votes, retired)
         ci = AR.bootstrap(votes, retired, n=100)
         e = AR.elo(votes, retired)
@@ -388,6 +397,7 @@ def create_app():
         names = sorted(set(bt) | {k for vs in pool.values() for k in vs} - retired, key=lambda k: -bt.get(k, 0))
         return dict(
             votes=len(votes),
+            superseded_votes=len(every) - len(votes),
             pictures=len(pool),
             voted_pictures=len({v["pic"] for v in votes}),
             retired=sorted(retired),

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, select
 
@@ -113,8 +114,15 @@ def plan(arena_dir, flags_dir=None):
     pool_raw = _read_json(os.path.join(arena_dir, "pool.json"), problems)
     pool = pool_raw or {}
     var = (_read_json(os.path.join(arena_dir, "variants.json"), problems) or {}).get("retired", [])
-    entries = [
-        dict(pic=p, variant=n, file=e["file"], hash=e["hash"], key=e.get("key"))
+    entries: list[dict[str, Any]] = [
+        dict(
+            pic=p,
+            variant=n,
+            file=e["file"],
+            hash=e["hash"],
+            key=e.get("key"),
+            revision={k: e[k] for k in ("same", "changed", "change") if k in e} or None,
+        )
         for p, vs in sorted(pool.items())
         for n, e in sorted(vs.items())
     ]
@@ -209,6 +217,10 @@ def write(session, p):
         want = planned.get(key) if p["pool_read"] else None
         for e in rs:
             same = want is not None and (e.hash, e.file) == (want["hash"], want["file"])
+            # the pool's record of which earlier pictures still count goes onto the matching row too
+            # (A, then B, then A again: A's row must not keep the revision it had the first time)
+            if same and want is not None:
+                e.revision = want["revision"]
             if p["pool_read"]:
                 if (
                     same
@@ -220,7 +232,16 @@ def write(session, p):
                     e.superseded_at = now
     for key, e in planned.items():
         if not any((x.hash, x.file) == (e["hash"], e["file"]) for x in rows.get(key, [])):
-            new.append(ArenaEntry(pic=e["pic"], variant=e["variant"], file=e["file"], hash=e["hash"], key=e["key"]))
+            new.append(
+                ArenaEntry(
+                    pic=e["pic"],
+                    variant=e["variant"],
+                    file=e["file"],
+                    hash=e["hash"],
+                    key=e["key"],
+                    revision=e["revision"],
+                )
+            )
     add("arena_entry", new)
     have_v = have(ArenaVote, ArenaVote.legacy_key)
     add("arena_vote", [ArenaVote(**v) for v in p["votes"] if v["legacy_key"] not in have_v])

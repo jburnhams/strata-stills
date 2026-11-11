@@ -30,8 +30,10 @@ class DbStore:
         with self._session() as s:
             for e in s.scalars(select(ArenaEntry).where(ArenaEntry.superseded_at.is_(None)).order_by(ArenaEntry.id)):
                 out.setdefault(e.pic, {})[e.variant] = {
-                    k: v for k, v in dict(file=e.file, hash=e.hash, key=e.key).items() if v is not None
-                }  # the newest entry of a (pic, variant) wins
+                    k: v
+                    for k, v in dict(file=e.file, hash=e.hash, key=e.key, **(e.revision or {})).items()
+                    if v is not None
+                }  # the newest entry of a (pic, variant) wins; `revision` holds same/changed/change (arena_revision)
         return out
 
     def retired(self):
@@ -49,7 +51,15 @@ class DbStore:
 
         with self._session() as s:
             return [
-                dict(pic=v.pic, a=v.a, b=v.b, winner=v.winner, t=v.voted_at, ms=v.ms)
+                dict(
+                    pic=v.pic,
+                    a=v.a,
+                    b=v.b,
+                    winner=v.winner,
+                    t=v.voted_at,
+                    ms=v.ms,
+                    **{k: (v.raw or {}).get(k) for k in ("ha", "hb") if (v.raw or {}).get(k)},
+                )  # the hashes of the pictures shown live in `raw` (arena.current_votes)
                 for v in s.scalars(select(ArenaVote).where(ArenaVote.undone_at.is_(None)).order_by(ArenaVote.id))
             ]
 
