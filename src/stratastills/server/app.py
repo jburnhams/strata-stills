@@ -6,6 +6,7 @@ API (JSON): GET /api/report (is there a visual report) and GET /report/ (the rep
 GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 
+import hashlib
 import os
 import random
 import re
@@ -251,7 +252,10 @@ def create_app():
         f = os.path.realpath(os.path.join(root, rel))
         if os.path.commonpath([root, f]) != root or not os.path.isfile(f):
             raise HTTPException(404, "no picture")
-        return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
+        data = open(f, "rb").read()
+        with arena_lock:  # the vote is for the bytes served, whatever the pool said at /next (a remake in between, or a database pool not yet re-imported)
+            q["ha" if side == "left" else "hb"] = hashlib.sha1(data).hexdigest()[:16]
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
     @app.post("/api/arena/vote")
     def arena_vote(body: VoteIn):

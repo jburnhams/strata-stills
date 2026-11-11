@@ -217,6 +217,10 @@ def write(session, p):
         want = planned.get(key) if p["pool_read"] else None
         for e in rs:
             same = want is not None and (e.hash, e.file) == (want["hash"], want["file"])
+            # the pool's record of which earlier pictures still count goes onto the matching row too
+            # (A, then B, then A again: A's row must not keep the revision it had the first time)
+            if same and want is not None:
+                e.revision = want["revision"]
             if p["pool_read"]:
                 if (
                     same
