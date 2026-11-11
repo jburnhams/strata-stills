@@ -293,9 +293,15 @@ def test_arena_edge_cases(client, tmp_path, monkeypatch):
     token2 = res2.json()["token"]
     assert client.post("/api/arena/vote", json={"token": token2, "choice": "badchoice", "ms": 100}).status_code == 400
 
-    # Image retrieval missing file
+    # Image retrieval missing file: a live pair (token2 was used up by the bad vote above, which pops it before
+    # checking the choice), both sides served first, then variant1's file removed: exactly the side showing it
+    # answers "no picture" (the sides are random, so which side that is is not known in advance)
+    token3 = client.get("/api/arena/next").json()["token"]
+    assert [client.get(f"/arena/img/{token3}/{side}").status_code for side in ("left", "right")] == [200, 200]
     os.remove(arena_dir / "variant1.jpg")
-    assert client.get(f"/arena/img/{token2}/left").status_code == 404
+    answers = [client.get(f"/arena/img/{token3}/{side}") for side in ("left", "right")]
+    assert sorted(r.status_code for r in answers) == [200, 404]
+    assert [r.json()["detail"] for r in answers if r.status_code == 404] == ["no picture"]
 
     # Alert image retrieval bad id
     assert client.get("/api/alerts/image/badid").status_code == 404
