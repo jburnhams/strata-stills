@@ -18,7 +18,7 @@ import numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 18  # 18: a frame too dark to fit the pedestal falls back to LibRaw's own decode (_unbiased_dark), so cached renders of such frames must be remade
+VERSION = 19  # 19: a near-black frame's pedestal offset is read off the decodes instead of falling back to LibRaw's clipped decode (18: that fallback; 17 and before: o = 0, green starfields)
 D65 = np.array([0.95047, 1.0, 1.08883])
 D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array(
@@ -772,16 +772,27 @@ def _unbiased_dark(path, r, kw, user_black):
         a64, b64 = ah[..., c].astype(np.float64), bh[..., c].astype(np.float64)
         m = (a64 > 2000) & (a64 < 60000)
         lo = (a64 > 1000) & (a64 < 20000)
-        if m.sum() <= 200 or lo.sum() <= 200:
+        k_exact = (r.white_level - r.black_level_per_channel[0]) / (
+            r.white_level - user_black
+        )  # the slope between the two decodes, known without any pixel
+        any_ = (a64 > 0) & (
+            b64 < 65535
+        )  # pixels neither decode clipped: they map through the same straight line, however dark the frame
+        k = (
+            np.polyfit(a64[m], b64[m], 1)[0] if m.sum() > 200 else k_exact
+        )  # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
+        if lo.sum() > 200:
+            o = float(
+                np.median(b64[lo] - k * a64[lo])
+            )  # the offset from the low mid-tones (well above the noise, so not clipped): the fit's intercept, extrapolated from the whole range, was tens of levels off and tinted the deepest shadows
+        elif any_.sum() > 200:
+            o = float(
+                np.median(b64[any_] - k * a64[any_])
+            )  # a near-black frame (a starfield, 2016-08-06_DSC09908) has no mid-tones: read the offset off every unclipped pixel
+        else:
             return r.postprocess(
                 **kw
-            )  # too few mid-tones to fit this channel's mapping (a very dark frame, a weak channel): without k and o the pedestal cannot be taken off, so LibRaw's own decode, never one with the pedestal left in (lifted black, a cast)
-        k = np.polyfit(a64[m], b64[m], 1)[
-            0
-        ]  # float64: a float32 fit over millions of points came out at k 0.59 instead of 0.984
-        o = float(
-            np.median(b64[lo] - k * a64[lo])
-        )  # the offset from the low mid-tones (well above the noise, so not clipped): the fit's intercept, extrapolated from the whole range, was tens of levels off and tinted the deepest shadows
+            )  # nothing to fit on at all: LibRaw's own decode, never one with the pedestal left in (lifted black, a cast)
         fits.append((k, o))
     b = r.postprocess(**dict(kw, user_black=user_black)).astype(np.float32)
     out = np.empty(b.shape, np.float32)

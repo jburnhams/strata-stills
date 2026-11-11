@@ -545,6 +545,7 @@ def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_th
     class R:
         sizes = NS(iwidth=w, iheight=h, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=0)
         black_level_per_channel = [512] * 4
+        white_level = 16383
 
         def postprocess(self, half_size=False, user_black=512, **kw):
             return decode(user_black, half_size)
@@ -564,9 +565,9 @@ def test_the_noise_below_black_is_averaged_before_the_clip_so_dark_areas_keep_th
     )  # blue: its true mean is 20; clipping the noise at black put it near 60
 
 
-def test_a_frame_too_dark_to_fit_the_pedestal_falls_back_to_libraws_own_decode(monkeypatch):
-    """With too few mid-tones to fit k and o for a channel, the pedestal cannot be taken off: the decode is LibRaw's own one, never the
-    pedestal-lifted one with o = 0 (lifted black and a white-balance cast, review of #20)."""
+def test_a_frame_too_dark_to_fit_the_pedestal_still_has_it_taken_off(monkeypatch):
+    """With no mid-tones to fit k and o on (a starfield, 2016-08-06_DSC09908: pure green neutral), the slope is the exact one from the white and black levels and the
+    offset is read off the pixels neither decode clipped: never the pedestal left in with o = 0 (lifted black and a white-balance cast, review of #20)."""
     import contextlib
     import sys
     import types
@@ -588,6 +589,7 @@ def test_a_frame_too_dark_to_fit_the_pedestal_falls_back_to_libraws_own_decode(m
     class R:
         sizes = NS(iwidth=w, iheight=h, crop_width=0, crop_height=0, crop_left_margin=0, crop_top_margin=0, flip=0)
         black_level_per_channel = [512] * 4
+        white_level = 16383
 
         def postprocess(self, half_size=False, user_black=512, **kw):
             return decode(user_black, half_size)
@@ -598,9 +600,10 @@ def test_a_frame_too_dark_to_fit_the_pedestal_falls_back_to_libraws_own_decode(m
     mod.DemosaicAlgorithm = NS(DHT=0)
     mod.HighlightMode = NS(Blend=0)
     monkeypatch.setitem(sys.modules, "rawpy", mod)
-    with_pedestal = D._raw_u16("x.arw", False)
-    monkeypatch.setattr(D, "PEDESTAL", 0)
-    assert np.array_equal(with_pedestal, D._raw_u16("x.arw", False))
+    out = D._raw_u16("x.arw", False).reshape(-1, 3).astype(float).mean(0)
+    assert np.all(
+        np.abs(out - (40, 400, 20)) < (12, 12, 12)
+    )  # each channel near its own signal; the pedestal would add about 1000 x gain
 
 
 def test_libraw_decodes_with_a_fixed_openmp_thread_count_in_whatever_thread(monkeypatch):
