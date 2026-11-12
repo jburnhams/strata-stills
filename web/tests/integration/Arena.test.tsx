@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw'
 import { format } from 'strata-react'
 import { open } from '../utils/render'
 import { mock, server } from '../utils/server'
+import { images } from '../utils/images'
 
 const pair = async () => within(await screen.findByRole('region', { name: 'Two versions of one picture' }))
 
@@ -16,6 +17,19 @@ describe('the arena', () => {
     expect(p.getByRole('img', { name: 'Right' })).toHaveAttribute('src', '/arena/img/tok1/right')
     expect(screen.getByText(/^6\svotes,\s3\spictures$/)).toBeInTheDocument()
     await waitFor(() => expect(mock.pairs).toBe(2)) // the next pair is fetched while this one is judged
+  })
+
+  it('shows a pair, and takes answers, only once both its pictures have loaded', async () => {
+    images.hold()
+    open('/arena')
+    await waitFor(() => expect(images.held()).toEqual(['/arena/img/tok1/left', '/arena/img/tok1/right']))
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(screen.queryByRole('button', { name: 'Left is better' })).not.toBeInTheDocument()
+    expect(mock.votes).toHaveLength(0)
+    images.release()
+    await pair()
+    await userEvent.keyboard('{ArrowLeft}')
+    await waitFor(() => expect(mock.votes[0]).toMatchObject({ token: 'tok1', choice: 'left' }))
   })
 
   it('records a vote from a button, with the time spent, and moves to the prefetched pair', async () => {

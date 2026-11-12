@@ -1,7 +1,7 @@
 // One question, asked hundreds of times a day: "Which of these two is better?" The arena's votes are the only ratings that train the model, so this screen is built for speed and for not knowing
 // which version is which: strata-react's Compare with `blind` (the pictures are called Left and Right, and are served under neutral addresses, img/<token>/left), one zoom and pan for both,
 // swipe, blink and full screen for looking closely. Answers are single keys from one list that also draws the legend (← → ↓ S Z, and 1 2 to flag a side), and nothing moves when you answer
-// (ux-research ux-character.md: done 100+ times a day, so no motion). The next pair is fetched, and its pictures loaded, while this one is judged.
+// (ux-research ux-character.md: done 100+ times a day, so no motion). The next pair is fetched, and its pictures loaded, while this one is judged; a pair is shown only once both pictures are in.
 // A flag says something is wrong with one picture: the pair is not counted, and the flag goes to the fix queue on the Arena flags screen.
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
@@ -21,14 +21,19 @@ export function arenaQuery(params: URLSearchParams): string {
   return q ? '?' + q : ''
 }
 
-/** Asks the browser for both pictures, so the next pair shows at once. */
-function preload(p: ArenaPair) {
-  for (const s of [p.left, p.right]) { const i = new Image(); i.src = arenaImageUrl(s) }
+/** Loads one picture into the browser's cache; settles when it has loaded or failed (a failed one shows Compare's `missing` sentence, which is an answer too). */
+export function loaded(src: string): Promise<void> {
+  return new Promise(res => { const i = new Image(); i.onload = i.onerror = () => res(); i.src = src })
 }
 
+/** The next pair, ready only once both its pictures are in the browser: until then no key or button can answer it and its clock has not started,
+ *  so a vote is never cast on a picture not yet seen and loading time is never counted as judging time (as the old arena page did). */
 async function fetchNext(query: string): Promise<Next> {
-  try { return { pair: await api.arenaNext(query) } }
+  let pair: ArenaPair
+  try { pair = await api.arenaNext(query) }
   catch (e) { if (e instanceof HttpError && e.status === 404) return { none: e.reason ?? 'There is nothing to rate yet.' }; throw e }
+  await Promise.all([loaded(arenaImageUrl(pair.left)), loaded(arenaImageUrl(pair.right))])
+  return { pair }
 }
 
 function Ratings() {
@@ -79,7 +84,7 @@ export default function ArenaPage() {
   useEffect(() => {
     if (!pair) return
     t0.current = Date.now(); setFlags({ left: false, right: false })
-    void client.fetchQuery({ queryKey: key(n + 1), queryFn: () => fetchNext(query), staleTime: Infinity }).then(x => { if ('pair' in x) preload(x.pair) }, () => {})
+    void client.prefetchQuery({ queryKey: key(n + 1), queryFn: () => fetchNext(query), staleTime: Infinity })
   }, [pair?.token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const advance = () => { client.removeQueries({ queryKey: key(n) }); setN(i => i + 1) }
