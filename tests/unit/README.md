@@ -11,7 +11,7 @@ Fast and isolated: synthetic arrays and tiny generated images; no real photos, n
 | `develop.py` | `test_develop.py` | the NumPy reference: DNG opcodes, colour (matrices, hue/saturation map, ProPhoto), tone, clean-up, whole development on a synthetic DNG |
 | `gpu.py`, `gpu_tiled.py`, `cpu_tiled.py` | `test_gpu.py` | every GPU function against its CPU original on each device; the tiled developers against the whole-picture ones; tile and slot sizing in `test_pipeline.py` |
 | `detail.py`, `jpeg_quality.py` | `test_detail.py`, `test_jpeg_quality.py` | MTF measurement, Wiener sharpening, JPEG quality choice |
-| `lineardng.py`, `inputs.py`, `match.py` | `test_inputs.py`, `test_match.py` | linear DNG parsing (black levels, polynomial opcodes, the valid area), device profiles, matching a panorama's levels |
+| `lineardng.py`, `inputs.py`, `match.py` | `test_lineardng.py`, `test_inputs.py`, `test_match.py` | lineardng (99%), linear DNG parsing (black levels, polynomial opcodes, the valid area), device profiles, matching a panorama's levels |
 | `pipeline.py`, `sizeplan.py`, `resources.py` | `test_pipeline.py`, `test_pipeline_raw.py` | stages, presets, keys, rules, folder sizes, worker and tile planning |
 | `transforms.py`, `preview.py`, `projects.py`, `ingest.py`, `meta.py`, `server/app.py` | `test_transforms.py`, `test_preview.py`, `test_projects.py`, `test_ingest.py`, `test_meta.py`, `test_server*.py` | |
 | `denoise_ai.py` | `test_denoise_ai.py` | with the model faked |
