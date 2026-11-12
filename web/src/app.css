@@ -1,0 +1,5 @@
+/* The app's stylesheet, assembled as strata-react says (its README, "Set up an app"): Tailwind, Strata's token contract, the palette generated for this product, and the product layer. */
+@import "tailwindcss";
+@import "strata-react/strata.css";
+@import "./theme.generated.css";
+@import "./theme.css";

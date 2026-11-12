@@ -1,3 +1,4 @@
+import { fetchJson } from 'strata-react'
 // Typed client for the FastAPI server (src/stratastills/server/app.py). Same-origin. Project ids contain slashes, so they travel as query parameters.
 export interface Source { path: string; added?: string }
 export interface Project { id: string; name: string; created: string | null; sources: Source[]; n_sources: number }
@@ -25,6 +26,25 @@ export interface Rules { rules: Rule[]; pending: number }
 export interface ApplyJob { state: 'idle' | 'running' | 'done' | 'stopped' | 'failed'; done?: number; total?: number; text?: string; failed?: [string, string][] }
 export interface Transform { id: string; label: string }
 
+/** A pair of the arena: two versions of one picture under neutral addresses (relative to /arena/), so the page cannot tell which is which. */
+export interface ArenaPair { token: string; left: string; right: string; pool: number; votes: number }
+export type ArenaChoice = 'left' | 'right' | 'tie' | 'skip'
+export type ArenaSide = 'left' | 'right'
+export interface VariantRating { name: string; bt: number | null; elo: number | null; lo: number | null; hi: number | null; votes: number }
+export interface HeadToHead { a: string; b: string; a_wins: number; b_wins: number; ties: number }
+export interface Ratings { votes: number; superseded_votes: number; pictures: number; voted_pictures: number; retired: string[]; left_odds: number; variants: VariantRating[]; head_to_head: HeadToHead[] }
+/** The fix queue of the arena's flags (arena.STATUSES). */
+export const ALERT_STATUSES = ['open', 'investigating', 'fixed', 'confirmed', 'wontfix'] as const
+export type AlertStatus = (typeof ALERT_STATUSES)[number]
+/** A flag raised in the arena on one version of one picture. */
+export interface ArenaAlert {
+  id: string; token?: string; pic: string; variant: string; other: string; side: ArenaSide; note?: string; t: number; ms: number
+  votes_on_pic: number; votes_on_variant: number; status: AlertStatus; resolved: boolean; pool: { file: string; hash?: string; key?: string } | null
+}
+/** A picture the nudity filter flagged (nsfw.review). */
+export interface FlaggedPicture { path: string; cls: string; score: number; allowed: boolean }
+export interface FlaggedList { threshold: number; enabled: boolean; items: FlaggedPicture[] }
+
 /** The transforms the server offers on a picture, in order (transforms.py ORDER). */
 export const TRANSFORMS: Transform[] = [{ id: 'original', label: 'Original' }, { id: 'level', label: 'Levelled' }]
 
@@ -35,15 +55,22 @@ export const withBase = (u: string) => (u.startsWith('/') ? BASE + u : u)
 export const q = (id: string) => '?id=' + encodeURIComponent(id)
 const qi = (id: string, item: string) => q(id) + '&item=' + encodeURIComponent(item)
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(withBase(url), init)
-  const d = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error((d as { detail?: string }).detail || r.statusText)
-  return d as T
-}
+// strata-react's fetchJson: a non-2xx answer throws an HttpError carrying the server's own reason (FastAPI's `detail`), which useLoad and useAsyncAction put into words.
+const req = <T,>(url: string, init?: RequestInit): Promise<T> => fetchJson<T>(withBase(url), init)
 const send = (method: string, body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 export const api = {
+  arenaNext: (query: string) => req<ArenaPair>('/api/arena/next' + query),
+  vote: (token: string, choice: ArenaChoice, ms: number) => req<{ ok: boolean; votes?: number; skipped?: boolean }>('/api/arena/vote', send('POST', { token, choice, ms })),
+  undoVote: () => req<{ undone: unknown; votes: number }>('/api/arena/undo', { method: 'POST' }),
+  flag: (token: string, side: ArenaSide, ms: number) => req<{ ok: boolean; id: string }>('/api/arena/alert', send('POST', { token, side, note: '', ms })),
+  unflag: (token: string, side: ArenaSide) => req<{ ok: boolean; cleared: number }>('/api/arena/alert/clear', send('POST', { token, side })),
+  ratings: () => req<Ratings>('/api/arena/ratings'),
+  alerts: () => req<{ alerts: ArenaAlert[] }>('/api/alerts'),
+  setAlert: (id: string, status: AlertStatus, note: string) => req<{ ok: boolean }>('/api/alerts/status', send('POST', { id, status, note })),
+  flagged: () => req<FlaggedList>('/api/flagged'),
+  decideFlagged: (path: string, allow: boolean) => req<{ ok: boolean }>('/api/flagged/decide', send('POST', { path, allow })),
+  scanFlagged: (folder: string) => req<{ kept: number; flagged: number }>('/api/flagged/scan', send('POST', { folder })),
   report: () => req<{ available: boolean; built: number | null; neutral?: boolean; auto?: boolean }>('/api/report'),
   settings: () => req<{ projects_dir: string }>('/api/settings'),
   projects: () => req<Project[]>('/api/projects'),
@@ -80,6 +107,13 @@ export function imageUrl(id: string, item: string, variant: string | null, trans
 export function cropUrl(id: string, item: string, variant: string, transform: string, x: number, y: number, size: number, zoom: number) {
   return withBase('/api/project/crop' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform + `&x=${x.toFixed(4)}&y=${y.toFixed(4)}&size=${size}&zoom=${zoom}`)
 }
+
+/** Address of an arena picture: the pair's `left`/`right` are relative to the server's /arena/. */
+export const arenaImageUrl = (rel: string) => withBase('/arena/' + rel)
+/** The newest picture of a flagged version, or with `variant` the same picture's other version (the Lightroom final). */
+export const alertImageUrl = (id: string, variant?: string) => withBase('/api/alerts/image/' + encodeURIComponent(id) + (variant ? '?variant=' + encodeURIComponent(variant) : ''))
+/** A flagged picture, made small by the server. */
+export const flaggedImageUrl = (path: string, px = 600) => withBase('/api/flagged/image?path=' + encodeURIComponent(path) + '&px=' + px)
 
 /** Download address of a generated variant's file. */
 export const generatedFileUrl = (id: string, item: string, variant: string) => withBase('/api/project/generated/file' + qi(id, item) + '&variant=' + encodeURIComponent(variant))

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Field, NativeSelect } from 'strata-react'
 import { api, cropUrl, TRANSFORMS, type FullRes, type Variant } from '../api'
 
 export interface Point { x: number; y: number }
@@ -30,18 +31,16 @@ export function useFullRes(project: string, item: string, variant: string): Full
   return s
 }
 
-const sel = 'rounded-md border border-stone-300 dark:border-stone-700 bg-transparent px-1 py-0.5 text-xs'
-
 function Cell({ project, item, variant, transform, label, point, size, zoom }: { project: string; item: string; variant: Variant; transform: string; label: string; point: Point; size: number; zoom: number }) {
   const fr = useFullRes(project, item, variant.id), side = size * zoom
   return (
-    <figure className="shrink-0">
+    <figure className="grid shrink-0 gap-0.5">
       {fr.state === 'ready'
-        ? <img alt={`${variant.label} ${label}`} width={side} height={side} className="rounded border border-stone-300 dark:border-stone-700 bg-stone-200 dark:bg-stone-800" style={{ width: side, height: side }} src={cropUrl(project, item, variant.id, transform, point.x, point.y, size, zoom)} />
-        : <div role="status" className="rounded border border-dashed border-stone-400 dark:border-stone-600 text-xs text-stone-500 p-2 flex items-center justify-center text-center" style={{ width: side, height: side }}>
+        ? <img alt={`${variant.label} ${label}`} width={side} height={side} className="rounded-control border border-border bg-muted" style={{ width: side, height: side }} src={cropUrl(project, item, variant.id, transform, point.x, point.y, size, zoom)} />
+        : <div role="status" className="flex items-center justify-center rounded-control border border-dashed border-border p-2 text-center type-caption text-muted-foreground" style={{ width: side, height: side }}>
             {fr.state === 'failed' ? `Cannot make the full-size copy: ${fr.text}` : `Preparing the full-resolution view of ${variant.label}: ${fr.text || 'starting'}`}
           </div>}
-      <figcaption className="text-xs text-stone-500 mt-0.5">{variant.label} · {label}</figcaption>
+      <figcaption className="type-caption text-muted-foreground">{variant.label} · {label}</figcaption>
     </figure>
   )
 }
@@ -56,16 +55,14 @@ export default function Loupe({ project, item, variants, point, locked }: { proj
   const p = useSettled(point)
   if (variants.length === 0) return null
   return (
-    <section aria-label="Loupe" className="sticky bottom-0 z-10 mt-4 -mx-4 px-4 py-2 bg-stone-100/95 dark:bg-stone-950/95 border-t border-stone-300 dark:border-stone-700 backdrop-blur">
-      <div className="flex items-center gap-3 text-xs text-stone-500 mb-1 flex-wrap">
-        <b className="text-stone-800 dark:text-stone-200 text-sm">Loupe (full resolution)</b>
-        <span>{p ? (locked ? 'Held: click the picture again to release.' : 'Following the pointer: click the picture to hold it.') : 'Move the pointer over the picture.'}</span>
-        <label className="ml-auto flex items-center gap-1">Area
-          <select aria-label="Loupe area" className={sel} value={size} onChange={e => setSize(Number(e.target.value))}>{[100, 160, 240, 320].map(n => <option key={n} value={n}>{n} px</option>)}</select>
-        </label>
-        <label className="flex items-center gap-1">Zoom
-          <select aria-label="Loupe zoom" className={sel} value={zoom} onChange={e => setZoom(Number(e.target.value))}>{[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}×</option>)}</select>
-        </label>
+    <section aria-label="Loupe" className="sticky bottom-0 z-10 grid gap-2 border-t border-border bg-background py-2">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="grid gap-0.5">
+          <h2 className="type-label">Loupe (full resolution)</h2>
+          <p className="type-caption text-muted-foreground">{p ? (locked ? 'Held: click the picture again to release.' : 'Following the pointer: click the picture to hold it.') : 'Move the pointer over the picture.'}</p>
+        </div>
+        <Field label="Loupe area" className="ml-auto"><NativeSelect size="sm" value={size} onChange={e => setSize(Number(e.target.value))}>{[100, 160, 240, 320].map(n => <option key={n} value={n}>{n} px</option>)}</NativeSelect></Field>
+        <Field label="Loupe zoom"><NativeSelect size="sm" value={zoom} onChange={e => setZoom(Number(e.target.value))}>{[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}×</option>)}</NativeSelect></Field>
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
         {p && variants.flatMap(v => TRANSFORMS.map(t => <Cell key={v.id + t.id} project={project} item={item} variant={v} transform={t.id} label={t.label} point={p} size={size} zoom={zoom} />))}

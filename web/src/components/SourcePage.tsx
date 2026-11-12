@@ -1,48 +1,51 @@
+// One question: "Which picture of this folder do I look at?" A grid of thumbnails (strata-react Thumbnail: a box of fixed shape with a skeleton, words when the picture is missing,
+// and a request only near the screen, so a folder of hundreds does not ask for all of them at once). Videos are not processed yet, so they are hidden behind a switch.
 import { useState } from 'react'
+import { Link } from 'react-router'
+import { Breadcrumb, DataView, EmptyState, PageHeader, Status, Switch, Thumbnail, ThumbnailSkeleton, format, useLoad, type Tone } from 'strata-react'
 import { api, imageUrl, type Item } from '../api'
-import { href, useLoad } from '../route'
-import { Crumbs, Err, projectCrumbs } from './ui'
+import { href, useIds } from '../route'
 import AutoGenerate from './AutoGenerate'
 
-const BADGE: Record<string, string> = { pano: 'bg-purple-600', video: 'bg-stone-600', still: 'bg-blue-600' }
+const KIND: Record<Item['kind'], { word: string; tone: Tone }> = { still: { word: 'Still', tone: 'neutral' }, pano: { word: 'Panorama', tone: 'info' }, video: { word: 'Video', tone: 'neutral' } }
+/** The short names of an item's variants, the primary first: "raw", "jpg", "gen". */
+export const variantWords = (i: Item) => [...i.variants].sort((a, b) => Number(b.id === i.primary) - Number(a.id === i.primary)).map(v => (v.kind === 'generated' ? 'gen' : v.ext.replace(/^\./, '')))
 
-export function Thumb({ project, item }: { project: string; item: Item }) {
+export function Thumb({ project, item, eager }: { project: string; item: Item; eager?: boolean }) {
   return (
-    <a href={href.item(project, item.id)} className="group block rounded-lg overflow-hidden border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 hover:border-blue-500">
-      <div className="aspect-[4/3] bg-stone-200 dark:bg-stone-800 flex items-center justify-center text-stone-500 text-sm">
-        {item.kind === 'video' ? <span>video</span> : <img loading="lazy" alt={item.stem} className="w-full h-full object-cover" src={imageUrl(project, item.id, item.primary, 'original', 360)} />}
-      </div>
-      <div className="p-2 text-xs">
-        <div className="font-mono truncate" title={item.stem}>{item.stem.replace(/^DJI_/, '')}</div>
-        <div className="flex gap-1 mt-1 flex-wrap">
-          <span className={`text-white rounded px-1 ${BADGE[item.kind]}`}>{item.kind}</span>
-          {item.variants.map(v => <span key={v.id} className={`rounded px-1 border ${v.id === item.primary ? 'border-blue-500 text-blue-600' : 'border-stone-300 dark:border-stone-600 text-stone-500'}`}>{v.kind === 'generated' ? 'gen' : v.ext.slice(1)}</span>)}
-        </div>
-      </div>
-    </a>
+    <Link to={href.item(project, item.id)} className="grid gap-1.5 rounded-surface border border-border p-1.5 no-underline transition-state hover:border-muted-foreground">
+      <Thumbnail src={item.kind === 'video' || !item.primary ? null : imageUrl(project, item.id, item.primary, 'original', 360)} alt={item.stem} aspect="4/3" missing={item.kind === 'video' ? 'Video' : 'No picture'} eager={eager} className="w-full rounded-control" />
+      <span className="truncate font-mono type-caption text-foreground" title={item.stem}>{item.stem.replace(/^DJI_/, '')}</span>
+      <span className="flex flex-wrap gap-1"><Status tone={KIND[item.kind].tone}>{KIND[item.kind].word}</Status>{item.variants.length > 0 && <span className="type-caption text-muted-foreground">{variantWords(item).join(' · ')}</span>}</span>
+    </Link>
   )
 }
 
-export default function SourcePage({ project, source }: { project: string; source: string }) {
-  const proj = useLoad(() => api.project(project), [project])
-  const srcs = useLoad(() => api.sources(project), [project])
-  const items = useLoad(() => api.items(project, source), [project, source])
+export default function SourcePage() {
+  const { project, source } = useIds()
+  const proj = useLoad({ queryKey: ['project', project], queryFn: () => api.project(project) })
+  const srcs = useLoad({ queryKey: ['sources', project], queryFn: () => api.sources(project) })
+  const items = useLoad({ queryKey: ['items', project, source], queryFn: () => api.items(project, source) })
   const [videos, setVideos] = useState(false)
-  const shown = items.data?.filter(i => videos || i.kind !== 'video') ?? []
-  const nVideo = items.data?.filter(i => i.kind === 'video').length ?? 0
-  const path = srcs.data?.find(s => s.id === source)?.path
+  const path = srcs.status === 'ready' ? srcs.data.find(s => s.id === source)?.path : undefined
+  const name = proj.status === 'ready' ? proj.data.name : project
+  const nVideo = items.status === 'ready' ? items.data.filter(i => i.kind === 'video').length : 0
+  const grid = 'grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5'
+
   return (
-    <section>
-      <Crumbs items={[...projectCrumbs(project, proj.data?.name), { label: path ?? 'Source' }]} />
-      <h1 className="text-lg font-semibold">Contents</h1>
-      {path && <p className="text-xs text-stone-500 mb-2 font-mono break-all">{path}</p>}
-      <AutoGenerate project={project} source={source} onDone={items.reload} />
-      <Err msg={items.error} />
-      {items.data && nVideo > 0 && <label className="text-sm text-stone-500 flex items-center gap-2 mb-3"><input type="checkbox" checked={videos} onChange={e => setVideos(e.target.checked)} />Show {nVideo} videos (not processed yet)</label>}
-      {!items.data && !items.error && <p className="text-stone-500">Loading…</p>}
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {shown.map(i => <Thumb key={i.id} project={project} item={i} />)}
-      </div>
+    <section className="grid gap-6">
+      <Breadcrumb items={[{ label: 'Projects', to: href.projects() }, { label: name, to: href.project(project) }, { label: path ?? 'Contents' }]} />
+      <PageHeader title="Contents" scope={path ? <span className="font-mono break-all">{path}</span> : undefined} />
+      <AutoGenerate project={project} source={source} />
+      {nVideo > 0 && <Switch label={`Show ${format.count(nVideo, 'video')}`} detail="Videos are not processed yet." on={videos} onChange={setVideos} />}
+      <DataView
+        state={items}
+        isEmpty={rows => rows.length === 0}
+        skeleton={<div className={grid}>{[0, 1, 2, 3, 4].map(i => <ThumbnailSkeleton key={i} aspect="4/3" />)}</div>}
+        empty={<EmptyState title="No pictures in this folder">Raws, JPEGs and panoramas show up here; check the folder holds some.</EmptyState>}
+      >
+        {rows => <ul aria-label="Pictures" className={grid}>{rows.filter(i => videos || i.kind !== 'video').map((i, n) => <li key={i.id} className="grid"><Thumb project={project} item={i} eager={n < 10} /></li>)}</ul>}
+      </DataView>
     </section>
   )
 }

@@ -1,27 +1,33 @@
-import { useEffect, useState } from 'react'
+// The app's frame: strata-react's AppShell (side nav, current page as a pill) around every screen but the arena.
+// The top bar holds what every screen uses: the reports, when the server has them, and the light/dark choice (there is no settings page, so it is the compact one).
+import { Outlet } from 'react-router'
+import { AppShell, ColorSchemeChoice, useLoad } from 'strata-react'
 import { api, withBase } from './api'
-import { useRoute, href } from './route'
-import ProjectList from './components/ProjectList'
-import ProjectPage from './components/ProjectPage'
-import SourcePage from './components/SourcePage'
-import ItemPage from './components/ItemPage'
+import { href } from './route'
 
-export default function App() {
-  const r = useRoute()
-  const [report, setReport] = useState({ neutral: false, auto: false })
-  useEffect(() => { api.report().then(x => setReport({ neutral: !!x.neutral, auto: !!x.auto })).catch(() => {}) }, [])
+const nav = [
+  { to: href.projects(), label: 'Projects', end: true },
+  { to: href.arena(), label: 'Arena' },
+  { to: href.alerts(), label: 'Arena flags' },
+  { to: href.flagged(), label: 'Flagged pictures' },
+]
+
+/** Links to the visual reports that exist (a failed read shows none: they are optional). */
+export function ReportLinks() {
+  const report = useLoad({ queryKey: ['report'], queryFn: api.report })
+  if (report.status !== 'ready') return null
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6">
-      <header className="mb-5 flex items-baseline gap-3">
-        <a href={href.projects()} className="text-xl font-semibold">strata-stills</a>
-        <a href={withBase('/arena/')} className="text-sm text-blue-600 dark:text-blue-400 ml-auto">Arena</a>
-        {report.neutral && <a href={withBase('/report/neutral/')} target="_blank" rel="noreferrer" className="text-sm text-blue-600 dark:text-blue-400">Neutral report</a>}
-        {report.auto && <a href={withBase('/report/auto/')} target="_blank" rel="noreferrer" className="text-sm text-blue-600 dark:text-blue-400">Auto report</a>}
-      </header>
-      {r.page === 'projects' && <ProjectList />}
-      {r.page === 'project' && <ProjectPage project={r.project} />}
-      {r.page === 'source' && <SourcePage project={r.project} source={r.source} />}
-      {r.page === 'item' && <ItemPage project={r.project} item={r.item} source={r.source} />}
-    </div>
+    <>
+      {report.data.neutral && <a href={withBase('/report/neutral/')} target="_blank" rel="noreferrer" className="type-body-sm">Neutral report</a>}
+      {report.data.auto && <a href={withBase('/report/auto/')} target="_blank" rel="noreferrer" className="type-body-sm">Auto report</a>}
+    </>
+  )
+}
+
+export default function Shell() {
+  return (
+    <AppShell product="strata-stills" nav={nav} topBar={<><ReportLinks /><ColorSchemeChoice compact className="ml-auto" /></>}>
+      <Outlet />
+    </AppShell>
   )
 }

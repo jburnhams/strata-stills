@@ -1,12 +1,12 @@
 # Web tests
 
-vitest 4, Testing Library, user-event, msw (backend mocks). Run from `web/`: `npm run test:unit`, `npm run test:integration`, `npm run test:coverage:gate` (unit + integration together, the number CI gates on: floors in `web/coverage-floor.json`, which only ratchet up), `npm run test:coverage:all` (the same run without the gate), `npm run test:coverage` (unit only, informational), `npm run typecheck`, `npm run build`.
+vitest 5, strata-react/testing, Testing Library, user-event, msw (backend mocks). Run from `web/`: `npm run test:unit`, `npm run test:integration`, `npm run test:coverage:gate` (unit + integration together, the number CI gates on: floors in `web/coverage-floor.json`, which only ratchet up), `npm run test:coverage:all` (the same run without the gate), `npm run test:coverage` (unit only, informational), `npm run typecheck`, `npm run build`.
 
 ## Layout
 
 - `unit/`: node environment, no DOM. Pure functions (`logic.test.ts`).
-- `integration/`: jsdom. Components rendered with Testing Library against a mocked backend (`App`, `Generate`, `Loupe`).
-- `utils/`: `server.ts` is the one msw server and its default happy-path handlers: **every endpoint the app calls needs a handler there** (an unmocked request fails the test); `setup.ts` is the jsdom setup.
+- `integration/`: jsdom. The app's own route tree rendered at a route with `open(route)` (`utils/render.tsx`, strata-react's `renderRoutes`) against a mocked backend.
+- `utils/`: `server.ts` is the one msw server and its default happy-path handlers: **every endpoint the app calls needs a handler there** (an unmocked request fails the test); `setup.ts` is the jsdom setup (msw, strata-react's layout shims).
 - One test file per area of the app; add to the existing file if there is one.
 
 ## Conventions
@@ -23,16 +23,14 @@ vitest 4, Testing Library, user-event, msw (backend mocks). Run from `web/`: `np
 
 ## Coverage status
 
-| File | % Lines | Status | Notes |
-|---|---|---|---|
-| `src/App.tsx` | 100 | done | Covered by top-level integration tests |
-| `src/api.ts` | 100 | done | Covered through handlers in integration tests |
-| `src/route.ts` | 100 | done | Tested indirectly via navigation |
-| `src/components/AutoGenerate.tsx` | 100 | done | Handled in integration/AutoGenerate.test.tsx |
-| `src/components/GeneratePanel.tsx` | 98.21 | done | Generate.test.tsx: the panel, the background job's polling and its error, saving and deleting a preset |
-| `src/components/ItemPage.tsx` | 94.73 | done | Tested in ItemPage.test.tsx |
-| `src/components/Loupe.tsx` | 100 | done | Handled in Loupe.test.tsx |
-| `src/components/ProjectList.tsx` | 100 | done | ProjectList.test.tsx: list, create (with and without a first source), errors, plural |
-| `src/components/ProjectPage.tsx` | 100 | done | ProjectPage.test.tsx handles this |
-| `src/components/SourcePage.tsx` | 100 | done | SourcePage.test.tsx handles this |
-| `src/components/ui.tsx` | 100 | done | Util components |
+| File | Tests |
+|---|---|
+| `src/App.tsx`, `src/routes.tsx`, `src/route.ts` | `App.test.tsx` (navigation, nav, reports), `unit/logic.test.ts` |
+| `src/components/ProjectList.tsx` | `ProjectList.test.tsx` |
+| `src/components/ProjectPage.tsx` | `ProjectPage.test.tsx` (including the undo window of a removal) |
+| `src/components/SourcePage.tsx`, `AutoGenerate.tsx` | `SourcePage.test.tsx` |
+| `src/components/ItemPage.tsx`, `Loupe.tsx` | `ItemPage.test.tsx` |
+| `src/components/GeneratePanel.tsx` | `Generate.test.tsx` |
+| `src/components/ArenaPage.tsx` | `Arena.test.tsx` |
+| `src/components/AlertsPage.tsx` | `Alerts.test.tsx` |
+| `src/components/FlaggedPage.tsx` | `Flagged.test.tsx` |

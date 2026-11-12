@@ -44,6 +44,14 @@ STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 LANDING = os.path.join(os.path.dirname(os.path.abspath(__file__)), "landing.html")
 
 
+def app_page(route: str, title: str) -> str:
+    """A page that moved into the React app (web/src/routes.tsx): send the browser to its route there, keeping the query (the arena's ?set= and ?want=).
+    Relative, so it works at the server's root and behind Caddy at /strata-stills/ alike; without a build, it says how to make one."""
+    if not os.path.exists(os.path.join(STATIC, "index.html")):
+        return f"<!doctype html><meta charset=utf-8><title>{title}</title><p>{title} is part of the web app, which is not built: <code>cd web; npm run build</code>.</p>"
+    return f"<!doctype html><meta charset=utf-8><title>{title}</title><script>location.replace('../#/{route}'+location.search)</script><p><a href='../#/{route}'>{title}</a></p>"
+
+
 class NewProject(BaseModel):
     name: str
     sources: list[str] = []
@@ -135,15 +143,13 @@ def create_app():
         )  # the React app when it has been built (cd web; npm run build), else the plain stand-in page
         return open(built if os.path.exists(built) else LANDING, encoding="utf8").read()
 
-    FLAGGED_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flagged.html")
-
     @app.get("/flagged")
     def flagged_slash():
         return RedirectResponse("/flagged/")
 
     @app.get("/flagged/", response_class=HTMLResponse)
     def flagged_page():
-        return open(FLAGGED_PAGE, encoding="utf8").read()
+        return app_page("flagged", "Flagged pictures")
 
     @app.get("/api/flagged")
     def flagged_list():
@@ -188,7 +194,6 @@ def create_app():
         peers = {d: os.path.exists(os.path.join(root, d, "index.html")) for d in ("neutral", "auto")}
         return dict(available=os.path.exists(f), built=os.path.getmtime(f) if os.path.exists(f) else None, **peers)
 
-    ARENA_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arena.html")
     pending, arena_lock = {}, threading.Lock()
 
     def arena_pool():
@@ -209,7 +214,7 @@ def create_app():
 
     @app.get("/arena/", response_class=HTMLResponse)
     def arena_page():
-        return open(ARENA_PAGE, encoding="utf8").read()
+        return app_page("arena", "Rating arena")
 
     @app.get("/api/arena/next")
     def arena_next(want: str = "", set_name: str = Query("", alias="set")):
@@ -285,8 +290,6 @@ def create_app():
         )
         return dict(ok=True, votes=len(arena_votes()))
 
-    ALERTS_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alerts.html")
-
     @app.post("/api/arena/alert")
     def arena_alert(body: AlertIn):
         """Something is wrong with one picture of the pair on screen (the vote is not recorded; the picture's variant is no longer offered until the alert is resolved)."""
@@ -338,7 +341,7 @@ def create_app():
 
     @app.get("/alerts/", response_class=HTMLResponse)
     def alerts_page():
-        return open(ALERTS_PAGE, encoding="utf8").read()
+        return app_page("alerts", "Arena flags")
 
     @app.get("/api/alerts")
     def alerts_list():
