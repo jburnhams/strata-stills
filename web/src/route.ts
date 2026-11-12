@@ -1,45 +1,28 @@
-// Hash routing: #/ (projects), #/p/<project> (its sources), #/p/<project>/s/<source> (contents of a source), #/p/<project>/i/<item> (one item). Every id is URI-encoded (project ids contain slashes).
-import { useEffect, useState } from 'react'
-
-export type Route =
-  | { page: 'projects' }
-  | { page: 'project'; project: string }
-  | { page: 'source'; project: string; source: string }
-  | { page: 'item'; project: string; item: string; source: string }
+// The app's addresses. Hash routing (React Router's createHashRouter): the server serves one page at its root, behind a reverse proxy at a path too, so the route lives after the '#':
+// #/ (projects), #/p/<project> (its sources), #/p/<project>/s/<source> (contents of a source), #/p/<project>/i/<item> (one item), #/arena, #/alerts, #/flagged.
+// Every id is URI-encoded (project ids contain slashes); these are the paths given to React Router's Link and navigate, which add the '#'.
+import { useParams } from 'react-router'
 
 const enc = encodeURIComponent
 
-export function parse(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent)
-  if (parts[0] === 'p' && parts[1]) {
-    if (parts[2] === 's' && parts[3]) return { page: 'source', project: parts[1], source: parts[3] }
-    if (parts[2] === 'i' && parts[3]) return { page: 'item', project: parts[1], item: parts[3], source: parts[3].split('~')[0] }
-    return { page: 'project', project: parts[1] }
-  }
-  return { page: 'projects' }
-}
-
 export const href = {
-  projects: () => '#/',
-  project: (p: string) => `#/p/${enc(p)}`,
-  source: (p: string, s: string) => `#/p/${enc(p)}/s/${enc(s)}`,
-  item: (p: string, i: string) => `#/p/${enc(p)}/i/${enc(i)}`,
+  projects: () => '/',
+  project: (p: string) => `/p/${enc(p)}`,
+  source: (p: string, s: string) => `/p/${enc(p)}/s/${enc(s)}`,
+  item: (p: string, i: string) => `/p/${enc(p)}/i/${enc(i)}`,
+  arena: () => '/arena',
+  alerts: () => '/alerts',
+  flagged: () => '/flagged',
 }
 
-export function useRoute(): Route {
-  const [r, setR] = useState(() => parse(window.location.hash))
-  useEffect(() => { const f = () => setR(parse(window.location.hash)); window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f) }, [])
-  return r
-}
+/** The source folder an item belongs to: its id is `<source>~<stem>`. */
+export const sourceOf = (item: string) => item.split('~')[0]
 
-/** Run an async loader when `deps` change; gives {data, error, reload}. A newer call wins over an older one still in flight. */
-export function useLoad<T>(load: () => Promise<T>, deps: unknown[]) {
-  const [data, setData] = useState<T | null>(null), [error, setError] = useState<string | null>(null), [n, setN] = useState(0)
-  useEffect(() => {
-    let live = true; setError(null)
-    load().then(d => { if (live) setData(d) }, e => { if (live) setError(String(e.message || e)) })
-    return () => { live = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, n])
-  return { data, error, reload: () => setN(x => x + 1) }
+// React Router keeps an encoded slash encoded inside one segment (its decodePath), so a project id with slashes arrives as 'a%2Fb': put the slashes back.
+const dec = (s: string | undefined) => (s ?? '').replace(/%2F/gi, '/')
+
+/** The ids in the current route, decoded. */
+export function useIds() {
+  const p = useParams()
+  return { project: dec(p.project), source: dec(p.source), item: dec(p.item) }
 }

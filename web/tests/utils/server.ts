@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import type { GenerateBody, GenerateRecord, Item, Preset, Project, Rule, SourceSummary, Stage } from '../../src/api'
+import type { ArenaAlert, FlaggedPicture, GenerateBody, GenerateRecord, Item, Preset, Project, Rule, SourceSummary, Stage } from '../../src/api'
 
 export const project: Project = { id: 'demo', name: 'Demo', created: null, n_sources: 1, sources: [{ path: 'C:\\shoot' }] }
 export const sources: SourceSummary[] = [{ id: 'abcd1234', path: 'C:\\shoot', reachable: true, stills: 2, panos: 1, videos: 1 }]
@@ -38,8 +38,10 @@ export const presets: Preset[] = [
 export const generatedRecord: GenerateRecord = { key: 'abc123', file: 'C:\p\generated\abc123.jpg', output: [6016, 4512], bytes: 15000000, format: 'jpeg', quality: 90, summary: 'JPEG q90 · size auto · levelled · sharpened 3', steps: ['developed from the raw'] }
 
 /** What the mock server remembers within a test (reset after each one). */
-export const mock = { fullres: { state: 'ready', text: '' } as { state: string; text: string }, exists: false, existingVariant: 'gen-abc123', checks: [] as GenerateBody[], generates: [] as GenerateBody[], saved: [] as unknown[], rules: [] as Rule[], applies: 0, statusCalls: 0 }
-export const resetMock = () => { mock.fullres = { state: 'ready', text: '' }; mock.exists = false; mock.checks = []; mock.generates = []; mock.saved = []; mock.rules = []; mock.applies = 0; mock.statusCalls = 0 }
+const fresh = () => ({ fullres: { state: 'ready', text: '' } as { state: string; text: string }, exists: false, existingVariant: 'gen-abc123', checks: [] as GenerateBody[], generates: [] as GenerateBody[], saved: [] as unknown[], rules: [] as Rule[], applies: 0, statusCalls: 0,
+  pairs: 0, votes: [] as unknown[], flags: [] as unknown[], unflags: [] as unknown[], undos: 0, statuses: [] as unknown[], decisions: [] as unknown[], scans: [] as string[], removed: [] as string[] })
+export const mock = fresh()
+export const resetMock = () => { Object.assign(mock, fresh()) }
 
 /** The stages a body asks for: the preset with the flat options laid over it (a small copy of what the server does, enough to show the summary and the Advanced values). */
 export function stagesOf(b: GenerateBody): Stage[] {
@@ -63,6 +65,32 @@ handlers.push(
   http.post('/api/project/apply', () => { mock.applies++; return HttpResponse.json({ state: 'running', done: 0, total: 3, text: 'starting', failed: [] }) }),
   http.get('/api/project/apply', () => { mock.statusCalls++; return HttpResponse.json({ state: 'done', done: 3, total: 3, text: '', failed: [] }) }),
   http.delete('/api/project/apply', () => HttpResponse.json({ state: 'stopped', done: 1, total: 3, failed: [] })),
+)
+
+export const alerts: ArenaAlert[] = [
+  { id: 'a2', token: 't2', pic: 'pic1', variant: 'auto1', other: 'auto2', side: 'right', note: 'banding in the sky', t: 1750000000, ms: 2500, votes_on_pic: 3, votes_on_variant: 2, status: 'fixed', resolved: true, pool: { file: 'img/1_auto1.jpg', hash: 'abc', key: 'k1' } },
+  { id: 'a1', token: 't1', pic: 'pic2', variant: 'auto2', other: 'lightroom', side: 'left', t: 1700000000, ms: 1500, votes_on_pic: 2, votes_on_variant: 1, status: 'open', resolved: false, pool: null },
+  { id: 'a0', pic: 'pic0', variant: 'auto3', other: 'lightroom', side: 'left', note: '', t: 1600000000, ms: 900, votes_on_pic: 1, votes_on_variant: 1, status: 'wontfix', resolved: true, pool: { file: 'img/0_auto3.jpg' } },
+]
+export const ratings = {
+  votes: 6, superseded_votes: 1, pictures: 3, voted_pictures: 2, retired: [], left_odds: 1.02,
+  variants: [{ name: 'lightroom', bt: 1620, elo: 1580, lo: 1550, hi: 1700, votes: 5 }, { name: 'auto1', bt: 1450, elo: 1470, lo: null, hi: null, votes: 6 }, { name: 'auto2', bt: null, elo: null, lo: null, hi: null, votes: 0 }],
+  head_to_head: [{ a: 'lightroom', b: 'auto1', a_wins: 5, b_wins: 0, ties: 0 }],
+}
+export const flagged: FlaggedPicture[] = [{ path: 'C:\\shoot\\beach.JPG', cls: 'EXPOSED', score: 0.91, allowed: false }, { path: 'C:\\shoot\\pool.JPG', cls: 'COVERED', score: 0.62, allowed: true }]
+
+handlers.push(
+  http.get('/api/arena/next', () => { mock.pairs++; return HttpResponse.json({ token: 'tok' + mock.pairs, left: `img/tok${mock.pairs}/left`, right: `img/tok${mock.pairs}/right`, pool: 3, votes: 6 }) }),
+  http.post('/api/arena/vote', async ({ request }) => { const b = await request.json() as { choice: string }; mock.votes.push(b); return HttpResponse.json(b.choice === 'skip' ? { ok: true, skipped: true } : { ok: true, votes: 6 + mock.votes.length }) }),
+  http.post('/api/arena/undo', () => { mock.undos++; return HttpResponse.json({ undone: {}, votes: 5 }) }),
+  http.post('/api/arena/alert', async ({ request }) => { mock.flags.push(await request.json()); return HttpResponse.json({ ok: true, id: 'new' }) }),
+  http.post('/api/arena/alert/clear', async ({ request }) => { mock.unflags.push(await request.json()); return HttpResponse.json({ ok: true, cleared: 1 }) }),
+  http.get('/api/arena/ratings', () => HttpResponse.json(ratings)),
+  http.get('/api/alerts', () => HttpResponse.json({ alerts })),
+  http.post('/api/alerts/status', async ({ request }) => { mock.statuses.push(await request.json()); return HttpResponse.json({ ok: true }) }),
+  http.get('/api/flagged', () => HttpResponse.json({ threshold: 0.5, enabled: true, items: flagged })),
+  http.post('/api/flagged/decide', async ({ request }) => { mock.decisions.push(await request.json()); return HttpResponse.json({ ok: true }) }),
+  http.post('/api/flagged/scan', async ({ request }) => { const b = await request.json() as { folder: string }; mock.scans.push(b.folder); return b.folder === 'bad' ? HttpResponse.json({ detail: 'not a folder: bad' }, { status: 400 }) : HttpResponse.json({ kept: 12, flagged: 2 }) }),
 )
 
 export const server = setupServer(...handlers)

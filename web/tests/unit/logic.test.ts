@@ -1,17 +1,54 @@
 import { describe, expect, it } from 'vitest'
-import { parse, href } from '../../src/route'
-import { imageUrl } from '../../src/api'
+import { href, sourceOf } from '../../src/route'
+import { alertImageUrl, arenaImageUrl, flaggedImageUrl, imageUrl } from '../../src/api'
 import { describe as say } from '../../src/components/ItemPage'
+import { arenaQuery } from '../../src/components/ArenaPage'
+import { jobSummary } from '../../src/components/AutoGenerate'
+import { holds } from '../../src/components/ProjectPage'
+import { variantWords } from '../../src/components/SourcePage'
+import { items } from '../utils/server'
 
 describe('routes', () => {
-  it('parses every page', () => {
-    expect(parse('')).toEqual({ page: 'projects' })
-    expect(parse('#/p/2025%2Fdrone%2Ftwo')).toEqual({ page: 'project', project: '2025/drone/two' })
-    expect(parse('#/p/demo/s/abcd1234')).toEqual({ page: 'source', project: 'demo', source: 'abcd1234' })
-    expect(parse('#/p/demo/i/abcd1234~A_1')).toEqual({ page: 'item', project: 'demo', item: 'abcd1234~A_1', source: 'abcd1234' })
+  it('encodes ids into one path segment each (project ids contain slashes)', () => {
+    expect(href.project('2025/drone/two')).toBe('/p/2025%2Fdrone%2Ftwo')
+    expect(href.source('demo', 'abcd1234')).toBe('/p/demo/s/abcd1234')
+    expect(href.item('demo', 'abcd1234~A_1')).toBe('/p/demo/i/abcd1234~A_1')
+    expect([href.projects(), href.arena(), href.alerts(), href.flagged()]).toEqual(['/', '/arena', '/alerts', '/flagged'])
   })
-  it('round-trips ids that contain slashes', () => {
-    const h = href.item('2025/drone/two', 'abcd1234~A_1'); expect(parse(h)).toMatchObject({ page: 'item', project: '2025/drone/two', item: 'abcd1234~A_1' })
+  it('finds the source folder of an item', () => expect(sourceOf('abcd1234~A_1')).toBe('abcd1234'))
+})
+
+describe('arena and flags addresses', () => {
+  it('passes on only the arena\'s own query', () => {
+    expect(arenaQuery(new URLSearchParams('set=hard&want=auto1,auto2&x=1'))).toBe('?set=hard&want=auto1%2Cauto2')
+    expect(arenaQuery(new URLSearchParams(''))).toBe('')
+  })
+  it('builds picture addresses', () => {
+    expect(arenaImageUrl('img/tok/left')).toBe('/arena/img/tok/left')
+    expect(alertImageUrl('a 1')).toBe('/api/alerts/image/a%201')
+    expect(alertImageUrl('a1', 'lightroom')).toBe('/api/alerts/image/a1?variant=lightroom')
+    expect(flaggedImageUrl('C:\\x y.jpg')).toBe('/api/flagged/image?path=C%3A%5Cx%20y.jpg&px=600')
+  })
+})
+
+describe('words', () => {
+  it('says how an auto-generate run stands', () => {
+    expect(jobSummary({ state: 'running', done: 1, total: 3, text: 'A_1' })).toBe('1 of 3: A_1')
+    expect(jobSummary({ state: 'running' })).toBe('0 of …')
+    expect(jobSummary({ state: 'stopped', done: 1, total: 3 })).toBe('Stopped after 1 of 3.')
+    expect(jobSummary({ state: 'stopped' })).toBe('Stopped after 0 of 0.')
+    expect(jobSummary({ state: 'done', done: 3, total: 3, failed: [] })).toBe('Made 3 of 3.')
+    expect(jobSummary({ state: 'done', done: 2, total: 3, failed: [['x~A', 'broken']] })).toBe('Made 2 of 3; 1 failed.')
+    expect(jobSummary({ state: 'done' })).toBe('Made 0 of 0.')
+  })
+  it('says what a folder holds, leaving out what it has none of', () => {
+    expect(holds({ id: 'a', path: 'p', reachable: true, stills: 2, panos: 1, videos: 1 })).toBe('2 stills, 1 panoramas, 1 videos')
+    expect(holds({ id: 'a', path: 'p', reachable: true, stills: 0, panos: 0, videos: 0 })).toBe('0 stills')
+  })
+  it('names the variants, primary first', () => {
+    expect(variantWords(items[0])).toEqual(['dng', 'jpg'])
+    expect(variantWords({ ...items[0], primary: 'jpeg' })).toEqual(['jpg', 'dng'])
+    expect(variantWords({ ...items[0], variants: [{ id: 'g', label: 'G', path: '', kind: 'generated', ext: '.jpg' }] })).toEqual(['gen'])
   })
 })
 

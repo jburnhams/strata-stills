@@ -1,50 +1,50 @@
 import { describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import App from '../../src/App'
+import { open } from '../utils/render'
 import { server } from '../utils/server'
 
-const open = (hash: string) => { window.location.hash = hash; return render(<App />) }
+describe('the app', () => {
+  it('goes from the project list to a folder to a picture', async () => {
+    const { router } = open('/')
+    await userEvent.click(await screen.findByRole('link', { name: 'Demo' }))
+    expect(router.state.location.pathname).toBe('/p/demo')
+    await userEvent.click(await screen.findByRole('link', { name: 'C:\\shoot' }))
+    expect(router.state.location.pathname).toBe('/p/demo/s/abcd1234')
+    await userEvent.click(await screen.findByRole('link', { name: /A_1/ }))
+    expect(router.state.location.pathname).toBe('/p/demo/i/abcd1234~A_1')
+    expect(await screen.findByRole('heading', { name: 'A_1', level: 1 })).toBeInTheDocument()
+  })
 
-describe('App navigation', () => {
-  it('navigates from project list to item page', async () => {
-    open('#/')
+  it('names every screen in the side nav and marks the current one', async () => {
+    open('/flagged')
+    const nav = screen.getByRole('navigation', { name: 'Main' })
+    expect(within(nav).getByRole('link', { name: 'Flagged pictures' })).toHaveAttribute('aria-current', 'page')
+    for (const name of ['Projects', 'Arena', 'Arena flags']) expect(within(nav).getByRole('link', { name })).toBeInTheDocument()
+  })
 
-    // Project list
-    expect(await screen.findByText('Demo')).toBeInTheDocument()
-    await userEvent.click(screen.getByText('Demo'))
-
-    // Project page
-    expect(await screen.findByText('2 stills, 1 panoramas, 1 videos')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('link', { name: /C:\\shoot/ }))
-
-    // Source page
-    const img = await screen.findByAltText('A_1')
-    await userEvent.click(img)
-
-    // Item page
-    expect(await screen.findByText('★ primary')).toBeInTheDocument()
+  it('sends an unknown address to the projects', async () => {
+    const { router } = open('/nowhere')
+    expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/')
   })
 
   it('links to the reports only when the server has them', async () => {
-    open('#/')
-    await screen.findByText('Demo')
+    open('/')
+    await screen.findByRole('link', { name: 'Demo' })
     expect(screen.queryByRole('link', { name: 'Neutral report' })).toBeNull()
   })
 
-  it('shows the visual report link when there is a report', async () => {
+  it('links to each report the server has', async () => {
     server.use(http.get('/api/report', () => HttpResponse.json({ available: true, built: 1, neutral: true, auto: true })))
-    open('#/')
-    const link = await screen.findByRole('link', { name: 'Neutral report' })
-    expect(link.getAttribute('href')).toContain('report/neutral/')
-    expect((await screen.findByRole('link', { name: 'Auto report' })).getAttribute('href')).toContain('report/auto/')
+    open('/')
+    expect(await screen.findByRole('link', { name: 'Neutral report' })).toHaveAttribute('href', '/report/neutral/')
+    expect(screen.getByRole('link', { name: 'Auto report' })).toHaveAttribute('href', '/report/auto/')
   })
 
-  it('shows no report link when the report request fails', async () => {
-    server.use(http.get('/api/report', () => new HttpResponse(null, { status: 500 })))
-    open('#/')
-    await screen.findByText('Demo')
-    expect(screen.queryByRole('link', { name: 'Neutral report' })).toBeNull()
+  it('offers the light and dark choice in the top bar', async () => {
+    open('/')
+    expect(screen.getByRole('radiogroup', { name: 'Appearance' })).toBeInTheDocument()
   })
 })
