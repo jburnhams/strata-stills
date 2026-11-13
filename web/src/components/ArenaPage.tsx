@@ -2,6 +2,7 @@
 // which version is which: strata-react's Compare with `blind` (the pictures are called Left and Right, and are served under neutral addresses, img/<token>/left), one zoom and pan for both,
 // swipe, blink and full screen for looking closely. Answers are single keys from one list that also draws the legend (← → ↓ S Z, and 1 2 to flag a side), and nothing moves when you answer
 // (ux-research ux-character.md: done 100+ times a day, so no motion). The next pair is fetched, and its pictures loaded, while this one is judged; a pair is shown only once both pictures are in.
+// The pictures are as big as the window allows with everything else still in view, so there is never a scroll bar to reach the answer (fit.ts).
 // A flag says something is wrong with one picture: the pair is not counted, and the flag goes to the fix queue on the Arena flags screen.
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
@@ -9,6 +10,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, ColorSchemeChoice, Compare, DataTable, DataView, Disclosure, EmptyState, HttpError, KeysLegend, PageHeader, Skeleton, TableSkeleton, Toggle, format, toast, useHotkeys, useLoad, type Column, type CompareMode, type Shortcut } from 'strata-react'
 import { api, arenaImageUrl, type ArenaChoice, type ArenaPair, type ArenaSide, type HeadToHead, type VariantRating } from '../api'
 import { href } from '../route'
+import { useFitFrames } from '../fit'
+
+const LABEL = 'Two versions of one picture'
 
 /** A pair to judge, or the server's reason there is none (no pictures built yet, an unknown set). */
 export type Next = { pair: ArenaPair } | { none: string }
@@ -79,6 +83,8 @@ export default function ArenaPage() {
   const [flags, setFlags] = useState<Record<ArenaSide, boolean>>({ left: false, right: false })
   const [votes, setVotes] = useState<number | null>(null), [failure, setFailure] = useState<string | null>(null)
   const busy = useRef(false), t0 = useRef(Date.now())
+  const page = useRef<HTMLElement>(null), ratings = useRef<HTMLDivElement>(null)
+  const maxHeight = useFitFrames(LABEL, page, ratings)
 
   // A new pair: its clock starts, its flags are clear, and the one after it is fetched now.
   useEffect(() => {
@@ -125,7 +131,7 @@ export default function ArenaPage() {
   const count = pair ? `${format.count(votes ?? pair.votes, 'vote')}, ${format.count(pair.pool, 'picture')}` : undefined
 
   return (
-    <main className="mx-auto grid max-w-screen-2xl gap-4 px-4 py-4">
+    <main ref={page} className="mx-auto grid max-w-screen-2xl gap-4 px-4 py-4">
       <PageHeader title="Which is better?" scope={count} actions={<>
         <Link to={href.projects()} className="type-body-sm">Projects</Link>
         <Link to={href.alerts()} className="type-body-sm">Arena flags</Link>
@@ -135,7 +141,7 @@ export default function ArenaPage() {
         empty={<EmptyState title="Nothing to rate">{next.status === 'ready' && 'none' in next.data ? next.data.none : ''}</EmptyState>}>
         {() => pair && (
           <div className="grid gap-3">
-            <Compare label="Two versions of one picture" blind missing="This picture could not be loaded" mode={mode} onModeChange={setMode} modes={['side', 'swipe', 'blink', 'difference']} keys={false}
+            <Compare label={LABEL} maxHeight={maxHeight} blind missing="This picture could not be loaded" mode={mode} onModeChange={setMode} modes={['side', 'swipe', 'blink', 'difference']} keys={false}
               a={{ id: 'left', label: 'Left', media: { kind: 'image', src: arenaImageUrl(pair.left), alt: 'Left' } }}
               b={{ id: 'right', label: 'Right', media: { kind: 'image', src: arenaImageUrl(pair.right), alt: 'Right' } }} />
             <div role="group" aria-label="Your answer" className="flex flex-wrap items-center gap-2">
@@ -154,7 +160,7 @@ export default function ArenaPage() {
       </DataView>
       {failure && <Alert tone="danger" announce>{failure}</Alert>}
       <KeysLegend shortcuts={shortcuts} />
-      <Disclosure summary="Ratings"><div className="pt-3"><Ratings /></div></Disclosure>
+      <div ref={ratings}><Disclosure summary="Ratings"><div className="pt-3"><Ratings /></div></Disclosure></div>
     </main>
   )
 }
