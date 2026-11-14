@@ -16,14 +16,11 @@ dependencies = [
     "rawpy>=0.25",              # DNG / RAW decoding (LibRaw)
     "pyyaml",
     "loguru",
-    "fastapi",
-    "uvicorn",
-    "pydantic",
     "tifffile",                 # Lightroom linear DNG and the 16 bit TIFF export
     "imagecodecs",              # JPEG XL inside those DNGs
     "nudenet",                  # the nudity filter (nsfw.py, on by default): local ONNX detector, weights inside the package
     "onnxruntime",              # runs it
-    "strata-python",            # shared server code and the strata-check gate
+    "strata-python>=0.2,<0.3",  # from PyPI: shared server code (web serving, the serve command, OS helpers, the hermetic test plugin) and the strata-check gate; brings FastAPI, uvicorn, pydantic and pytest. While 0.x a minor may break: read its CHANGELOG.md before moving the cap
     "strata-models-client",     # gpu.lease: hold the GPU through strata-models during batches; standard library only
     "xgboost>=3.0",             # the look stage (stratastills.look): the frozen look models are XGBoost regressors
     "scikit-learn>=1.6",        # which XGBoost's scikit-learn wrapper needs to unpickle them
@@ -66,8 +63,6 @@ research = []
 default-groups = ["dev"]
 
 [tool.uv.sources]
-# strata-python tracks main (no tag): uv.lock pins the commit, `uv lock --upgrade-package strata-python` moves it
-strata-python = { git = "https://github.com/jburnhams/strata-python" }
 omarchy-db = { git = "https://github.com/jburnhams/database", subdirectory = "python" }
 strata-models-client = { git = "https://github.com/jburnhams/strata-models", subdirectory = "client" }
 
@@ -78,6 +73,10 @@ packages = ["src/stratastills"]
 pythonpath = ["src", "tests/utils"]
 testpaths = ["tests/unit"]
 addopts = "-ra --timeout=300"
+# strata-python's pytest plugin (loaded by itself): its autouse `isolated_env` points HOME, STRATASTILLS_HOME and STRATASTILLS_DATA into a fresh folder and removes the tuning
+# variables below; tests/conftest.py adds the app's own variables on top (until strata_env is released). Its `no_network` guard fails any outbound connection.
+strata_env_prefix = "STRATASTILLS"
+strata_tuning_vars = ["STRATASTILLS_SOURCES", "STRATASTILLS_GPU", "STRATASTILLS_DEVICE", "STRATASTILLS_GPU_SLOTS", "STRATASTILLS_MAX_PIXELS", "STRATASTILLS_TILE"]
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]       # TestClient noise from the installed starlette; remove when the dependency moves on
 markers = [
     "integration: builds synthetic photos and runs the CLI / server (tests/integration)",

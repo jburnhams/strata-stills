@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -3129,8 +3129,8 @@ source = { git = "https://github.com/jburnhams/strata-models?subdirectory=client
 
 [[package]]
 name = "strata-python"
-version = "0.1.0"
-source = { git = "https://github.com/jburnhams/strata-python#90e8222b16fb4a6f7feb61d785cb5e191af16f9d" }
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },
@@ -3138,13 +3138,16 @@ dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/c6/a2/b9a470a7030f3acfd2ef8717700324239ec08ad2bbd86ab63995253c87b2/strata_python-0.2.0.tar.gz", hash = "sha256:f0242cad787a63316dffafd1a2934b9482ee8f31727e29691efdec0eb51b927a", size = 28140, upload-time = "2026-11-14T11:51:15.996Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/f1/42ad1026a1aad38f56ecde9d867f137ab6978bee6d4447dd81edbed2997c/strata_python-0.2.0-py3-none-any.whl", hash = "sha256:563223338883cd706848bdbc1fdc8b23ad043fd9e0b7ad393a5b6cb1c6fd848e", size = 21710, upload-time = "2026-11-14T11:51:14.494Z" },
+]
 
 [[package]]
 name = "strata-stills"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fastapi" },
     { name = "imagecodecs", version = "2026.3.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "imagecodecs", version = "2026.10.10", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "loguru" },
@@ -3154,7 +3157,6 @@ dependencies = [
     { name = "onnxruntime" },
     { name = "opencv-python-headless" },
     { name = "pillow" },
-    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rawpy" },
     { name = "scikit-learn" },
@@ -3165,7 +3167,6 @@ dependencies = [
     { name = "tifffile", version = "2026.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "tifffile", version = "2026.11.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
-    { name = "uvicorn" },
     { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "xgboost", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
@@ -3194,7 +3195,6 @@ vision = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi" },
     { name = "imagecodecs" },
     { name = "loguru" },
     { name = "nudenet" },
@@ -3202,16 +3202,14 @@ requires-dist = [
     { name = "onnxruntime" },
     { name = "opencv-python-headless", specifier = ">=4.10" },
     { name = "pillow", specifier = ">=10" },
-    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rawpy", specifier = ">=0.25" },
     { name = "scikit-learn", specifier = ">=1.6" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "strata-models-client", git = "https://github.com/jburnhams/strata-models?subdirectory=client" },
-    { name = "strata-python", git = "https://github.com/jburnhams/strata-python" },
+    { name = "strata-python", specifier = ">=0.2,<0.3" },
     { name = "tifffile" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
-    { name = "uvicorn" },
     { name = "xgboost", specifier = ">=3.0" },
 ]
 

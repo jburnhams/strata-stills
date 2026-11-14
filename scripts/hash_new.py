@@ -3,6 +3,7 @@
 Needs omarchy-db, pgvector and psycopg (the dev group of uv sync)."""
 
 import argparse
+import contextlib
 import hashlib
 import os
 import shutil
@@ -10,6 +11,8 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from strata_python import oslib
+
 from stratastills import settings
 
 EXT = ".arw,.cr2,.cr3,.nef,.dng,.raf,.orf,.rw2,.srw,.pef,.nrw"
@@ -24,17 +27,11 @@ def sha256_of(path):
 
 
 def lower_priority():
-    """Nice 15 and idle I/O class where the platform has them (not Windows' os.nice, not macOS' ionice); whatever is missing or refused is skipped."""
-    try:
-        if hasattr(os, "nice"):
-            os.nice(15)
-    except (OSError, AttributeError):
-        pass
-    try:
+    """CPU from strata-python's oslib (nice 15 on POSIX, the idle class on Windows); idle I/O class where there is an ionice (oslib has none yet). Whatever is refused is skipped."""
+    oslib.lower_priority(15)
+    with contextlib.suppress(OSError):
         if shutil.which("ionice"):
             subprocess.run(["ionice", "-c3", "-p", str(os.getpid())], check=False, capture_output=True)
-    except (OSError, AttributeError):
-        pass
 
 
 def candidates(roots, exts):

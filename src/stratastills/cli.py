@@ -6,6 +6,8 @@ import json
 import shutil
 import sys
 
+from strata_python import cli as strata_cli
+
 from stratastills import __version__, ingest, meta, projects, settings
 
 CHECKS = (
@@ -159,11 +161,10 @@ def cmd_set(args):
     return 0
 
 
-def cmd_serve(args):
-    from stratastills.server import app
+def serve(host, port):
+    from stratastills.server import app  # FastAPI and the pipeline load only for `serve`
 
-    app.main(["--host", args.host, "--port", str(args.port)])
-    return 0
+    app.main(["--host", host, "--port", str(port)])
 
 
 def main(argv=None):
@@ -187,10 +188,9 @@ def main(argv=None):
     n.add_argument("key")
     n.add_argument("value", nargs="?")
     n.set_defaults(fn=cmd_set)
-    n = sub.add_parser("serve", help="the web app: opens on the list of projects")
-    n.add_argument("--host", default="127.0.0.1")
-    n.add_argument("--port", type=int, default=8361)
-    n.set_defaults(fn=cmd_serve)
+    strata_cli.add_serve(
+        sub, serve, default_port=8361
+    )  # `serve [--host] [--port]`: the web app, opens on the list of projects
     sub.add_parser("doctor", help="check the environment").set_defaults(fn=doctor)
     s = sub.add_parser("scan", help="list the shots in a folder")
     s.add_argument("folder")

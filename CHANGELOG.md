@@ -2,6 +2,19 @@
 
 Newest first, grouped by day. One entry per change, in the same commit or PR as the change.
 
+## 2026-11-14
+
+**strata-python 0.2.0 from PyPI, and its web, CLI, OS and test pieces adopted (branch `claude/project-thread-k3276m`)**
+Jonathan asked to upgrade to the latest strata-python, through PyPI, and use its features fully. PyPI has 0.2.0; the changelog's Unreleased features (`strata_env`, `strata_python.testing`, the `[dev]` and `[db]` extras, the automatic integration marker) are not released yet (its release workflow failed on the token), so they are a follow-up.
+
+- `pyproject.toml`, `uv.lock`: `strata-python>=0.2,<0.3` from PyPI (was a git source tracking main); `fastapi`, `uvicorn` and `pydantic` dropped from the app's own list (strata-python brings them). The plugin is configured with `strata_env_prefix = "STRATASTILLS"` and `strata_tuning_vars`.
+- `tests/conftest.py`: the hand-written `isolated_env` and `no_network` fixtures removed in favour of the plugin's; `app_env` (autouse) adds the app's own variables on top (projects folder, NSFW, lease and AI off). The plugin's app home is `<env>/app-home` (was `<env>/stratastills-home`). `pytest_collection_modifyitems` stays until the plugin's marker is released.
+- `src/stratastills/server/app.py`: `web.base_app` (adds `GET /api/health`), `web.add_web` replaces the `/` route and the `/assets` mount (the page is now served at every non-API path with a relative `<base href>`, and files beside `index.html` at their name), and `web.serve` replaces the uvicorn wrapper. The settings routes stay: strata-python's `Settings` holds strings only and `source_roots` is a list.
+- `src/stratastills/cli.py`: `serve` through `cli.add_serve`. `doctor` stays our own (it checks the GPU, cuDNN and ffmpeg).
+- `scripts/hash_new.py`: CPU priority through `strata_python.oslib.lower_priority`; ionice stays local (oslib has no I/O priority). `scripts/read_meta.py` and `hash_to_jsonl.py` keep their copies: they run on the standard library alone.
+- `tests/unit/test_server.py`: **new** test of the health route and the page at a screen path; the report traversal check now asserts the secret is not served (the client normalises `/report/../secret.txt` to `/secret.txt`, which the page answers).
+- `.github/workflows/upgrade-strata-python.yml`: **removed**; dependabot's uv entry moves a PyPI dependency within its cap. `AGENTS.md`: what comes from strata-python and what is not adopted yet, and why.
+
 ## 2026-11-09
 
 **Move the Python side to uv, ruff, pyright and the shared strata-python gate (branch `claude/project-thread-iw7199`)**
