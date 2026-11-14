@@ -163,9 +163,7 @@ def _develop_alone(raw, work):
 
 
 def neutral(raws, work, say, rebuild=False, retry_now=True):
-    """
-        from stratastills import gpu as _gpu
-    Our pipeline's 'neutral' preset ('best' without the look), without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
+    """Our pipeline's 'neutral' preset ('best' without the look), without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
     from stratastills import gpu as _gpu
 
     cdir = os.path.join(BR.ROOT, "out", "cache", "report-auto-neutral")
