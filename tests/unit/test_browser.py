@@ -168,3 +168,23 @@ def test_a_picture_pillow_cannot_open_is_read_by_the_app(roots, monkeypatch):
     monkeypatch.setattr(images, "load", lambda path, px: np.full((30, 40, 3), 200, np.uint8))
     with PI.open(B.thumb("raw/2019/2019-03-02", "PANO_1", "jpeg", 160)) as im:
         assert im.size == (40, 30)
+
+
+def test_a_project_item_thumbnail_comes_from_the_shared_cache(roots, monkeypatch):
+    k = "raw/2019/2019-03-02"
+    B.add(name="Trip", folders=[k])
+    src = P.load("trip")["sources"][0]
+    iid = P.item_id(P.source_id(src["path"]), "DSC00002")
+    made = B.thumb(k, "DSC00002", "embedded", 320)
+    real = B._make
+    monkeypatch.setattr(B, "_make", lambda *a: pytest.fail("made again"))
+    assert B.item_thumb("trip", iid, 300) == made  # the Browser's thumbnail, reused
+    P.set_primary("trip", P.item_id(P.source_id(src["path"]), "DSC00001"), "jpeg")
+    monkeypatch.setattr(B, "_make", real)
+    with Image.open(B.item_thumb("trip", P.item_id(P.source_id(src["path"]), "DSC00001"), 160)) as im:
+        assert im.getpixel((80, 60))[1] > 150  # the chosen JPEG, not the raw's red preview
+    assert B.item_thumb("trip", iid, 300, "raw") == made
+    with pytest.raises(B.BrowseError):
+        B.item_thumb("trip", iid, 300, "jpeg")  # DSC00002 has no JPEG
+    with pytest.raises(P.ProjectError):
+        B.item_thumb("trip", "nope~x")
