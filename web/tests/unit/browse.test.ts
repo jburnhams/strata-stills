@@ -3,6 +3,7 @@ import type { BrowsePicture } from '../../src/api'
 import { thumbUrl } from '../../src/api'
 import { ancestorKeys, groupPictures, shownFrom, sortPictures, thumbSources, typeOf } from '../../src/browse'
 import { href } from '../../src/route'
+import { folderName } from '../../src/components/BrowserPage'
 
 const pic = (stem: string, taken: string | null, files = [stem + '.ARW', stem + '.JPG'], projects: string[] = []): BrowsePicture => ({
   stem, kind: 'still', files, taken, bytes: 1, projects,
@@ -37,6 +38,8 @@ describe('the Browser view', () => {
 
   it('builds folder keys, links and thumbnail addresses', () => {
     expect(ancestorKeys('raw/2019/2019-03-02')).toEqual(['raw', 'raw/2019'])
+    expect(folderName('raw/2026/2026-04-06')).toBe('2026-04-06')
+    expect(folderName('drone/20250402 - Hazelmere')).toBe('20250402 - Hazelmere')
     expect(href.browse('raw/2019')).toBe('/browse?folder=raw%2F2019')
     expect(thumbUrl('drone/20250402 - Hazelmere', 'DJI_1', 'gen:p:abc', 320)).toBe('/api/browse/thumb?folder=drone%2F20250402%20-%20Hazelmere&stem=DJI_1&source=gen%3Ap%3Aabc&px=320')
   })
