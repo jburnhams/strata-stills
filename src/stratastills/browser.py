@@ -365,12 +365,12 @@ def cached(path, how, px=320):
     return out
 
 
-def item_thumb(pid, iid, px=320):
-    """The grid thumbnail of a project item, from the cache shared with the Browser: its primary variant, a raw read as its embedded preview (a develop only when it has none). The project's item list has already applied the nudity filter."""
+def item_thumb(pid, iid, px=320, variant=None):
+    """The grid thumbnail of a project item, from the cache shared with the Browser: its primary variant, a raw read as its embedded preview (a develop only when it has none). `variant` (default the primary) is in the address the app asks for, so a browser never shows a cached old primary. The project's item list has already applied the nudity filter."""
     item = P.get_item(pid, iid)
-    v = next((x for x in item["variants"] if x["id"] == item["primary"]), None)
+    v = next((x for x in item["variants"] if x["id"] == (variant or item["primary"])), None)
     if v is None:
-        raise BrowseError(f"item {iid!r} has no picture")
+        raise BrowseError(f"item {iid!r} has no picture {variant or ''}".strip())
     if v["kind"] == "raw":
         how = "embedded" if images.is_camera_raw(v["path"]) else "develop"
     else:

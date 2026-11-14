@@ -183,5 +183,8 @@ def test_a_project_item_thumbnail_comes_from_the_shared_cache(roots, monkeypatch
     monkeypatch.setattr(B, "_make", real)
     with Image.open(B.item_thumb("trip", P.item_id(P.source_id(src["path"]), "DSC00001"), 160)) as im:
         assert im.getpixel((80, 60))[1] > 150  # the chosen JPEG, not the raw's red preview
+    assert B.item_thumb("trip", iid, 300, "raw") == made
+    with pytest.raises(B.BrowseError):
+        B.item_thumb("trip", iid, 300, "jpeg")  # DSC00002 has no JPEG
     with pytest.raises(P.ProjectError):
         B.item_thumb("trip", "nope~x")

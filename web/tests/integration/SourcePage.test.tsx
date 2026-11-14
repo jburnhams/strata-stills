@@ -13,7 +13,7 @@ describe('the contents of a folder', () => {
     open('/p/demo/s/abcd1234')
     const grid = await pictures()
     expect(grid.getByRole('link', { name: /A_1/ })).toHaveAttribute('href', '/p/demo/i/abcd1234~A_1')
-    expect(grid.getByRole('img', { name: 'A_1' })).toHaveAttribute('src', '/api/project/thumb?id=demo&item=abcd1234~A_1&px=320')
+    expect(grid.getByRole('img', { name: 'A_1' })).toHaveAttribute('src', '/api/project/thumb?id=demo&item=abcd1234~A_1&variant=raw&px=320')
     expect(grid.queryByRole('link', { name: /A_3/ })).toBeNull()
     expect(screen.getAllByText('C:\\shoot').length).toBeGreaterThan(0)
     await userEvent.click(screen.getByRole('switch', { name: new RegExp(`^Show ${format.count(1, 'video')}`) }))

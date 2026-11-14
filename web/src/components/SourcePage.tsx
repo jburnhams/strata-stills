@@ -14,7 +14,7 @@ export const variantWords = (i: Item) => [...i.variants].sort((a, b) => Number(b
 export function Thumb({ project, item, eager }: { project: string; item: Item; eager?: boolean }) {
   return (
     <Link to={href.item(project, item.id)} className="grid gap-1.5 rounded-surface border border-border p-1.5 no-underline transition-state hover:border-muted-foreground">
-      <Thumbnail src={item.kind === 'video' || !item.primary ? null : [itemThumbUrl(project, item.id), imageUrl(project, item.id, item.primary, 'original', 360)]} alt={item.stem} aspect="4/3" missing={item.kind === 'video' ? 'Video' : 'No picture'} eager={eager} className="w-full rounded-control" />
+      <Thumbnail src={item.kind === 'video' || !item.primary ? null : [itemThumbUrl(project, item.id, item.primary), imageUrl(project, item.id, item.primary, 'original', 360)]} alt={item.stem} aspect="4/3" missing={item.kind === 'video' ? 'Video' : 'No picture'} eager={eager} className="w-full rounded-control" />
       <span className="truncate font-mono type-caption text-foreground" title={item.stem}>{item.stem.replace(/^DJI_/, '')}</span>
       <span className="flex flex-wrap gap-1"><Status tone={KIND[item.kind].tone}>{KIND[item.kind].word}</Status>{item.variants.length > 0 && <span className="type-caption text-muted-foreground">{variantWords(item).join(' · ')}</span>}</span>
     </Link>

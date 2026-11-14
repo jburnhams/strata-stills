@@ -122,7 +122,7 @@ export function cropUrl(id: string, item: string, variant: string, transform: st
 }
 
 /** A project item's grid thumbnail: its primary variant (a raw's embedded preview), from the cache the Browser fills too. */
-export const itemThumbUrl = (id: string, item: string, px = 320) => withBase('/api/project/thumb' + qi(id, item) + '&px=' + px)
+export const itemThumbUrl = (id: string, item: string, variant: string, px = 320) => withBase('/api/project/thumb' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&px=' + px)  // the variant is part of the address, so a new primary is a new picture to the browser's cache
 
 /** A cached thumbnail of a picture in the Browser, from one of its sources (the server rounds `px` up to 160, 320 or 640). */
 export const thumbUrl = (folder: string, stem: string, source: string, px: number) =>
