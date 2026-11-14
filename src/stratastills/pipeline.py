@@ -229,6 +229,7 @@ class State:
         self.quality = None
         self.file = None
         self.analysis = None
+        self.geometry = []  # what the stages did to the frame (crop, turn), so the look can find the camera preview's faces in the picture (look.map_faces)
 
     @property
     def rgb(self):
@@ -288,6 +289,7 @@ def crop_to_image_circle(st, frame):
     if f >= 1.0:
         return
     st.rgb = np.ascontiguousarray(_centre(st.rgb, f))
+    st.geometry.append(("centre", f))
     if st.analysis is not None:
         st.analysis = np.ascontiguousarray(_centre(st.analysis, f))
     st.rec["frame"] = dict(
@@ -375,7 +377,7 @@ def run_look(st, p):
     pv = look.preview(st.path)
     ex, meta = look.exif(st.path)
     emb = look.clip_embedding(pv)
-    fl = look.faces(pv)
+    fl = look.map_faces(look.faces(pv), getattr(st, "geometry", []))
     x = look.feature_row(pv, ex, meta, emb, b)
     rgb = st.rgb
     neu = np.ascontiguousarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)[..., ::-1])
@@ -416,6 +418,8 @@ def run_level(st, p):
         info = transforms.apply("level", work, dict(preview._ctx(st.item), level_nadir=p["nadir"]))[1]
     st.rec["level"] = {k: info[k] for k in ("applied", "angle", "confidence", "reason") if k in info}
     if info.get("applied"):
+        h, w = st.rgb.shape[:2]
+        st.geometry.append(("rotate", info["angle"], w, h))
         st.rgb = transforms.rotate_fill(st.rgb, info["angle"])
         st.rec["steps"].append(f"levelled by {info['angle']:+.2f} degrees")
 

@@ -13,11 +13,13 @@ from stratastills.look.transform import NP
 class Net(torch.nn.Module):
     """ResNet-18 (ImageNet weights) on the thumb(s), its pooled features joined with the standardised scalar features, two layers to the 19 parameters, started at the person's typical transform."""
 
-    def __init__(self, n_scalar, typical, n_img=1):
+    def __init__(self, n_scalar, typical, n_img=1, pretrained=True):
         super().__init__()
         import torchvision
 
-        self.cnn = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
+        self.cnn = torchvision.models.resnet18(
+            weights=torchvision.models.ResNet18_Weights.DEFAULT if pretrained else None
+        )  # inference (load) replaces every weight from the checkpoint: no ImageNet download there
         w = self.cnn.conv1.weight.data
         if n_img > 1:
             self.cnn.conv1 = torch.nn.Conv2d(3 * n_img, 64, 7, 2, 3, bias=False)
@@ -43,7 +45,7 @@ _lock = (
 def load(path, dev):
     """The saved network (`lr_neutral_model.py eval --save`): {net, mu, sd} on `dev`."""
     z = torch.load(path, map_location=dev, weights_only=False)
-    net = Net(len(z["mu"]), z["typical"]).to(dev)
+    net = Net(len(z["mu"]), z["typical"], pretrained=False).to(dev)
     net.load_state_dict(z["state"])
     net.eval()
     return dict(net=net, mu=z["mu"], sd=z["sd"], dev=dev)

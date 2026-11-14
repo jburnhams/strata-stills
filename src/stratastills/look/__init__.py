@@ -184,17 +184,27 @@ def exif(raw):
     return one(*F.EXIF_TAGS), one("-G1", "-fast2")
 
 
+def _service():
+    """The strata-models client when the service can answer now, else None: not installed, not running, or this process holds the whole card (the service could not run the job until the lease ends)."""
+    try:
+        import strata_models_client as sm
+    except ImportError:
+        return None
+    from stratastills import gpu
+
+    if gpu.lease_is_exclusive() or not sm.available():
+        return None
+    return sm
+
+
 def clip_embedding(preview_bgr):
     """The CLIP B/32 image embedding of the preview squeezed to THUMB x THUMB (as the catalogue's), from strata-models; None when it is not running."""
     import tempfile
 
     import cv2
 
-    try:
-        import strata_models_client as sm
-    except ImportError:
-        return None
-    if not sm.available():
+    sm = _service()
+    if sm is None:
         return None
     sq = cv2.resize(preview_bgr, (F.THUMB, F.THUMB), interpolation=cv2.INTER_AREA)
     with tempfile.TemporaryDirectory(prefix="look-clip-") as d:
@@ -238,11 +248,8 @@ def faces(preview_bgr):
 
     import cv2
 
-    try:
-        import strata_models_client as sm
-    except ImportError:
-        return []
-    if not sm.available():
+    sm = _service()
+    if sm is None:
         return []
     h, w = preview_bgr.shape[:2]
     k = PREVIEW_LONG / max(h, w)
@@ -286,6 +293,38 @@ def faces(preview_bgr):
                 kind=kd["kind"],
             )
         )
+    return out
+
+
+def map_faces(fl, ops):
+    """Faces found on the camera's preview (fractions of its frame) moved into the frame of the finished picture through what the pipeline did to it: ('centre', f) a centred crop keeping fraction f of each side (pipeline.crop_to_image_circle), ('rotate', deg, w, h) a turn about the centre with the scale that fills the frame (transforms.rotate_fill). Resizing changes no fraction."""
+    import cv2
+
+    from stratastills import transforms
+
+    def move(pts, op):
+        pts = np.asarray(pts, np.float64).reshape(-1, 2)
+        if op[0] == "centre":
+            f = op[1]
+            return (pts - (1 - f) / 2) / f
+        _, deg, w, h = op
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), deg, transforms.inscribed_scale(w, h, deg))
+        px = pts * [w, h]
+        return (px @ M[:, :2].T + M[:, 2]) / [w, h]
+
+    out = []
+    for f in fl:
+        x, y, w, h = f["box"]
+        corners = np.array([[x, y], [x + w, y], [x, y + h], [x + w, y + h]])
+        lm = np.asarray(f.get("lm") or [], np.float64).reshape(-1, 2)
+        for op in ops:
+            corners = move(corners, op)
+            lm = move(lm, op) if len(lm) else lm
+        x0, y0 = corners.min(0)
+        x1, y1 = corners.max(0)
+        if x1 <= 0 or y1 <= 0 or x0 >= 1 or y0 >= 1:
+            continue  # cropped away
+        out.append(dict(f, box=[float(x0), float(y0), float(x1 - x0), float(y1 - y0)], lm=lm.tolist()))
     return out
 
 
