@@ -146,6 +146,10 @@ def main():
         "--picks",
         help='a JSON file ({"pics": [...]} or a list) naming exactly the pictures the pool should hold: the others are dropped from the pool (their votes stay), the missing ones are made',
     )
+    ap.add_argument(
+        "--versions",
+        help="make only these versions (comma separated), e.g. auto7: scripts/arena_passes.py rebuilds one version at a time, the newest first",
+    )
     ap.add_argument("--retire", action="append", default=[])
     ap.add_argument("--unretire", action="append", default=[])
     ap.add_argument("--rebuild", action="store_true")
@@ -204,6 +208,8 @@ def main():
     for i, sid in order(rows, idx, G, test, a.seed):
         have = pool.get(sid, {})
         need = [n for n in AV.VARIANTS if n in a.redo or sid in a.pic or n not in have or have[n].get("key") != keys[n]]
+        if a.versions:
+            need = [n for n in need if n in a.versions.split(",")]
         if (
             (sid in picks)
             if picks is not None
