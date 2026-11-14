@@ -154,7 +154,10 @@ def test_server_api_pipelines(client):
         params=dict(name="my_custom"),
         json={"label": "My Custom", "stages": [{"stage": "develop"}, {"stage": "encode"}]},
     )
-    assert len(res.json()) == initial_count + 1
+    assert (
+        res.json()["name"] == "my_custom"
+    )  # the saved preset (the old check compared its 4 keys with 3 built-ins + 1)
+    assert len(client.get("/api/pipelines").json()) == initial_count + 1
 
     # Delete custom pipeline
     res = client.delete("/api/pipeline", params=dict(name="my_custom"))
