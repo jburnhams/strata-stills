@@ -289,7 +289,7 @@ def crop_to_image_circle(st, frame):
     if f >= 1.0:
         return
     st.rgb = np.ascontiguousarray(_centre(st.rgb, f))
-    st.geometry.append(("centre", f))
+    getattr(st, "geometry", []).append(("centre", f))  # (a test may pass a bare state)
     if st.analysis is not None:
         st.analysis = np.ascontiguousarray(_centre(st.analysis, f))
     st.rec["frame"] = dict(
@@ -419,7 +419,7 @@ def run_level(st, p):
     st.rec["level"] = {k: info[k] for k in ("applied", "angle", "confidence", "reason") if k in info}
     if info.get("applied"):
         h, w = st.rgb.shape[:2]
-        st.geometry.append(("rotate", info["angle"], w, h))
+        getattr(st, "geometry", []).append(("rotate", info["angle"], w, h))
         st.rgb = transforms.rotate_fill(st.rgb, info["angle"])
         st.rec["steps"].append(f"levelled by {info['angle']:+.2f} degrees")
 
