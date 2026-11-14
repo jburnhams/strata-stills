@@ -7,7 +7,7 @@ import { mock, server } from '../utils/server'
 
 describe('a project', () => {
   it('lists the source folders with what is in them, each linking into its contents', async () => {
-    open('/p/demo')
+    open('/p/demo?folders')
     expect(await screen.findByRole('link', { name: 'C:\\shoot' })).toHaveAttribute('href', '/p/demo/s/abcd1234')
     expect(screen.getByText('2 stills, 1 panoramas, 1 videos')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Demo', level: 1 })).toBeInTheDocument()
@@ -17,20 +17,20 @@ describe('a project', () => {
   it('takes a project id with slashes from the address', async () => {
     let asked = ''
     server.use(http.get('/api/project', ({ request }) => { asked = new URL(request.url).searchParams.get('id')!; return HttpResponse.json({ id: asked, name: 'Two', created: null, sources: [], n_sources: 0 }) }))
-    open('/p/2025%2Fdrone%2Ftwo')
+    open('/p/2025%2Fdrone%2Ftwo?folders')
     expect(await screen.findByRole('heading', { name: 'Two' })).toBeInTheDocument()
     expect(asked).toBe('2025/drone/two')
   })
 
   it('teaches what to do when there are no folders', async () => {
     server.use(http.get('/api/project/sources', () => HttpResponse.json([])))
-    open('/p/demo')
+    open('/p/demo?folders')
     expect(await screen.findByText('No source folders yet')).toBeInTheDocument()
   })
 
   it('marks an unreachable folder, which is not a link', async () => {
     server.use(http.get('/api/project/sources', () => HttpResponse.json([{ id: 'x', path: '\\\\Server\\off', reachable: false, stills: 0, panos: 0, videos: 0 }])))
-    open('/p/demo')
+    open('/p/demo?folders')
     expect(await screen.findByText('Not reachable: is the share on?')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: '\\\\Server\\off' })).toBeNull()
   })
@@ -38,7 +38,7 @@ describe('a project', () => {
   it('adds a folder and reads the list again', async () => {
     let added = ''
     server.use(http.post('/api/project/sources', async ({ request }) => { added = ((await request.json()) as { path: string }).path; return HttpResponse.json({}) }))
-    open('/p/demo')
+    open('/p/demo?folders')
     await screen.findByRole('link', { name: 'C:\\shoot' })
     await userEvent.type(screen.getByLabelText('Source folder'), ' D:\\new ')
     await userEvent.click(screen.getByRole('button', { name: 'Add source' }))
@@ -47,7 +47,7 @@ describe('a project', () => {
   })
 
   it('asks for a folder before sending anything', async () => {
-    open('/p/demo')
+    open('/p/demo?folders')
     await userEvent.click(screen.getByRole('button', { name: 'Add source' }))
     expect(await screen.findByText('Type the folder to add.')).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Source folder'), 'x')
@@ -55,7 +55,7 @@ describe('a project', () => {
   })
 
   it('says why a folder was refused, under the field', async () => {
-    open('/p/demo')
+    open('/p/demo?folders')
     await userEvent.type(screen.getByLabelText('Source folder'), 'bad')
     await userEvent.click(screen.getByRole('button', { name: 'Add source' }))
     await waitFor(() => expect(screen.getByLabelText('Source folder')).toHaveAccessibleDescription(/not a folder: bad/))
@@ -63,7 +63,7 @@ describe('a project', () => {
 
   it('removes a folder at once with an undo, and tells the server when the window closes', async () => {
     server.use(http.delete('/api/project/sources', ({ request }) => { mock.removed.push(new URL(request.url).searchParams.get('path')!); return HttpResponse.json({}) }))
-    open('/p/demo')
+    open('/p/demo?folders')
     await userEvent.click(await screen.findByRole('button', { name: 'Remove C:\\shoot' }))
     expect(screen.queryByRole('link', { name: 'C:\\shoot' })).toBeNull()
     expect(screen.getByText('Removed C:\\shoot from Demo.')).toBeInTheDocument()
@@ -74,4 +74,12 @@ describe('a project', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     await waitFor(() => expect(mock.removed).toEqual(['C:\\shoot']), { timeout: 10000 })
   }, 15000)
+
+  it('opens a project of one folder straight into it, with a link back to its folders', async () => {
+    const { router } = open('/p/demo')
+    await waitFor(() => expect(router.state.location.pathname).toBe('/p/demo/s/abcd1234'))
+    await userEvent.click(await screen.findByRole('link', { name: 'All folders of Demo' }))
+    await waitFor(() => expect(router.state.location.search).toBe('?folders'))
+    expect(await screen.findByText('Source folders')).toBeInTheDocument()
+  })
 })

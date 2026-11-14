@@ -1,7 +1,7 @@
-// One question: "Which folder of this project do I open?" A table, because each folder has figures to compare (stills, panoramas, videos) and an action (remove);
+// One question: "Which folder of this project do I open?" (with one reachable folder there is no question: it opens that folder, unless ?folders asks for this list) A table, because each folder has figures to compare (stills, panoramas, videos) and an action (remove);
 // removing is reversible (the folder can be added again, nothing on disk changes), so it is an undo window (useUndoable + UndoBar), never a confirm dialog.
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, Navigate, useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { AsyncButton, Breadcrumb, DataTable, DataView, EmptyState, Field, Input, PageHeader, RowAction, Status, TableSkeleton, UndoBar, useAsyncAction, useLoad, useUndoable, type Column } from 'strata-react'
 import { api, type SourceSummary } from '../api'
@@ -15,6 +15,7 @@ export default function ProjectPage() {
   const proj = useLoad({ queryKey: ['project', project], queryFn: () => api.project(project) })
   const sources = useLoad({ queryKey: ['sources', project], queryFn: () => api.sources(project) })
   const client = useQueryClient(), undoable = useUndoable()
+  const [params] = useSearchParams()
   const [path, setPath] = useState('')
   const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ['sources', project] }), client.invalidateQueries({ queryKey: ['project', project] }), client.invalidateQueries({ queryKey: ['projects'] })])
   const add = useAsyncAction(async () => { await api.addSource(project, path.trim()); setPath(''); await refresh() }, { validate: () => ({ path: path.trim() ? undefined : 'Type the folder to add.' }) })
@@ -26,6 +27,9 @@ export default function ProjectPage() {
     { key: 'stills', header: 'Stills', numeric: true, value: s => (s.reachable ? s.stills : null) },
     { key: 'remove', header: 'Actions', hideHeader: true, sort: false, cell: s => <RowAction label="Remove" subject={s.path} onPress={() => undoable.schedule({ id: s.id, message: `Removed ${s.path} from ${name}.`, failure: `${s.path} is back in ${name}: removing it did not go through.`, commit: async () => { await api.removeSource(project, s.path); await refresh() } })} /> },
   ]
+
+  // A project of one folder has nothing to choose here: go straight into it (replacing this entry, so Back leaves the project). Its breadcrumb links back with ?folders.
+  if (!params.has('folders') && sources.status === 'ready' && sources.data.length === 1 && sources.data[0].reachable) return <Navigate to={href.source(project, sources.data[0].id)} replace />
 
   return (
     <section className="grid gap-6">

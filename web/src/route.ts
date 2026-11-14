@@ -8,6 +8,8 @@ const enc = encodeURIComponent
 export const href = {
   projects: () => '/',
   project: (p: string) => `/p/${enc(p)}`,
+  /** The project's folder list itself: a project with one folder otherwise opens straight into it. */
+  folders: (p: string) => `/p/${enc(p)}?folders`,
   source: (p: string, s: string) => `/p/${enc(p)}/s/${enc(s)}`,
   item: (p: string, i: string) => `/p/${enc(p)}/i/${enc(i)}`,
   arena: () => '/arena',
