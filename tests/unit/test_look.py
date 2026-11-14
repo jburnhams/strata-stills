@@ -323,3 +323,26 @@ def test_no_service_calls_while_the_whole_card_is_leased(monkeypatch, full_bundl
     monkeypatch.setattr(gpu, "lease_is_exclusive", lambda: True)
     pv = np.full((100, 100, 3), 120, np.uint8)
     assert look.faces(pv) == [] and look.clip_embedding(pv) is None
+
+
+def test_a_sticky_cuda_error_restarts_the_process_and_nothing_else_does(monkeypatch):
+    import threading
+
+    from stratastills import gpu
+
+    started = []
+
+    class T:
+        def __init__(self, delay, fn):
+            started.append(fn)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, "Timer", T)
+    assert not gpu.exit_if_cuda_broken(RuntimeError("CUDA out of memory")) and started == []
+    assert gpu.cuda_broken(RuntimeError("CUDA error: device-side assert triggered"))
+    assert (
+        gpu.exit_if_cuda_broken(RuntimeError("CUDA error: an illegal memory access was encountered"))
+        and len(started) == 1
+    )

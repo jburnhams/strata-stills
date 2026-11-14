@@ -151,6 +151,27 @@ def lease_gb():
         return LEASE_GB
 
 
+def cuda_broken(e):
+    """True when `e` is a sticky CUDA error (a device-side assert, an illegal address): the process's CUDA context is unusable from then on, every later GPU call fails, and only a new process clears it."""
+    t = str(e)
+    return type(e).__name__ == "AcceleratorError" or any(
+        k in t
+        for k in ("device-side assert", "illegal memory access", "CUDA_ERROR_ASSERT", "unspecified launch failure")
+    )
+
+
+def exit_if_cuda_broken(e, delay=2.0):
+    """In a long-running process (the server): after a sticky CUDA error, end the process shortly (exit code 1, so systemd's Restart=on-failure starts a fresh one) instead of failing every later picture. Returns whether it will."""
+    if not cuda_broken(e):
+        return False
+    import sys
+    import threading
+
+    print(f"CUDA context broken ({e}): restarting the process", file=sys.stderr, flush=True)
+    threading.Timer(delay, lambda: os._exit(1)).start()  # a moment for the job's failure to be read
+    return True
+
+
 def lease_is_exclusive():
     """True while this process holds the WHOLE card through strata-models (STRATASTILLS_LEASE_GB=whole): the service then runs no jobs, so asking it for one (the look's faces and CLIP) would wait for this very lease."""
     return _lease_held[0] > 0 and _lease_held[1] is not None and _lease_cap is None

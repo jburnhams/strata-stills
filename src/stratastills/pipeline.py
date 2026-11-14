@@ -929,6 +929,8 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
         except Exception as e:
             with lock:
                 failed.append((iid, str(e)))
+            if gpu.cuda_broken(e):
+                raise  # the CUDA context is unusable: every later picture would fail too
         else:
             with lock:
                 done[0] += 1
