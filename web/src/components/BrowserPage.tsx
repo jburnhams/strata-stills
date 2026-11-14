@@ -29,12 +29,15 @@ function FolderRow({ node }: { node: BrowseFolder }) {
   )
 }
 
+/** The name a new project gets unless the person types another: the folder's own name (`2026-04-06`, `20250402 - Hazelmere`). */
+export const folderName = (key: string) => key.split('/').filter(Boolean).at(-1) ?? ''
+
 const useChildren = (node: BrowseFolder) => useLoad({ queryKey: ['browse', 'folders', node.key], queryFn: () => api.browseFolders(node.key) })
 
 /** What to add, and where: an existing project or a new one. Opened for chosen pictures, the folder in view, or the folder with its sub-folders. */
-function AddDialog({ what, body, open, onOpenChange, onAdded }: { what: string; body: BrowseAdd; open: boolean; onOpenChange: (o: boolean) => void; onAdded: () => void }) {
+function AddDialog({ what, body, suggested, open, onOpenChange, onAdded }: { what: string; body: BrowseAdd; suggested: string; open: boolean; onOpenChange: (o: boolean) => void; onAdded: () => void }) {
   const projects = useLoad({ queryKey: ['projects'], queryFn: api.projects })
-  const [target, setTarget] = useState(''), [name, setName] = useState('')
+  const [target, setTarget] = useState(''), [name, setName] = useState(suggested)
   const client = useQueryClient()
   const add = useAsyncAction(async () => {
     const r = await api.browseAdd({ ...body, ...(target ? { project: target } : { name: name.trim() }) })
@@ -58,7 +61,7 @@ function AddDialog({ what, body, open, onOpenChange, onAdded }: { what: string; 
             {projects.status === 'ready' && projects.data.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </NativeSelect>
         </Field>
-        {!target && <Field label="New project name" error={add.fieldErrors.name}><Input value={name} onChange={e => { setName(e.target.value); add.clearFieldError('name') }} autoFocus /></Field>}
+        {!target && <Field label="New project name" hint="Suggested from the folder's name." error={add.fieldErrors.name}><Input value={name} onChange={e => { setName(e.target.value); add.clearFieldError('name') }} autoFocus onFocus={e => e.currentTarget.select()} /></Field>}
         {add.error && <p role="alert" className="type-body-sm text-danger">{add.error}</p>}
       </div>
     </Dialog>
@@ -168,7 +171,7 @@ export default function BrowserPage() {
           )}
         </div>
       </div>
-      {adding && <AddDialog what={adding.what} body={adding.body} open onOpenChange={o => { if (!o) setAdding(null) }} onAdded={() => setChosen(new Set())} />}
+      {adding && <AddDialog what={adding.what} body={adding.body} suggested={folderName(folder)} open onOpenChange={o => { if (!o) setAdding(null) }} onAdded={() => setChosen(new Set())} />}
       <p className="type-caption text-muted-foreground">Pictures are only read: adding them to a project records where they are. <Link to={href.projects()}>Projects</Link></p>
     </section>
   )
