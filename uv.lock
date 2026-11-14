@@ -1929,16 +1929,6 @@ wheels = [
 ]
 
 [[package]]
-name = "omarchy-db"
-version = "0.1.0"
-source = { git = "https://github.com/jburnhams/database?subdirectory=python#2d2940613d49fea5c2f70f62769a5ca56ea581a9" }
-dependencies = [
-    { name = "alembic" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "sqlalchemy" },
-]
-
-[[package]]
 name = "onnx"
 version = "1.23.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3144,6 +3134,11 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+db = [
+    { name = "alembic" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
+]
 dev = [
     { name = "httpx" },
     { name = "pyright" },
@@ -3168,6 +3163,7 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "onnxruntime" },
     { name = "opencv-python-headless" },
+    { name = "pgvector" },
     { name = "pillow" },
     { name = "pyyaml" },
     { name = "rawpy" },
@@ -3175,7 +3171,7 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "strata-models-client" },
-    { name = "strata-python" },
+    { name = "strata-python", extra = ["db"] },
     { name = "tifffile", version = "2026.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "tifffile", version = "2026.11.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
@@ -3187,9 +3183,6 @@ dependencies = [
 dev = [
     { name = "diff-cover" },
     { name = "hypothesis" },
-    { name = "omarchy-db" },
-    { name = "pgvector" },
-    { name = "psycopg", extra = ["binary"] },
     { name = "strata-python", extra = ["dev"] },
 ]
 vision = [
@@ -3205,13 +3198,14 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2" },
     { name = "onnxruntime" },
     { name = "opencv-python-headless", specifier = ">=4.10" },
+    { name = "pgvector" },
     { name = "pillow", specifier = ">=10" },
     { name = "pyyaml" },
     { name = "rawpy", specifier = ">=0.25" },
     { name = "scikit-learn", specifier = ">=1.6" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "strata-models-client", git = "https://github.com/jburnhams/strata-models?subdirectory=client" },
-    { name = "strata-python", specifier = ">=0.2.1,<0.3" },
+    { name = "strata-python", extras = ["db"], specifier = ">=0.2.1,<0.3" },
     { name = "tifffile" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "xgboost", specifier = ">=3.0" },
@@ -3221,9 +3215,6 @@ requires-dist = [
 dev = [
     { name = "diff-cover" },
     { name = "hypothesis" },
-    { name = "omarchy-db", git = "https://github.com/jburnhams/database?subdirectory=python" },
-    { name = "pgvector" },
-    { name = "psycopg", extras = ["binary"] },
     { name = "strata-python", extras = ["dev"] },
 ]
 research = []

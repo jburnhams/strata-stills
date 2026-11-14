@@ -5,9 +5,9 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from omarchy_db import connect
-from omarchy_db import session as _session
 from sqlalchemy import func, select
+from strata_python.db import connect
+from strata_python.db import session as _session
 
 from stratastills import arena_store
 from stratastills.db import importer
@@ -132,7 +132,9 @@ def test_the_server_runs_the_arena_on_the_database(arena, db_url, db_session, mo
         and c.post("/api/arena/undo").json()["votes"] == 0
         and c.post("/api/arena/undo").status_code == 404
     )
-    with __import__("omarchy_db").session(arena_store.get().engine) as s:
+    from strata_python.db import session
+
+    with session(arena_store.get().engine) as s:
         assert (
             s.scalar(select(func.count()).select_from(ArenaFlagEvent)) == 2
         )  # the flag and its status change are history rows

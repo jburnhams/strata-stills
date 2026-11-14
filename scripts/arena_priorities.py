@@ -1,7 +1,7 @@
 """Which arena pairs are worth a vote: writes `<arena dir>/priorities.json`, which the arena's picker reads (arena.load_priorities / pair_weight). Nothing is removed from the arena: pairs are drawn at random with a weight, so clearly different pairs of the variants we care about, on pictures with a face, come first, and near-identical pairs are rare.
   python scripts/arena_priorities.py [--arena DIR] [--size 96] [--no-faces]
 - dist: per picture and pair of variants, the mean CIELAB distance of the two pictures at --size px (the pictures are laid on the same frame; a pair that differs in size is compared after resizing). For a picture with a face the number is (whole + 1.5 x face region) / 2.5, the region being every face box of the final's frame padded by 30 % (the arena pictures are cropped a little at the edges). Pictures whose files are unchanged since the last run are not measured again.
-- faces: the pictures with a face of score >= --min-face in schema `photos` (detection label 'face', needs the database URL and omarchy_db), mapped by arena_pic.photo_id; their boxes feed dist. Statues and the like count; the faces2.pkl real-face scores are not in the database.
+- faces: the pictures with a face of score >= --min-face in schema `photos` (detection label 'face', needs the database URL and strata-python[db]), mapped by arena_pic.photo_id; their boxes feed dist. Statues and the like count; the faces2.pkl real-face scores are not in the database.
 - interest per version is `arena.INTEREST` (edit there, or add an 'interest' object to the file by hand; a rerun keeps nothing but dist and faces).
 Run again after a pool rebuild or new votes; it takes a minute or two for ~600 pictures x 8 versions. Read-only on the pool and the pictures."""
 
@@ -73,12 +73,12 @@ def distances(pool, root, size, old, faces):
 
 
 def faces_in_db(min_score):
-    """-> {picture: [(x, y, w, h) of its faces]} or None without a database URL. Needs OMARCHY_DB_LIVE=1 on omarchy (the shared-database guard)."""
+    """-> {picture: [(x, y, w, h) of its faces]} or None without a database URL. Needs STRATA_DB_LIVE=1 on omarchy (the shared-database guard)."""
     url = settings.database_url()
     if not url:
         return None
-    from omarchy_db import connect, session
     from sqlalchemy import select
+    from strata_python.db import connect, session
 
     from stratastills.db.models import Analysis, ArenaPic, Detection
 

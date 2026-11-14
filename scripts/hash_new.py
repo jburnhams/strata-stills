@@ -1,6 +1,6 @@
 """Hash the raw files under the source roots that photos.file does not know yet (same root, path, size and mtime_ns) and write them straight to schema `photos` in batches. Resumable: a batch is committed before the next starts, and a rerun skips what is in the database. Runs at nice 15 and idle I/O priority; the files are only read.
   python scripts/hash_new.py [--root ~/raw ...] [--ext .arw,.cr2,...] [--batch 50] [--limit N] [--url ...]
-Needs omarchy-db, pgvector and psycopg (the dev group of uv sync)."""
+Needs strata-python[db] and pgvector (dependencies of the app)."""
 
 import argparse
 import contextlib
@@ -53,11 +53,11 @@ def main():
     roots = a.root or settings.source_roots()
     exts = {e if e.startswith(".") else "." + e for e in a.ext.lower().split(",")}
     lower_priority()
-    from omarchy_db import (
+    from sqlalchemy import select
+    from strata_python.db import (
         connect,
         session,
     )  # the database packages are imported here, so sha256_of and candidates work (and are tested) without them
-    from sqlalchemy import select
 
     from stratastills.db import hashes
     from stratastills.db.models import File

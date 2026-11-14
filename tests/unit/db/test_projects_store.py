@@ -24,7 +24,7 @@ def env(request, tmp_path, db_url):
     folder.mkdir(parents=True)
     st = projects_store.FileStore() if request.param == "files" else DbStore(db_url, roots=[str(root)])
     if request.param == "db":
-        from omarchy_db import connect, session
+        from strata_python.db import connect, session
 
         with session(connect(db_url)) as s:
             hashes.write(
@@ -113,7 +113,7 @@ def test_the_projects_api_runs_on_the_database(tmp_path, db_url, monkeypatch):
         doc = P.create("Shoot Day", sources=[str(drone / "shoot")])
         pid = doc["id"]
         assert projects_store.get().kind == "database"
-        from omarchy_db import connect, session
+        from strata_python.db import connect, session
 
         with session(connect(db_url)) as s:
             assert (
@@ -128,7 +128,7 @@ def test_the_projects_api_runs_on_the_database(tmp_path, db_url, monkeypatch):
 
 
 def _two_sources(tmp_path, db_url):
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     drone = tmp_path / "drone"
     (drone / "a").mkdir(parents=True)
@@ -168,7 +168,7 @@ def test_an_item_is_matched_in_its_own_source_only(tmp_path, db_url):
 
 
 def test_a_raw_present_at_two_paths_and_a_superseded_version(tmp_path, db_url):
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     st, folder, drone = _two_sources(tmp_path, db_url)
     sb = P.source_id(os.path.join(drone, "b"))
@@ -189,8 +189,8 @@ def test_a_raw_present_at_two_paths_and_a_superseded_version(tmp_path, db_url):
         assert s.scalar(select(func.count()).select_from(ItemChoice)) == 1 and st.read_state("p1", folder)[iid] == {
             "primary": "jpeg"
         }
-    from omarchy_db import connect as c2
-    from omarchy_db import session as s2
+    from strata_python.db import connect as c2
+    from strata_python.db import session as s2
 
     with s2(c2(db_url)) as s:
         hashes.write(
@@ -254,7 +254,7 @@ def test_contract_generated_variants_and_sidecars(env):
 def test_the_database_finds_outputs_made_on_another_machine_and_the_projects_api_shows_them(
     tmp_path, db_url, monkeypatch
 ):
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     from stratastills.db.models import Render
 
@@ -307,7 +307,7 @@ def test_the_database_finds_outputs_made_on_another_machine_and_the_projects_api
 
 
 def test_a_photo_shared_by_two_projects_does_not_lend_one_its_renders(tmp_path, db_url):
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     from stratastills.db.models import Photo, Render
 

@@ -1,4 +1,4 @@
-"""The photos schema on SQLite (fast; the fixtures come from the omarchy_db plugin). Tests that need real Postgres features (pgvector similarity, the extension) are marked `pg` and run with `pytest --pg`."""
+"""The photos schema on SQLite (fast; the fixtures come from the strata_python.db plugin). Tests that need real Postgres features (pgvector similarity, the extension) are marked `pg` and run with `pytest --pg`."""
 
 from datetime import UTC
 

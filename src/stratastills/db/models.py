@@ -10,13 +10,18 @@ Portable types only (the unit tests run on SQLite): free-form blobs are `sa.JSON
 from datetime import datetime
 
 import sqlalchemy as sa
-from omarchy_db import make_base
 from sqlalchemy import ForeignKey, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+from strata_python.db import NAMING_CONVENTION
 
 from .types import Vector
 
-Base = make_base()
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    """What strata_python.db.make_base() builds (dataclass models, the shared naming convention, a MetaData of our own), written as a class: ty cannot use the
+    base make_base() returns (`type[DataclassBase]`) as a base class (strata-python issue)."""
+
+    metadata = sa.MetaData(naming_convention=NAMING_CONVENTION)
 
 
 def _now():

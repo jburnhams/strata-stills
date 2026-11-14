@@ -27,14 +27,14 @@ class DbStore:
     kind = "database"
 
     def __init__(self, url, roots=None):
-        from omarchy_db import connect
+        from strata_python.db import connect
 
         self.engine = connect(url)
         self.files = FileStore()
         self._roots = roots
 
     def _session(self):
-        from omarchy_db import session
+        from strata_python.db import session
 
         return session(self.engine)
 

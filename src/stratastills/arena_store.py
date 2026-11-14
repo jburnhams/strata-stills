@@ -60,7 +60,7 @@ def get():
     if not url:
         return FileStore()
     if url not in _stores:
-        from .db.store import DbStore  # needs omarchy-db (dev group); only imported when a database is configured
+        from .db.store import DbStore  # needs strata-python[db]; only imported when a database is configured
 
         _stores[url] = DbStore(url)
     return _stores[url]

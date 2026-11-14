@@ -24,7 +24,7 @@ def get():
     if not url or "metadata" not in settings.db_reads():
         return FileStore()
     if url not in _stores:
-        from .db.meta import DbStore  # needs omarchy-db (dev group); only imported when the database is switched on
+        from .db.meta import DbStore  # needs strata-python[db]; only imported when the database is switched on
 
         _stores[url] = DbStore(url)
     return _stores[url]

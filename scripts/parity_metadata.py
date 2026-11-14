@@ -79,7 +79,7 @@ def main():
 
 
 def db_session(db):
-    from omarchy_db import session
+    from strata_python.db import session
 
     return session(db.engine)
 

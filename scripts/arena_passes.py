@@ -1,7 +1,7 @@
 """Rebuild the arena one version at a time, in the order given (the newest idea first), so each version's pictures replace the old ones as
 soon as that pass ends and the served pool picks them up (import_to_db --write after each pass): votes start on the new version while the
 others are still being remade.
-  OMARCHY_DB_LIVE=1 python scripts/arena_passes.py [--order auto7,auto5,...] [-- build_arena arguments]
+  STRATA_DB_LIVE=1 python scripts/arena_passes.py [--order auto7,auto5,...] [-- build_arena arguments]
 The first pass makes the neutral develops that every version starts from (cached in out/cache/report-auto-neutral, so later passes reuse
 them); a pass with nothing to do ends at once. Progress goes to stdout, one line per pass; a failed pass (its build or its import) stops the queue."""
 

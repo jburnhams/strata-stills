@@ -143,7 +143,7 @@ def test_scores_go_to_the_database_only_for_files_it_knows_and_nothing_is_lost(t
 
 
 def test_the_hash_importer_still_works_on_a_file_that_was_scored_first(tmp_path, db_url, db_session_url=None):
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     root = tmp_path / "s"
     root.mkdir()
