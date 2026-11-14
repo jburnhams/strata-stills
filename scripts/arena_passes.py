@@ -12,6 +12,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ATTEMPTS = 3  # runs of each pass: pictures that failed in one (the card out of memory, a CUDA error) are made by the next; a run with nothing left to do ends at once
 ORDER = "auto7,auto5,auto6,auto4,auto3,auto2,auto1,neutral,camera,lightroom"
 
 
@@ -24,14 +25,18 @@ def main():
     for v in a.order.split(","):
         t = time.time()
         print(f"pass {v}: building", flush=True)
-        r = subprocess.run([sys.executable, os.path.join(HERE, "build_arena.py"), "--versions", v, *rest])
-        if r.returncode:
-            print(f"pass {v}: build_arena failed ({r.returncode}); stopping", flush=True)
-            return r.returncode
-        r = subprocess.run([sys.executable, os.path.join(HERE, "import_to_db.py"), "--write"])
-        if r.returncode:
-            print(f"pass {v}: built, but publishing to the database failed ({r.returncode}); stopping", flush=True)
-            return r.returncode
+        for attempt in range(
+            1, ATTEMPTS + 1
+        ):  # a fresh process each time: a CUDA error poisons the rest of a run, and what was made is kept
+            r = subprocess.run([sys.executable, os.path.join(HERE, "build_arena.py"), "--versions", v, *rest])
+            if r.returncode:
+                print(f"pass {v}: build_arena failed ({r.returncode}); stopping", flush=True)
+                return r.returncode
+            r = subprocess.run([sys.executable, os.path.join(HERE, "import_to_db.py"), "--write"])
+            if r.returncode:
+                print(f"pass {v}: built, but publishing to the database failed ({r.returncode}); stopping", flush=True)
+                return r.returncode
+            print(f"pass {v}: attempt {attempt} published", flush=True)
         print(f"pass {v}: done in {(time.time() - t) / 60:.0f} min", flush=True)
     return 0
 
