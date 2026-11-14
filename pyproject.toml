@@ -96,7 +96,7 @@ skip_empty = true
 show_missing = false
 # Measured from the unit suite only (tests/unit). Ratchet this up as coverage improves.
 # 89 -> 88 on 2026-11-09 with no test lost: `ruff format` split one-line `if x: return y` into two lines, and coverage counts lines, so the same unexecuted branches now count twice (3490 -> 5485 statements, 90.9% -> 88.8%).
-fail_under = 88
+fail_under = 89
 
 [tool.ruff]
 line-length = 120
