@@ -56,6 +56,7 @@ handlers.push(
   http.get('/api/project/detail', () => HttpResponse.json(detail)),
   http.get('/api/project/fullres', () => HttpResponse.json(mock.fullres)),
   http.get('/api/pipelines', () => HttpResponse.json(presets)),
+  http.get('/api/look', () => HttpResponse.json({ best: 'auto5', versions: [{ name: 'auto5', rating: 1647, votes: 241 }, { name: 'auto7', rating: null, votes: 0 }] })),
   http.put('/api/pipeline', async ({ request }) => { const b = await request.json(); mock.saved.push([new URL(request.url).searchParams.get('name'), b]); return HttpResponse.json({ name: new URL(request.url).searchParams.get('name'), label: 'x', builtin: false, stages: BEST }) }),
   http.post('/api/project/generate/check', async ({ request }) => { const b = await request.json() as GenerateBody; mock.checks.push(b); const st = stagesOf(b); return HttpResponse.json({ key: 'abc123', exists: mock.exists, variant: mock.exists ? mock.existingVariant : null, stages: st, summary: summaryOf(st) }) }),
   http.post('/api/project/generate', async ({ request }) => { mock.generates.push(await request.json() as GenerateBody); return HttpResponse.json(mock.exists ? { state: 'exists', variant: mock.existingVariant } : { state: 'running', text: 'developing the full-size picture' }) }),

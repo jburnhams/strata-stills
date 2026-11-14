@@ -628,6 +628,20 @@ def create_app():
         guard(PL.delete_preset, name)
         return PL.list_presets()
 
+    @app.get("/api/look")
+    def look_versions():
+        """The look's versions with their arena rating, and which one 'best' is now (the Generate panel's Look list)."""
+        from stratastills import look
+
+        r = look.ratings()
+        return dict(
+            best=look.winner(),
+            versions=[
+                dict(name=v, rating=r.get(v, {}).get("rating"), votes=r.get(v, {}).get("votes", 0))
+                for v in look.VARIANTS
+            ],
+        )
+
     @app.post("/api/project/generate/check")
     def check_generate(id: str, item: str, b: GenerateIn):
         key, have = guard(PL.find_existing, id, item, b.variant, b.stages, b.preset, b.options)

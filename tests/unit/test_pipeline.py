@@ -116,7 +116,7 @@ def test_key_depends_on_what_is_made_and_summary_reads_well():
         "a~x", "raw", PL.apply_options(b, dict(format="tiff", quality=80))
     )
     assert (
-        PL.summary(b) == "JPEG q90 · size auto · levelled · sharpened 2"
+        PL.summary(b) == "JPEG q90 · size auto · look auto5 · levelled · sharpened 2"
         and PL.summary(PL.apply_options(b, dict(quality="auto"))).startswith("JPEG auto quality")
         and "TIFF 16 bit" in PL.summary(PL.get_preset("archive")["stages"])
         and "2048 px" in PL.summary(PL.get_preset("web")["stages"])

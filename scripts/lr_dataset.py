@@ -22,31 +22,25 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from stratastills import nsfw
+from stratastills.look.features import (  # noqa: F401  (moved: the pipeline's look stage computes them for any picture)
+    EXIF_TAGS,
+    FINAL_C,
+    FINAL_L,
+    PCTS,
+    SKIP_TAG,
+    THUMB,
+    img_feats,
+    num,
+    orient,
+    raw_feats,
+    unorient,
+)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUT = os.path.join(ROOT, "candidates", "personal")
 RAW_EXTS = (".arw", ".cr2", ".dng", ".nef")
 STEM = re.compile(r"(DSC\d{5}|_MG_\d{4}|IMG_\d{4}|DJI_\d{4})", re.I)
-PCTS = (1, 5, 10, 25, 50, 75, 90, 95, 99)
-FINAL_L = [f"L_p{p}" for p in PCTS] + [
-    "L_mean"
-]  # the final's lightness (CIELAB L, 0-100) at these percentiles, and its mean
-FINAL_C = [
-    "a_mean",
-    "b_mean",
-    "C_p50",
-    "C_p90",
-    "C_mean",
-    "C_p99",
-]  # its colour: mean a/b (the cast) and chroma percentiles
 BATCH = 250
-
-
-def num(v, d=np.nan):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return d
 
 
 def pairs(a):
@@ -114,22 +108,6 @@ def load_catalogue():
     return [r for r in json.load(open(os.path.join(OUT, "catalogue.json"))) if "error" not in r and "Exposure2012" in r]
 
 
-def orient(im, o):
-    return {
-        6: cv2.rotate(im, cv2.ROTATE_90_CLOCKWISE),
-        8: cv2.rotate(im, cv2.ROTATE_90_COUNTERCLOCKWISE),
-        3: cv2.rotate(im, cv2.ROTATE_180),
-    }.get(int(o or 1), im)
-
-
-def unorient(im, o):
-    return {
-        6: cv2.rotate(im, cv2.ROTATE_90_COUNTERCLOCKWISE),
-        8: cv2.rotate(im, cv2.ROTATE_90_CLOCKWISE),
-        3: cv2.rotate(im, cv2.ROTATE_180),
-    }.get(int(o or 1), im)
-
-
 def lr_crop(im, x):
     """The part of `im` (in the sensor's frame, not yet oriented) that Lightroom's crop `x` (a catalogue row) kept."""
     if str(x.get("HasCrop")) not in ("1", "True"):
@@ -153,58 +131,6 @@ def lr_crop(im, x):
     return out if out.size else im
 
 
-def img_feats(im):
-    """Stats of a picture (BGR uint8, any size) that tell how it is exposed and what kind of scene it is: lightness percentiles and histogram, clipping, colour cast and strength, local contrast, where the light is."""
-    im = cv2.resize(im, (384, max(8, round(384 * im.shape[0] / im.shape[1]))), interpolation=cv2.INTER_AREA)
-    lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB).astype(np.float32)
-    L = lab[..., 0] * 100 / 255
-    a = lab[..., 1] - 128
-    b = lab[..., 2] - 128
-    g = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    mx = im.max(axis=2)
-    c = np.hypot(a, b)
-    f = {f"L_p{p}": float(np.percentile(L, p)) for p in PCTS}
-    f.update(
-        L_mean=L.mean(),
-        L_std=L.std(),
-        clip_hi=(mx >= 250).mean(),
-        near_hi=(g >= 235).mean(),
-        clip_lo=(g <= 5).mean(),
-        near_lo=(g <= 20).mean(),
-        a_mean=a.mean(),
-        b_mean=b.mean(),
-        chroma_mean=c.mean(),
-        chroma_p90=np.percentile(c, 90),
-    )
-    f.update({f"Lh{i}": v for i, v in enumerate(np.histogram(L, 16, (0, 100))[0] / L.size)})
-    base = cv2.GaussianBlur(L, (0, 0), 12)
-    f["local_contrast"] = np.abs(L - base).mean()
-    f["base_spread"] = np.percentile(base, 95) - np.percentile(base, 5)
-    f["lap"] = np.abs(cv2.Laplacian(g, cv2.CV_32F)).mean()
-    H, W = L.shape
-    f["top_minus_bottom"] = L[: H // 3].mean() - L[-H // 3 :].mean()
-    f["centre_minus_edge"] = L[H // 4 : -H // 4, W // 4 : -W // 4].mean() - L.mean()
-    hue = np.degrees(np.arctan2(b, a)) % 360
-    f.update({f"hue{i}": v for i, v in enumerate(np.histogram(hue, 12, (0, 360), weights=c)[0] / max(c.sum(), 1e-6))})
-    return {k: float(v) for k, v in f.items()}
-
-
-def raw_feats(e):
-    t = num(e.get("ExposureTime"))
-    return dict(
-        log_iso=math.log2(max(num(e.get("ISO"), 100), 1)),
-        log_t=math.log2(t) if t == t and t > 0 else np.nan,
-        fnum=num(e.get("FNumber")),
-        lv=num(e.get("LightValue")),
-        bv=num(e.get("BrightnessValue")),
-        flash=float(int(num(e.get("Flash"), 0)) & 1),
-        f35=num(e.get("FocalLengthIn35mmFormat")),
-        ev_comp=num(e.get("ExposureCompensation")),
-        a7c=float(e.get("Model") == "ILCE-7C"),
-        year=num(str(e.get("DateTimeOriginal", ""))[:4]),
-    )
-
-
 def final_stats(im):
     """The FINAL_L and FINAL_C numbers of a picture (BGR uint8)."""
     im = cv2.resize(im, (384, max(8, round(384 * im.shape[0] / im.shape[1]))), interpolation=cv2.INTER_AREA)
@@ -220,21 +146,6 @@ def final_stats(im):
         float(c.mean()),
         float(np.percentile(c, 99)),
     ]
-
-
-EXIF_TAGS = [
-    "-ISO",
-    "-ExposureTime",
-    "-FNumber",
-    "-LightValue",
-    "-BrightnessValue",
-    "-Flash",
-    "-FocalLengthIn35mmFormat",
-    "-ExposureCompensation",
-    "-Model",
-    "-DateTimeOriginal",
-    "-Orientation",
-]
 
 
 def camera_picture(raw, tmp=None):
@@ -355,12 +266,6 @@ def load_features():
     return out
 
 
-SKIP_TAG = re.compile(
-    r"(Offset|Length|Size$|Checksum|Thumbnail|Preview|File|Directory|ExifTool|ImageUniqueID|Version|Sequence|Count$|Bytes|Table|Padding|Binary|Data$|MakerNote|Comment|Software|Profile|Copyright|Artist|Description|Title|URL|DocumentID|InstanceID|OriginalDocument|Derived|History|Rating|Label|Keywords|SubSec|Date|Time(?!r)|Trailer|Index|Warning|Error)",
-    re.I,
-)
-
-
 def _meta_batch(raws):
     return {
         x["SourceFile"]: x
@@ -441,9 +346,6 @@ def meta(a):
         mats.append(arr)
     np.savez(os.path.join(OUT, "meta.npz"), M=np.stack(mats, 1), names=np.array(names))
     print(f"{len(names)} metadata columns:", ", ".join(names), flush=True)
-
-
-THUMB = 128
 
 
 def thumbs(a):

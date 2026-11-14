@@ -15,7 +15,7 @@ export interface TransformInfo { applied: boolean; angle?: number; confidence?: 
 export interface Detail { ok: boolean; reason?: string; native?: [number, number]; recommended?: number | null; f50?: number; f30?: number; f20?: number; scale50?: number; scale30?: number; scale20?: number; alpha?: number }
 export interface Preset { name: string; label: string; builtin: boolean; stages: Stage[] }
 /** The Advanced panel's flat settings, laid over a preset (only those changed). */
-export interface Options { size?: string; format?: 'jpeg' | 'tiff'; quality?: number | 'auto'; level?: boolean; sharpen?: boolean; sharpen_amount?: number; highlight_contrast?: number; exposure?: 'auto' | 'camera' | 'match' | number }
+export interface Options { look?: string; size?: string; format?: 'jpeg' | 'tiff'; quality?: number | 'auto'; level?: boolean; sharpen?: boolean; sharpen_amount?: number; highlight_contrast?: number; exposure?: 'auto' | 'camera' | 'match' | number }
 export interface GenerateBody { variant?: string | null; preset?: string | null; options?: Options | null; stages?: Stage[] | null }
 export interface GenerateCheck { key: string; exists: boolean; variant: string | null; stages: Stage[]; summary: string }
 export interface GenerateRecord { key: string; file: string; output: [number, number]; bytes: number; format: string; quality: number | null; summary: string; steps: string[]; existing?: boolean }
@@ -25,6 +25,8 @@ export interface Rule { source: string; pipeline: string; variant?: string }
 export interface Rules { rules: Rule[]; pending: number }
 export interface ApplyJob { state: 'idle' | 'running' | 'done' | 'stopped' | 'failed'; done?: number; total?: number; text?: string; failed?: [string, string][] }
 export interface Transform { id: string; label: string }
+/** The look's versions with their arena rating (Bradley-Terry, null before any votes), and which one 'best' is now. */
+export interface LookVersions { best: string; versions: { name: string; rating: number | null; votes: number }[] }
 
 /** A pair of the arena: two versions of one picture under neutral addresses (relative to /arena/), so the page cannot tell which is which. */
 export interface ArenaPair { token: string; left: string; right: string; pool: number; votes: number }
@@ -95,6 +97,7 @@ export const api = {
   detail: (id: string, item: string, variant: string) => req<Detail>('/api/project/detail' + qi(id, item) + '&variant=' + encodeURIComponent(variant)),
   transform: (id: string, item: string, variant: string, transform: string) => req<TransformInfo>('/api/project/transform' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform),
   pipelines: () => req<Preset[]>('/api/pipelines'),
+  looks: () => req<LookVersions>('/api/look'),
   savePipeline: (name: string, label: string, stages: Stage[]) => req<Preset>('/api/pipeline?name=' + encodeURIComponent(name), send('PUT', { label, stages })),
   deletePipeline: (name: string) => req<Preset[]>('/api/pipeline?name=' + encodeURIComponent(name), { method: 'DELETE' }),
   checkGenerate: (id: string, item: string, b: GenerateBody) => req<GenerateCheck>('/api/project/generate/check' + qi(id, item), send('POST', b)),

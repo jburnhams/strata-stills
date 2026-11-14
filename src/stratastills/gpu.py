@@ -151,6 +151,11 @@ def lease_gb():
         return LEASE_GB
 
 
+def lease_is_exclusive():
+    """True while this process holds the WHOLE card through strata-models (STRATASTILLS_LEASE_GB=whole): the service then runs no jobs, so asking it for one (the look's faces and CLIP) would wait for this very lease."""
+    return _lease_held[0] > 0 and _lease_held[1] is not None and _lease_cap is None
+
+
 @contextlib.contextmanager
 def lease(note, vram_gb="default"):
     """Part of the GPU for this block, lent by strata-models (the service that owns the card on omarchy and runs every app's model jobs): it waits

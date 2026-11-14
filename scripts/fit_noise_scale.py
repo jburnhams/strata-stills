@@ -75,7 +75,7 @@ if __name__ == "__main__":
             r = PL.generate(
                 pid,
                 it["id"],
-                preset="best",
+                preset="neutral",
                 options=dict(size=str(a.size + idx), denoise="auto"),
                 progress=lambda m: None,
             )

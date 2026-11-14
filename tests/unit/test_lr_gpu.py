@@ -1,4 +1,4 @@
-"""scripts/lr_gpu.py (the Lightroom-look code and the arena's brightness match in PyTorch) held to its CPU originals in scripts/lr_look.py and scripts/arena_variants.py, on every device there is (torch-CPU always, CUDA / MPS where present), the way test_gpu.py holds gpu.py to develop.py. The scripts are not a package: the folder goes on sys.path."""
+"""look/gpu.py (the Lightroom-look code and the arena's brightness match in PyTorch) held to its CPU originals in look/apply.py and scripts/arena_variants.py, on every device there is (torch-CPU always, CUDA / MPS where present), the way test_gpu.py holds gpu.py to develop.py. The scripts are not a package: the folder goes on sys.path."""
 
 import os
 import sys
@@ -10,12 +10,12 @@ import torch  # noqa: F401  (a missing torch fails the test: CI installs it, see
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import arena_variants as AV
-import lr_dataset as D
-import lr_fit as FIT
-import lr_gpu as G
-import lr_look as LK
 
 from stratastills import gpu
+from stratastills.look import apply as LK
+from stratastills.look import features as D
+from stratastills.look import gpu as G
+from stratastills.look import transform as FIT
 
 H, W = 233, 350  # not a multiple of 4: the quarter-size copy of the guided filter has fractional INTER_AREA weights
 

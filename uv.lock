@@ -3157,6 +3157,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rawpy" },
+    { name = "scikit-learn" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "strata-models-client" },
@@ -3165,6 +3166,8 @@ dependencies = [
     { name = "tifffile", version = "2026.11.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
+    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "xgboost", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.dev-dependencies]
@@ -3184,11 +3187,6 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
 ]
-research = [
-    { name = "scikit-learn" },
-    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "xgboost", version = "3.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
 vision = [
     { name = "insightface" },
     { name = "ultralytics" },
@@ -3207,12 +3205,14 @@ requires-dist = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rawpy", specifier = ">=0.25" },
+    { name = "scikit-learn", specifier = ">=1.6" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "strata-models-client", git = "https://github.com/jburnhams/strata-models?subdirectory=client" },
     { name = "strata-python", git = "https://github.com/jburnhams/strata-python" },
     { name = "tifffile" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
+    { name = "xgboost", specifier = ">=3.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -3232,10 +3232,7 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
 ]
-research = [
-    { name = "scikit-learn", specifier = ">=1.6" },
-    { name = "xgboost", specifier = ">=3.0" },
-]
+research = []
 vision = [
     { name = "insightface" },
     { name = "ultralytics" },

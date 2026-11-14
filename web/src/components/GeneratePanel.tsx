@@ -23,6 +23,7 @@ const BEST = { name: 'best', label: 'Best quality (automatic)', builtin: true, s
 export default function GeneratePanel({ project, item, variant, onGenerated, onShow }: { project: string; item: string; variant: string | null; onGenerated: (variant: string) => void; onShow: (variant: string) => void }) {
   const client = useQueryClient()
   const presets = useLoad({ queryKey: ['pipelines'], queryFn: api.pipelines })
+  const looks = useLoad({ queryKey: ['looks'], queryFn: api.looks })
   const det = useLoad({ queryKey: ['detail', project, item, variant], queryFn: () => (variant ? api.detail(project, item, variant) : Promise.resolve(null)) })
   const [preset, setPreset] = useState('best'), [opts, setOpts] = useState<Options>({}), [custom, setCustom] = useState('4000'), [customMode, setCustomMode] = useState(false), [saveAs, setSaveAs] = useState('')
   useEffect(() => { setOpts({}); setCustomMode(false) }, [item])
@@ -88,6 +89,14 @@ export default function GeneratePanel({ project, item, variant, onGenerated, onS
                 </NativeSelect>
               </Field>
             )}
+            <Field label="Look" hint={looks.status === 'ready' ? `Arena ratings; the leader now is ${looks.data.best}.` : undefined}>
+              <NativeSelect value={String(stageValue(st, 'look', 'variant') ?? 'none')} onChange={e => set({ look: e.target.value })}>
+                {(looks.status === 'ready' ? looks.data.versions : [{ name: 'auto5', rating: null, votes: 0 }, { name: 'auto7', rating: null, votes: 0 }]).map(v => (
+                  <option key={v.name} value={v.name}>{v.name}{v.rating != null ? ` (rating ${v.rating}, ${v.votes} votes)` : ' (not rated yet)'}{looks.status === 'ready' && looks.data.best === v.name ? ' (leader)' : ''}</option>
+                ))}
+                <option value="none">None (our neutral develop)</option>
+              </NativeSelect>
+            </Field>
             <Field label="Exposure">
               <NativeSelect value={String(stageValue(st, 'develop', 'exposure') ?? 'auto')} onChange={e => { const v = e.target.value; set({ exposure: v === 'auto' || v === 'camera' || v === 'match' ? v : Number(v) }) }}>
                 <option value="auto">Auto (an even lightness)</option><option value="match">Match the camera's JPEG (each picture)</option><option value="camera">Camera's own (fixed curve)</option><option value="-1">Camera −1 EV</option><option value="1">Camera +1 EV</option>

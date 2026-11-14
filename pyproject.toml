@@ -25,6 +25,8 @@ dependencies = [
     "onnxruntime",              # runs it
     "strata-python",            # shared server code and the strata-check gate
     "strata-models-client",     # gpu.lease: hold the GPU through strata-models during batches; standard library only
+    "xgboost>=3.0",             # the look stage (stratastills.look): the frozen look models are XGBoost regressors
+    "scikit-learn>=1.6",        # which XGBoost's scikit-learn wrapper needs to unpickle them
     "tzdata; sys_platform == 'win32'",
 ]
 
@@ -57,11 +59,8 @@ vision = [
     "ultralytics",              # YOLO11 (fetches its own weights on first use)
     "insightface",              # faces: detection (buffalo_l)
 ]
-# Research scripts only (scripts/lr_look.py: learning the person's own edits).
-research = [
-    "xgboost>=3.0",
-    "scikit-learn>=1.6",
-]
+# Research scripts only (scripts/lr_look.py: learning the person's own edits). XGBoost and scikit-learn moved to the main dependencies (the look stage runs the models).
+research = []
 
 [tool.uv]
 default-groups = ["dev"]

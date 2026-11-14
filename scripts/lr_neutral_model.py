@@ -20,6 +20,9 @@ import lr_fit as FIT
 import lr_look as K
 import lr_tmodel as TM
 
+from stratastills.look import net as NETM
+from stratastills.look.net import Net
+
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -62,31 +65,6 @@ def dist(src, fin, p):
             o = c if p is None else FIT.transform(c, torch.from_numpy(np.asarray(p[s : s + 256], np.float32)).to(DEV))
         out.append(torch.stack(FIT.distance(o, f), 1).cpu().numpy())
     return np.concatenate(out)
-
-
-class Net(torch.nn.Module):
-    """ResNet-18 (ImageNet weights) on the thumb(s), its pooled features joined with the standardised scalar features, two layers to the 19 parameters, started at the person's typical transform."""
-
-    def __init__(self, n_scalar, typical, n_img=1):
-        super().__init__()
-        import torchvision
-
-        self.cnn = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
-        w = self.cnn.conv1.weight.data
-        if n_img > 1:
-            self.cnn.conv1 = torch.nn.Conv2d(3 * n_img, 64, 7, 2, 3, bias=False)
-            self.cnn.conv1.weight.data = torch.cat([w / n_img] * n_img, 1)
-        self.cnn.fc = torch.nn.Identity()
-        self.head = torch.nn.Sequential(
-            torch.nn.Linear(512 + n_scalar, 256), torch.nn.GELU(), torch.nn.Dropout(0.2), torch.nn.Linear(256, FIT.NP)
-        )
-        torch.nn.init.zeros_(self.head[-1].weight)
-        self.head[-1].bias.data = torch.as_tensor(typical, dtype=torch.float32)
-        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406] * n_img).view(1, -1, 1, 1))
-        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225] * n_img).view(1, -1, 1, 1))
-
-    def forward(self, img, x):  # img: (N, 3*n_img, H, W) RGB 0..1
-        return self.head(torch.cat([self.cnn((img - self.mean) / self.std), x], 1))
 
 
 def train_cnn(imgs, lab_src, lab_fin, xs, w, typical, epochs, log=print):
@@ -256,27 +234,12 @@ def predict_params(neu_bgr, x):
 
 
 def _predict_params(neu_bgr, x):
-    import cv2
-
     if "net" not in _net:
-        z = torch.load(NET_FILE, map_location=DEV, weights_only=False)
-        net = Net(len(z["mu"]), z["typical"]).to(DEV)
-        net.load_state_dict(z["state"])
-        net.eval()
-        _net.update(net=net, mu=z["mu"], sd=z["sd"])
-    t = cv2.resize(neu_bgr, (D.THUMB, D.THUMB), interpolation=cv2.INTER_AREA)[..., ::-1].copy()
-    img = torch.from_numpy(t).permute(2, 0, 1)[None].float().to(DEV) / 255
-    xs = torch.from_numpy(
-        np.nan_to_num((np.asarray(x, np.float64) - _net["mu"]) / _net["sd"]).clip(-5, 5).astype(np.float32)
-    )[None].to(DEV)
-    with torch.no_grad():
-        out = _net["net"](img, xs)[0].cpu().numpy()
+        _net["net"] = NETM.load(NET_FILE, DEV)
     if "lo" not in _net:
         q = _train_fits()
         _net.update(lo=np.percentile(q, 0.5, 0), hi=np.percentile(q, 99.5, 0))
-    return np.clip(
-        out, _net["lo"], _net["hi"]
-    )  # an unusual picture (features far outside training) can get a transform no edit ever had (cast -21, hue 26 degrees, a near-white curve): each parameter is held to the range the per-pair fits span (0.5-99.5 %)
+    return NETM.predict_params(_net["net"], neu_bgr, x, _net["lo"], _net["hi"])
 
 
 def typical_params():

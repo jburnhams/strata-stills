@@ -112,5 +112,15 @@ def thumbs_dir():
     return os.path.abspath(os.path.expanduser(p))
 
 
+def look_dir():
+    """Where the frozen look models are (stratastills.look, made by scripts/export_look_bundle.py): STRATASTILLS_LOOK, `look_dir` of the settings file, else ~/models/strata-stills/look. Private: trained on the person's photos."""
+    p = (
+        os.environ.get("STRATASTILLS_LOOK")
+        or load().get("look_dir")
+        or os.path.join("~", "models", "strata-stills", "look")
+    )
+    return os.path.abspath(os.path.expanduser(p))
+
+
 def all_settings():
     return dict(projects_dir=projects_dir(), source_roots=source_roots())
