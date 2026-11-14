@@ -388,8 +388,16 @@ def neutral_params(neu, x, b=None):
     return net.predict_params(m, neu, x, m["lo"], m["hi"])
 
 
+_render_lock = threading.Lock()  # one picture at a time through the look: the arena makes versions in several threads, and two at once on the card ended in a device-side assert that broke every later picture of the run (2026-11-14)
+
+
 def render(variant, neu, x, fl, b=None, preds=None):
     """One version of a picture: `neu` our neutral picture (uint8 BGR), `x` its features, `fl` its faces (look.faces: boxes as fractions of `neu`'s frame). -> (picture, what was done)."""
+    with _render_lock:
+        return _render(variant, neu, x, fl, b, preds)
+
+
+def _render(variant, neu, x, fl, b=None, preds=None):
     b = b or bundle()
     if variant not in VARIANTS:
         raise ValueError(f"unknown look {variant!r}")
