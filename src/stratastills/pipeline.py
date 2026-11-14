@@ -914,8 +914,10 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
     lock = threading.Lock()
     n = max(1, workers or resources.auto_workers(gpu.available()))
 
+    broken = []  # a sticky CUDA error seen by any worker: the queued pictures are skipped (they would all fail) and it is raised at the end
+
     def work(iid, vid, name):
-        if stop():
+        if stop() or broken:
             return
         short = iid.split("~")[-1]
         try:
@@ -930,7 +932,7 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
             with lock:
                 failed.append((iid, str(e)))
             if gpu.cuda_broken(e):
-                raise  # the CUDA context is unusable: every later picture would fail too
+                broken.append(e)  # the CUDA context is unusable: every later picture would fail too
         else:
             with lock:
                 done[0] += 1
@@ -944,4 +946,6 @@ def apply_rules(pid, progress=None, stop=lambda: False, workers=None):
         ThreadPoolExecutor(n) as ex,
     ):
         list(ex.map(lambda a: work(*a), todo))
+    if broken:
+        raise broken[0]
     return dict(done=done[0], failed=failed, total=total, workers=n)

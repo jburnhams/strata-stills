@@ -346,3 +346,17 @@ def test_a_sticky_cuda_error_restarts_the_process_and_nothing_else_does(monkeypa
         gpu.exit_if_cuda_broken(RuntimeError("CUDA error: an illegal memory access was encountered"))
         and len(started) == 1
     )
+
+
+def test_a_batch_stops_starting_pictures_after_a_sticky_cuda_error(monkeypatch):
+    calls = []
+
+    def gen(pid, iid, *a, **k):
+        calls.append(iid)
+        raise RuntimeError("CUDA error: device-side assert triggered")
+
+    monkeypatch.setattr(PL, "pending", lambda pid: [(f"s~{i}", None, "best") for i in range(20)])
+    monkeypatch.setattr(PL, "generate", gen)
+    with pytest.raises(RuntimeError, match="device-side"):
+        PL.apply_rules("p", workers=1)
+    assert len(calls) == 1
