@@ -2,7 +2,7 @@
 
 import os
 
-from omarchy_db import connect, session
+from strata_python.db import connect, session
 
 from stratastills import meta, meta_store
 from stratastills.db import hashes, metaimport

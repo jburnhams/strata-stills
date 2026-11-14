@@ -20,7 +20,8 @@ dependencies = [
     "imagecodecs",              # JPEG XL inside those DNGs
     "nudenet",                  # the nudity filter (nsfw.py, on by default): local ONNX detector, weights inside the package
     "onnxruntime",              # runs it
-    "strata-python>=0.2.1,<0.3",  # from PyPI: shared server code (web serving, the serve command, OS helpers, the hermetic test plugin) and the strata-check gate; brings FastAPI, uvicorn, pydantic and pytest. While 0.x a minor may break: read its CHANGELOG.md before moving the cap
+    "strata-python[db]>=0.2.1,<0.3",  # from PyPI: shared server code (web serving, the serve command, OS helpers, the hermetic test plugin), the strata-check gate and, with [db], the photos schema's connection, migrations and test fixtures (SQLAlchemy, Alembic, psycopg); brings FastAPI, uvicorn, pydantic and pytest. While 0.x a minor may break: read its CHANGELOG.md before moving the cap
+    "pgvector",                 # the `vector` column type of the photos schema (db/types.py)
     "strata-models-client",     # gpu.lease: hold the GPU through strata-models during batches; standard library only
     "xgboost>=3.0",             # the look stage (stratastills.look): the frozen look models are XGBoost regressors
     "scikit-learn>=1.6",        # which XGBoost's scikit-learn wrapper needs to unpickle them
@@ -39,9 +40,6 @@ dev = [
     "strata-python[dev]",       # ruff, pyright, ty, httpx and the pytest plugins (cov, randomly, timeout, xdist) at the versions strata-check is tested with
     "hypothesis",
     "diff-cover",
-    "omarchy-db",               # the photos schema (src/stratastills/db): its tests run everywhere, not skipped
-    "pgvector",
-    "psycopg[binary]",
 ]
 # Detector models for the subject / object stages (same choices as strata-360).
 vision = [
@@ -55,7 +53,6 @@ research = []
 default-groups = ["dev"]
 
 [tool.uv.sources]
-omarchy-db = { git = "https://github.com/jburnhams/database", subdirectory = "python" }
 strata-models-client = { git = "https://github.com/jburnhams/strata-models", subdirectory = "client" }
 
 [tool.hatch.build.targets.wheel]
@@ -64,9 +61,7 @@ packages = ["src/stratastills"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests/utils"]
 testpaths = ["tests/unit"]
-# -p no:strata_python_db: strata-python's database plugin turns itself on whenever SQLAlchemy and Alembic are installed (omarchy-db brings them) and adds a second --pg;
-# off until src/stratastills/db moves from omarchy-db to strata_python.db (issue #102)
-addopts = "-ra --timeout=300 -p no:strata_python_db"
+addopts = "-ra --timeout=300"
 # strata-python's pytest plugin (loaded by itself): its autouse `isolated_env` points HOME, STRATASTILLS_HOME and STRATASTILLS_DATA into a fresh folder, removes the tuning
 # variables (what a developer sets on their own machine to try things) and sets `strata_env` ({env} is that folder); its `no_network` guard fails any outbound connection,
 # and it marks everything under tests/integration `integration`.
@@ -80,7 +75,7 @@ strata_env = [
 ]
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]       # TestClient noise from the installed starlette; remove when the dependency moves on
 markers = [
-    "pg: needs a real Postgres with pgvector (pytest --pg); skipped on the SQLite default",
+    "pg: needs a real Postgres with pgvector (pytest --pg, strata_python.db's throwaway server); skipped on the SQLite default",
     "slow: needs downloaded models; run manually or on a schedule",
 ]
 
@@ -162,7 +157,7 @@ unresolved-global = "ignore"
 unsupported-operator = "ignore"
 missing-union-attribute = "ignore"
 
-[tool.omarchy-db]
-app = "photos"                                     # schema `photos` in the shared `omarchy` Postgres (jburnhams/database); the app runs on Postgres only, the unit tests run on SQLite
+[tool.strata-db]
+app = "photos"                                     # schema `photos` of the shared Postgres (strata_python.db; the database is named by STRATA_DB_DATABASE where the service runs); the app runs on Postgres only, the unit tests run on SQLite
 models = "stratastills.db.models:Base"
 migrations = "migrations"

@@ -28,7 +28,7 @@ class DbStore:
     kind = "database"
 
     def __init__(self, url, roots=None):
-        from omarchy_db import connect
+        from strata_python.db import connect
 
         self.engine = connect(url)
         self.files = FileStore()
@@ -62,7 +62,7 @@ class DbStore:
             st = os.stat(path)
         except OSError:
             return None
-        from omarchy_db import session
+        from strata_python.db import session
 
         with session(self.engine) as s:
             f = s.scalars(

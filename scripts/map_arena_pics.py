@@ -56,7 +56,7 @@ def main():
     if not a.write:
         print("dry run: nothing written (use --write)")
         return 0
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     eng = connect(a.url or "photos")
     with session(eng) as s:

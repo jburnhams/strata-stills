@@ -1,8 +1,9 @@
 name: Database
 
-# The photos schema (src/stratastills/db): migrations (dbtool check) and tests/unit/db on SQLite and on a throwaway PostgreSQL 18 with
-# pgvector, through the shared workflow in jburnhams/database. The unit workflow does not install the database packages, so this is where
-# those tests run in CI.
+# The photos schema (src/stratastills/db) through strata_python.db: the migration checks (`strata-db check`: from empty, matching the models, downgrading
+# cleanly) and tests/unit/db, on SQLite and on a throwaway PostgreSQL 18 with pgvector (the shared server's version and extension). The unit workflow runs
+# tests/unit/db on SQLite on every OS; this one adds Postgres, which SQLite cannot stand in for (types, vector, locking).
+
 on:
   push:
     branches: [main]
@@ -11,9 +12,28 @@ on:
 
 jobs:
   database:
-    uses: jburnhams/database/.github/workflows/app-db.yml@main
-    with:
-      install: uv pip install -e . --group dev
-      tests: tests/unit/db
-      # the reusable workflow's default `-o addopts=` drops pyproject's addopts, so strata-python's db plugin (it clashes with omarchy-db's --pg) is turned off here too, until #102
-      pytest-args: "-o addopts= -p no:strata_python_db"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: postgres  # throwaway CI container gitleaks:allow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # strata_python.db makes its strata_db_* scratch and test databases on this server; the guard refuses every other database under pytest
+      STRATA_DB_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres  # throwaway CI container gitleaks:allow
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Migrations (strata-db check, SQLite and Postgres)
+        run: uv run --no-sync strata-db check
+      - name: Database tests on SQLite
+        run: uv run --no-sync pytest -q -o addopts= tests/unit/db
+      - name: Database tests on Postgres
+        run: uv run --no-sync pytest -q -o addopts= --pg tests/unit/db

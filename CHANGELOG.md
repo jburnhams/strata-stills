@@ -4,6 +4,16 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 
 ## 2026-11-14
 
+**The photos schema on strata_python.db instead of omarchy-db (branch `claude/project-thread-k3276m-db`, issue #102)**
+Jonathan chose to move the database code to strata-python now, as a second PR after #101. Same names and behaviour (strata_python.db is the omarchy-db code, released on PyPI); the environment variables are renamed.
+
+- `pyproject.toml`, `uv.lock`: `strata-python[db]` and `pgvector` are app dependencies (were omarchy-db from a git source, pgvector and psycopg in the dev group: the service uses the database at run time, so they belong to the app); `[tool.omarchy-db]` renamed `[tool.strata-db]` (same keys); the `-p no:strata_python_db` stopgap of #101 removed.
+- `src/stratastills/db/*.py`, `src/stratastills/*_store.py`, `scripts/*.py`, `tests/unit/db/*.py`: imports from `strata_python.db` (`connect`, `session`, `make_base`, `strata_python.db.testing`); `OMARCHY_DB_LIVE` / `OMARCHY_DB_URL` in docstrings are `STRATA_DB_LIVE` / `STRATA_DB_URL`. `migrations/`: one comment only; the revisions are unchanged (the naming convention is byte-identical, so the live schema does not drift).
+- `.github/workflows/database.yml`: its own job instead of jburnhams/database's reusable workflow (which installs omarchy-db): a pgvector PostgreSQL 18 service, `strata-db check`, then `tests/unit/db` on SQLite and with `--pg`.
+- `AGENTS.md`: `strata-db` in place of `dbtool`, and the service's new variables (`STRATA_DB_LIVE=1`, `STRATA_DB_DATABASE`).
+- `src/stratastills/db/models.py`: `Base` is written as the class `make_base()` builds (same naming convention and dataclass models), because ty cannot use the `type[DataclassBase]` it returns as a base class.
+- Checked here: `strata-db check` ok on SQLite and PostgreSQL 16 with pgvector; `pytest tests/unit/db --pg` 99 passed.
+
 **strata-python 0.2.1 from PyPI, and its web, CLI, OS and test pieces adopted (branch `claude/project-thread-k3276m`, PR #101)**
 Jonathan asked to upgrade to the latest strata-python, through PyPI, and use its features fully. The PR started on 0.2.0 (0.2.1's release had failed on its token); once Jonathan fixed the token and 0.2.1 reached PyPI, its test helpers and extras were adopted too. `strata_python.db` is left for issue #102 (it changes the service environment).
 

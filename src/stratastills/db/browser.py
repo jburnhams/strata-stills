@@ -12,7 +12,7 @@ _engines = {}
 
 def _engine(url):
     if url not in _engines:
-        from omarchy_db import connect
+        from strata_python.db import connect
 
         _engines[url] = connect(url)
     return _engines[url]
@@ -20,7 +20,7 @@ def _engine(url):
 
 def lightroom_finals(folder, url=None, roots=None):
     """{stem: absolute path of the Lightroom export} for the raws directly in `folder` (current file rows only; an export whose root is not configured here is left out; whether the file is on disk is checked when it is read, not here: on the archive disk that is a seek per picture)."""
-    from omarchy_db import session
+    from strata_python.db import session
 
     from .hashes import root_labels
     from .models import File, LightroomEdit

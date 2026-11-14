@@ -74,7 +74,7 @@ def report_flags_dir():
 
 
 def database_url():
-    """The shared database (schema `photos`) the arena keeps its votes and flags in: STRATASTILLS_DATABASE_URL or `database_url` of the settings file. Unset = the arena uses its files (arena_store.py); a bare `photos` means omarchy_db's default connection for that app."""
+    """The shared database (schema `photos`) the arena keeps its votes and flags in: STRATASTILLS_DATABASE_URL or `database_url` of the settings file. Unset = the arena uses its files (arena_store.py); a bare `photos` means strata_python.db's default connection for that app (the shared database named by STRATA_DB_DATABASE, schema photos; STRATA_DB_LIVE=1 is needed outside tests)."""
     return os.environ.get("STRATASTILLS_DATABASE_URL") or load().get("database_url") or None
 
 

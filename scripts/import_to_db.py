@@ -1,7 +1,7 @@
 """Import the arena's files into schema `photos` (src/stratastills/db/importer.py). Default is a DRY RUN: parses the files and prints the counts and problems, touching no database. `--write` writes them in one verified transaction (rolled back on a mismatch); run it again and it adds nothing.
   python scripts/import_to_db.py [--arena out/arena] [--flags out/flags]
   python scripts/import_to_db.py --write [--url postgresql+psycopg:///omarchy?options=-csearch_path%3Dphotos,public]
-The files are only read. Needs omarchy-db, pgvector and psycopg (the dev group of uv sync)."""
+The files are only read. Needs strata-python[db] and pgvector (dependencies of the app)."""
 
 import argparse
 import json
@@ -20,7 +20,7 @@ def main():
     ap.add_argument("--write", action="store_true", help="write to the database (default: dry run)")
     ap.add_argument(
         "--url",
-        help='database URL (default: omarchy_db.connect("photos"), i.e. PHOTOS_DATABASE_URL / OMARCHY_DB_URL / the shared server)',
+        help='database URL (default: strata_python.db.connect("photos"), i.e. PHOTOS_DATABASE_URL / STRATA_DB_URL / the shared server)',
     )
     a = ap.parse_args()
     p = importer.plan(a.arena, a.flags)
@@ -28,7 +28,7 @@ def main():
     if not a.write:
         print("dry run: nothing written (use --write)")
         return 0
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     eng = connect(a.url or "photos")
     with session(eng) as s:

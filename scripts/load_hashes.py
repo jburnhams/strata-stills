@@ -18,7 +18,7 @@ def main():
     ap.add_argument("jsonl")
     ap.add_argument("--root", action="append", help="a source root (repeatable; default: the settings file's)")
     ap.add_argument("--write", action="store_true", help="write to the database (default: dry run)")
-    ap.add_argument("--url", help='database URL (default: omarchy_db.connect("photos"))')
+    ap.add_argument("--url", help='database URL (default: strata_python.db.connect("photos"))')
     a = ap.parse_args()
     problems = []
     recs = hashes.read_jsonl(a.jsonl, problems)
@@ -35,7 +35,7 @@ def main():
     if not a.write:
         print("dry run: nothing written (use --write)")
         return 0
-    from omarchy_db import connect, session
+    from strata_python.db import connect, session
 
     eng = connect(a.url or "photos")
     with session(eng) as s:
