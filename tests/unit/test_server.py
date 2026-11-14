@@ -18,6 +18,17 @@ def test_landing_page_and_empty_list(client):
     assert "strata-stills" in client.get("/").text and client.get("/api/projects").json() == []
 
 
+def test_health_and_the_page_at_any_screen_path(client):
+    """strata-python's skeleton: /api/health, and the page at a path the web app owns with a <base href> back to the root (a reload behind Caddy keeps its assets);
+    an unknown /api path stays a 404 rather than the page."""
+    from stratastills import __version__
+
+    assert client.get("/api/health").json() == dict(ok=True, version=__version__)
+    page = client.get("/some/screen")
+    assert page.status_code == 200 and '<base href="../">' in page.text
+    assert client.get("/api/no-such-thing").status_code == 404
+
+
 def test_project_lifecycle(client, tmp_path):
     src = tmp_path / "s"
     src.mkdir()
@@ -109,7 +120,8 @@ def test_the_visual_report_is_served_from_its_folder(client, tmp_path, monkeypat
         and client.get("/report", follow_redirects=False).status_code in (302, 307)
     )
     assert (
-        client.get("/report/../secret.txt").status_code == 404
+        client.get("/report/../secret.txt").text
+        != "no"  # the client makes it /secret.txt, which the web app's catch-all answers with the page, never the file
         and client.get("/report/%2e%2e/secret.txt").status_code == 404
     )
 

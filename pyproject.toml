@@ -16,14 +16,11 @@ dependencies = [
     "rawpy>=0.25",              # DNG / RAW decoding (LibRaw)
     "pyyaml",
     "loguru",
-    "fastapi",
-    "uvicorn",
-    "pydantic",
     "tifffile",                 # Lightroom linear DNG and the 16 bit TIFF export
     "imagecodecs",              # JPEG XL inside those DNGs
     "nudenet",                  # the nudity filter (nsfw.py, on by default): local ONNX detector, weights inside the package
     "onnxruntime",              # runs it
-    "strata-python",            # shared server code and the strata-check gate
+    "strata-python>=0.2.1,<0.3",  # from PyPI: shared server code (web serving, the serve command, OS helpers, the hermetic test plugin) and the strata-check gate; brings FastAPI, uvicorn, pydantic and pytest. While 0.x a minor may break: read its CHANGELOG.md before moving the cap
     "strata-models-client",     # gpu.lease: hold the GPU through strata-models during batches; standard library only
     "xgboost>=3.0",             # the look stage (stratastills.look): the frozen look models are XGBoost regressors
     "scikit-learn>=1.6",        # which XGBoost's scikit-learn wrapper needs to unpickle them
@@ -39,17 +36,9 @@ stratastills = "stratastills.cli:main"
 # that it cannot replace it: `uv pip install --no-deps spandrel==0.4.2 einops safetensors`); the tests of the GPU code run on the torch CPU device. Use `uv run --no-sync` or
 # `uv sync --inexact` afterwards, a plain exact `uv sync` removes what is not locked.
 dev = [
-    "httpx>=0.27",
-    "pytest>=8",
-    "pytest-cov>=5",
+    "strata-python[dev]",       # ruff, pyright, ty, httpx and the pytest plugins (cov, randomly, timeout, xdist) at the versions strata-check is tested with
     "hypothesis",
-    "pytest-randomly",
-    "pytest-timeout",
-    "pytest-xdist",
     "diff-cover",
-    "ruff",
-    "pyright",
-    "ty",
     "omarchy-db",               # the photos schema (src/stratastills/db): its tests run everywhere, not skipped
     "pgvector",
     "psycopg[binary]",
@@ -66,8 +55,6 @@ research = []
 default-groups = ["dev"]
 
 [tool.uv.sources]
-# strata-python tracks main (no tag): uv.lock pins the commit, `uv lock --upgrade-package strata-python` moves it
-strata-python = { git = "https://github.com/jburnhams/strata-python" }
 omarchy-db = { git = "https://github.com/jburnhams/database", subdirectory = "python" }
 strata-models-client = { git = "https://github.com/jburnhams/strata-models", subdirectory = "client" }
 
@@ -77,10 +64,22 @@ packages = ["src/stratastills"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests/utils"]
 testpaths = ["tests/unit"]
-addopts = "-ra --timeout=300"
+# -p no:strata_python_db: strata-python's database plugin turns itself on whenever SQLAlchemy and Alembic are installed (omarchy-db brings them) and adds a second --pg;
+# off until src/stratastills/db moves from omarchy-db to strata_python.db (issue #102)
+addopts = "-ra --timeout=300 -p no:strata_python_db"
+# strata-python's pytest plugin (loaded by itself): its autouse `isolated_env` points HOME, STRATASTILLS_HOME and STRATASTILLS_DATA into a fresh folder, removes the tuning
+# variables (what a developer sets on their own machine to try things) and sets `strata_env` ({env} is that folder); its `no_network` guard fails any outbound connection,
+# and it marks everything under tests/integration `integration`.
+strata_env_prefix = "STRATASTILLS"
+strata_tuning_vars = ["STRATASTILLS_SOURCES", "STRATASTILLS_GPU", "STRATASTILLS_DEVICE", "STRATASTILLS_GPU_SLOTS", "STRATASTILLS_MAX_PIXELS", "STRATASTILLS_TILE"]
+strata_env = [
+    "STRATASTILLS_PROJECTS={env}/projects",   # outside the test's own tmp_path, which tests may browse as a source
+    "STRATASTILLS_NSFW=0",                    # the nudity filter needs its model: off here; tests/unit/test_nsfw.py turns it on with a fake detector
+    "STRATASTILLS_LEASE=0",                   # never a lease from a strata-models service on the developer's machine (it can wait behind another app's for an hour); test_lease.py turns it on with a fake client
+    "STRATASTILLS_AI=0",                      # `denoise: auto` brings the learned model in on a noisy picture: not in the tests (the weights may not be there); the tests of that turn it on
+]
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]       # TestClient noise from the installed starlette; remove when the dependency moves on
 markers = [
-    "integration: builds synthetic photos and runs the CLI / server (tests/integration)",
     "pg: needs a real Postgres with pgvector (pytest --pg); skipped on the SQLite default",
     "slow: needs downloaded models; run manually or on a schedule",
 ]

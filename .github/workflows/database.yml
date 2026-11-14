@@ -15,3 +15,5 @@ jobs:
     with:
       install: uv pip install -e . --group dev
       tests: tests/unit/db
+      # the reusable workflow's default `-o addopts=` drops pyproject's addopts, so strata-python's db plugin (it clashes with omarchy-db's --pg) is turned off here too, until #102
+      pytest-args: "-o addopts= -p no:strata_python_db"

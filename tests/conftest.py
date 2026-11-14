@@ -1,59 +1,8 @@
-"""Shared pytest configuration: every test is hermetic (its own home and projects folder, no network, no stray tuning variables). Tests under tests/integration get the `integration` marker automatically."""
+"""Shared pytest configuration. Every test is hermetic through strata-python's pytest plugin, configured in pyproject.toml (`strata_env_prefix`, `strata_tuning_vars`,
+`strata_env`): its own home, app home and projects folder, the app's switches off, no tuning variables, no network. Tests under tests/integration get the `integration`
+marker from the plugin too."""
 
 import os
-import socket
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "utils"))
-TUNING = (
-    "STRATASTILLS_SOURCES",
-    "STRATASTILLS_GPU",
-    "STRATASTILLS_DEVICE",
-    "STRATASTILLS_GPU_SLOTS",
-    "STRATASTILLS_MAX_PIXELS",
-    "STRATASTILLS_TILE",
-)  # what a developer sets on their own machine to try things: never leaks into a test
-
-
-def pytest_collection_modifyitems(items):
-    for item in items:
-        if os.sep + "integration" + os.sep in str(item.fspath):
-            item.add_marker(pytest.mark.integration)
-
-
-@pytest.fixture(autouse=True)
-def isolated_env(tmp_path_factory, monkeypatch):
-    """`~/.stratastills` and the projects folder point into a tmp dir (outside the test's own tmp_path, which tests may browse as a source), so nothing reads or writes the developer's real settings or projects; tuning variables are removed."""
-    base = tmp_path_factory.mktemp("env")
-    monkeypatch.setenv("HOME", str(base / "home"))
-    monkeypatch.setenv("USERPROFILE", str(base / "home"))
-    monkeypatch.setenv("STRATASTILLS_HOME", str(base / "stratastills-home"))
-    monkeypatch.setenv("STRATASTILLS_PROJECTS", str(base / "projects"))
-    for k in TUNING:
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv(
-        "STRATASTILLS_NSFW", "0"
-    )  # the nudity filter needs its model: off here; tests/unit/test_nsfw.py turns it on with a fake detector
-    monkeypatch.setenv(
-        "STRATASTILLS_LEASE", "0"
-    )  # never a lease from a strata-models service running on the developer's machine (it can wait behind another app's for an hour); tests/unit/test_lease.py turns it on with a fake client
-    monkeypatch.setenv(
-        "STRATASTILLS_AI", "0"
-    )  # `denoise: auto` brings the learned model in on a noisy picture: not in the tests (the weights may not be there); the tests of that turn it on
-    return base
-
-
-@pytest.fixture(autouse=True)
-def no_network(monkeypatch):
-    """A test that opens an outbound connection fails at once (loopback and unix sockets are fine)."""
-    real = socket.socket.connect
-
-    def guarded(self, address, *a, **kw):
-        host = address[0] if isinstance(address, tuple) else None
-        if self.family in (socket.AF_INET, socket.AF_INET6) and host not in ("127.0.0.1", "::1", "localhost"):
-            raise AssertionError(f"tests must not use the network (tried {address!r})")
-        return real(self, address, *a, **kw)
-
-    monkeypatch.setattr(socket.socket, "connect", guarded)

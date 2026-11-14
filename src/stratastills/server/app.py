@@ -15,15 +15,13 @@ import secrets
 import threading
 import time
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from strata_python import web
 
 from stratastills import (
-    arena as AR,
-)
-from stratastills import (
+    __version__,
     arena_store,
     browser,
     flags_store,
@@ -32,6 +30,9 @@ from stratastills import (
     nsfw,
     preview,
     settings,
+)
+from stratastills import (
+    arena as AR,
 )
 from stratastills import (
     export as X,
@@ -140,7 +141,8 @@ class SettingsIn(BaseModel):
 
 
 def create_app():
-    app = FastAPI(title="strata-stills", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    # strata-python's skeleton: /api/docs and GET /api/health ({ok, version}). The settings routes stay below until strata-python's Settings holds a list (source_roots).
+    app = web.base_app("strata-stills", __version__)
     jobs = {}  # (project, item) -> {state: running|done|failed, text, result, error}: generating takes a minute or two, so it runs in a thread and is polled
     batches = {}  # project -> {state, done, total, text, failed, stop}: applying the rules to a whole source
 
@@ -149,13 +151,6 @@ def create_app():
             return fn(*a, **kw)
         except P.ProjectError as e:
             raise HTTPException(400, str(e))
-
-    @app.get("/", response_class=HTMLResponse)
-    def index():
-        built = os.path.join(
-            STATIC, "index.html"
-        )  # the React app when it has been built (cd web; npm run build), else the plain stand-in page
-        return open(built if os.path.exists(built) else LANDING, encoding="utf8").read()
 
     @app.get("/flagged")
     def flagged_slash():
@@ -747,19 +742,12 @@ def create_app():
     def remove_source(id: str, path: str):
         return guard(P.remove_source, id, path)
 
-    if os.path.isdir(os.path.join(STATIC, "assets")):
-        app.mount("/assets", StaticFiles(directory=os.path.join(STATIC, "assets")), name="assets")
+    # Last: /assets, the files beside index.html, and the React app (else the plain stand-in page) at every other path outside /api, each with a relative <base href>
+    # so a reload or a shared link opens that screen, at the server's root and behind Caddy at /strata-stills/ alike.
+    web.add_web(app, STATIC, LANDING)
     return app
 
 
 def main(argv=None):
-    import argparse
-
-    import uvicorn
-
-    a = argparse.ArgumentParser()
-    a.add_argument("--host", default="127.0.0.1")
-    a.add_argument("--port", type=int, default=8361)
-    a = a.parse_args(argv)
-    print(f"projects folder: {settings.projects_dir()}\nhttp://{a.host}:{a.port}/")
-    uvicorn.run(create_app(), host=a.host, port=a.port, log_level="warning")
+    """`--host` (default 127.0.0.1) and `--port` (default 8361), through strata-python's runner."""
+    web.serve(create_app(), argv, default_port=8361, banner=f"projects folder: {settings.projects_dir()}")
