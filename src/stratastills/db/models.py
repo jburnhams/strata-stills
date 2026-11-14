@@ -230,6 +230,9 @@ class ProjectSource(Base):
     original_path: Mapped[str | None] = mapped_column(
         default=None
     )  # the path as the project stored it (a Windows UNC path, say); root + relpath is where it is on this machine
+    stems: Mapped[list | None] = mapped_column(
+        sa.JSON(none_as_null=True), default=None
+    )  # the pictures the source holds (their stems), None = every picture in the folder (projects.include)
     __table_args__ = (UniqueConstraint("project_id", "root", "relpath"),)
 
 

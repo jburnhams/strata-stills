@@ -106,5 +106,11 @@ def report_dir():
     return os.path.abspath(os.path.expanduser(p))
 
 
+def thumbs_dir():
+    """Where the Browser keeps the thumbnails it makes (browser.py): STRATASTILLS_THUMBS, `thumbs_dir` of the settings file, else `thumbs/` in the settings folder."""
+    p = os.environ.get("STRATASTILLS_THUMBS") or load().get("thumbs_dir") or os.path.join(home(), "thumbs")
+    return os.path.abspath(os.path.expanduser(p))
+
+
 def all_settings():
     return dict(projects_dir=projects_dir(), source_roots=source_roots())

@@ -1,6 +1,6 @@
 """Nudity filter: a picture with exposed nudity in it is skipped for EVERY purpose (the project's items, processing, exports, the reports, the blind arena), so none of them ever shows, makes or ships it.
 
-The check runs locally (NudeNet, an ONNX detector of exposed body parts; the weights ship inside its pip package, nothing is uploaded) on a small decode of the picture's camera JPEG, or of the raw when there is no JPEG. The result (the highest score of the 'exposed' classes and which class) is remembered per file, size and time stamp in `<STRATASTILLS_HOME>/nsfw_cache.json`, so a file is looked at once however many reports and projects list it. Originals are never touched.
+The check runs locally (NudeNet, an ONNX detector of exposed body parts; the weights ship inside its pip package, nothing is uploaded) on a small decode of the picture's camera JPEG, or, when there is no JPEG, of the preview the camera embedded in the raw (the raw is developed only when it has none: a develop per picture made listing a new folder take minutes). The result (the highest score of the 'exposed' classes and which class) is remembered per file, size and time stamp in `<STRATASTILLS_HOME>/nsfw_cache.json`, so a file is looked at once however many reports and projects list it. Originals are never touched.
 `ingest.scan` is the one place every consumer lists pictures through, so it applies `keep_shots`; the scripts that list files themselves (build_report.py, lr_dataset.py) call `flagged(path)`.
 
 Settings (environment first, then `~/.stratastills/settings.json`):
@@ -123,7 +123,9 @@ def score(path):
     from stratastills import images
 
     try:
-        bgr = images.load(path, PX)
+        bgr = images.preview_bgr(path, PX) if images.is_camera_raw(path) else None
+        if bgr is None:
+            bgr = images.load(path, PX)
     except Exception:
         res = (1.0, "unreadable")
     else:
@@ -217,19 +219,36 @@ def _probe(shot):
     )
 
 
+def known(path):
+    """Whether the picture (as it is now) has been looked at, so `flagged` answers without running the detector."""
+    if not enabled():
+        return True
+    _load()
+    try:
+        return _key(path) in _cache
+    except OSError:
+        return True  # gone: nothing to show
+
+
+def shot_flagged(shot):
+    """`flagged` for a shot (on its probe file, as keep_shots), or None."""
+    p = None if shot.kind == "video" else _probe(shot)
+    hit = flagged(p) if p and os.path.exists(p) else None
+    if hit:
+        _record(hit)
+    return hit
+
+
+def shot_known(shot):
+    p = None if shot.kind == "video" else _probe(shot)
+    return not p or known(p)
+
+
 def keep_shots(shots):
     """`shots` without the flagged ones (a video has no still to check and passes). The check is on the shot's probe file: its other renderings are the same picture."""
     if not enabled():
         return shots
-    out = []
-    for sh in shots:
-        p = None if sh.kind == "video" else _probe(sh)
-        hit = flagged(p) if p and os.path.exists(p) else None
-        if hit:
-            _record(hit)
-        else:
-            out.append(sh)
-    return out
+    return [sh for sh in shots if not shot_flagged(sh)]
 
 
 def main(argv=None):

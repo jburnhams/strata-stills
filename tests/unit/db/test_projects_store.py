@@ -345,3 +345,17 @@ def test_a_photo_shared_by_two_projects_does_not_lend_one_its_renders(tmp_path, 
         s.commit()
     assert [r["key"] for r in st.generated("a", str(fa), iid, [src])] == ["k1"]
     assert st.generated("b", str(fb), iid, [src]) == []  # b has the same photo, but not the picture
+
+
+def test_contract_a_source_that_holds_some_pictures_only(env):
+    st, folder, root, kind = env
+    path = os.path.join(root, "shoot")
+    doc = dict(DOC, sources=[dict(path=path, added="2026-11-14T08:00:00+00:00", stems=["S2", "S1"])])
+    st.write_doc("p1", folder, doc)
+    assert st.read_doc("p1", folder)["sources"][0]["stems"] == ["S2", "S1"]
+    st.write_doc("p1", folder, dict(doc, sources=[dict(doc["sources"][0], stems=["S1"])]))
+    assert st.read_doc("p1", folder)["sources"][0]["stems"] == ["S1"]
+    whole = dict(doc["sources"][0])
+    whole.pop("stems")
+    st.write_doc("p1", folder, dict(doc, sources=[whole]))
+    assert "stems" not in st.read_doc("p1", folder)["sources"][0]

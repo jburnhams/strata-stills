@@ -7,6 +7,7 @@ import { href } from './route'
 
 const nav = [
   { to: href.projects(), label: 'Projects', end: true },
+  { to: href.browse(), label: 'Browser' },
   { to: href.arena(), label: 'Arena' },
   { to: href.alerts(), label: 'Arena flags' },
   { to: href.flagged(), label: 'Flagged pictures' },

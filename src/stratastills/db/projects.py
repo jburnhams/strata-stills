@@ -62,7 +62,10 @@ class DbStore:
             doc = dict(base or {})
             doc.update(name=p.name, created=_iso(p.created))
             doc["sources"] = [
-                dict(path=x.original_path or x.relpath, added=_iso(x.added), rel=x.relpath)
+                dict(
+                    dict(path=x.original_path or x.relpath, added=_iso(x.added), rel=x.relpath),
+                    **({} if x.stems is None else {"stems": list(x.stems)}),
+                )
                 for x in s.scalars(
                     select(ProjectSource).where(ProjectSource.project_id == p.id).order_by(ProjectSource.id)
                 )
@@ -93,6 +96,7 @@ class DbStore:
                 want[(root, rel)] = src
                 if (root, rel) in have:
                     have[(root, rel)].original_path = src["path"]
+                    have[(root, rel)].stems = src.get("stems")
                 else:
                     s.add(
                         ProjectSource(
@@ -101,6 +105,7 @@ class DbStore:
                             relpath=rel,
                             added=_utc(src.get("added")),
                             original_path=src["path"],
+                            stems=src.get("stems"),
                         )
                     )
             for k, x in have.items():

@@ -2,7 +2,7 @@ import { fetchJson } from 'strata-react'
 // Typed client for the FastAPI server (src/stratastills/server/app.py). Same-origin. Project ids contain slashes, so they travel as query parameters.
 export interface Source { path: string; added?: string }
 export interface Project { id: string; name: string; created: string | null; sources: Source[]; n_sources: number }
-export interface SourceSummary { id: string; path: string; added?: string; reachable: boolean; stills: number; panos: number; videos: number }
+export interface SourceSummary { id: string; path: string; added?: string; reachable: boolean; stills: number; panos: number; videos: number; picked?: number | null }
 export type ItemKind = 'still' | 'pano' | 'video'
 export type Stage = { stage: string } & Record<string, string | number | boolean>
 /** A variant of an item: a file of the source (raw, camera JPEG, a derived one) or a picture the app generated with a pipeline (kind 'generated', with the settings it was made with). */
@@ -44,6 +44,16 @@ export interface ArenaAlert {
 /** A picture the nudity filter flagged (nsfw.review). */
 export interface FlaggedPicture { path: string; cls: string; score: number; allowed: boolean }
 export interface FlaggedList { threshold: number; enabled: boolean; items: FlaggedPicture[] }
+
+/** The Browser (browser.py). A folder key is `<root label>/<path below it>` (`raw/2019/2019-03-02`). */
+export interface BrowseFolder { key: string; name: string; folders: number; pictures: number }
+/** Where a thumbnail can come from, best first: a develop (`gen:<project>:<key>`), `lightroom`, `embedded` (the raw's preview), `jpeg`, `derived:<tag>`, `raw`. */
+export interface ThumbSource { id: string; label: string }
+export interface BrowsePicture { stem: string; kind: ItemKind; files: string[]; taken: string | null; bytes: number | null; sources: ThumbSource[]; projects: string[] }
+/** A folder's pictures; `checking` are still with the nudity filter and are listed once it has looked at them. */
+export interface BrowseListing { pictures: BrowsePicture[]; checking: number }
+export interface BrowseAdd { project?: string | null; name?: string | null; folders?: string[]; subfolders?: boolean; pictures?: Record<string, string[]> }
+export interface BrowseAdded { project: string; sources: number; pictures: number; unchanged: number }
 
 /** The transforms the server offers on a picture, in order (transforms.py ORDER). */
 export const TRANSFORMS: Transform[] = [{ id: 'original', label: 'Original' }, { id: 'level', label: 'Levelled' }]
@@ -95,6 +105,9 @@ export const api = {
   setRules: (id: string, rules: Rule[]) => req<Rules>('/api/project/rules' + q(id), send('PUT', { rules })),
   applyRules: (id: string) => req<ApplyJob>('/api/project/apply' + q(id), { method: 'POST' }),
   applyStatus: (id: string) => req<ApplyJob>('/api/project/apply' + q(id)),
+  browseFolders: (folder: string | null) => req<BrowseFolder[]>('/api/browse/folders' + (folder ? '?folder=' + encodeURIComponent(folder) : '')),
+  browsePictures: (folder: string) => req<BrowseListing>('/api/browse/pictures?folder=' + encodeURIComponent(folder)),
+  browseAdd: (b: BrowseAdd) => req<BrowseAdded>('/api/browse/add', send('POST', b)),
   stopApply: (id: string) => req<ApplyJob>('/api/project/apply' + q(id), { method: 'DELETE' }),
 }
 
@@ -107,6 +120,10 @@ export function imageUrl(id: string, item: string, variant: string | null, trans
 export function cropUrl(id: string, item: string, variant: string, transform: string, x: number, y: number, size: number, zoom: number) {
   return withBase('/api/project/crop' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform + `&x=${x.toFixed(4)}&y=${y.toFixed(4)}&size=${size}&zoom=${zoom}`)
 }
+
+/** A cached thumbnail of a picture in the Browser, from one of its sources (the server rounds `px` up to 160, 320 or 640). */
+export const thumbUrl = (folder: string, stem: string, source: string, px: number) =>
+  withBase('/api/browse/thumb?folder=' + encodeURIComponent(folder) + '&stem=' + encodeURIComponent(stem) + '&source=' + encodeURIComponent(source) + '&px=' + px)
 
 /** Address of an arena picture: the pair's `left`/`right` are relative to the server's /arena/. */
 export const arenaImageUrl = (rel: string) => withBase('/arena/' + rel)
