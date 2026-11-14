@@ -31,7 +31,12 @@ from stratastills.look import features as F
 
 VERSION = 1  # of the stage's code here; the bundle's manifest is part of version() too
 VARIANTS = ("auto1", "auto2", "auto3", "auto4", "auto5", "auto6", "auto7")
-DEFAULT = "auto7"
+DEFAULT = "best"  # the version the arena's votes rate highest now (`winner`)
+FALLBACK = "auto5"  # the winner when there are no ratings to go by (the arena's leader on 2026-11-14)
+RATINGS_TTL = 600.0
+PRIORITY = os.environ.get(
+    "STRATASTILLS_LOOK_PRIORITY", "batch"
+)  # of the strata-models jobs (faces, CLIP): behind interactive work; a one-off check can ask for interactive
 PREVIEW_LONG = 960  # the preview the faces are found on (scripts/lr_faces.py)
 FACE_MIN_SCORE, FACE_MIN_SIZE = 0.6, 24  # as scripts/lr_faces.py: lower is mostly toys, hair and the backs of heads
 
@@ -100,6 +105,40 @@ class Bundle:
 
 
 _bundles = {}
+_ratings = {}
+
+
+def ratings():
+    """{version: dict(rating, votes)} of the auto versions from the arena's votes (Bradley-Terry, as /api/arena/ratings), read at most every RATINGS_TTL seconds; {} when the arena has no votes or cannot be read."""
+    import time
+
+    hit = _ratings.get("r")
+    if hit and time.monotonic() - hit[0] < RATINGS_TTL:
+        return hit[1]
+    out = {}
+    try:
+        from stratastills import arena as AR
+        from stratastills import arena_store
+
+        st = arena_store.get()
+        retired = st.retired()
+        votes = AR.current_votes(st.votes(), st.pool())
+        bt = AR.bradley_terry(votes, retired)
+        n = {}
+        for v in votes:
+            for k in (v["a"], v["b"]):
+                n[k] = n.get(k, 0) + 1
+        out = {k: dict(rating=round(bt[k]), votes=n.get(k, 0)) for k in VARIANTS if k in bt and k not in retired}
+    except Exception:
+        out = {}
+    _ratings["r"] = (time.monotonic(), out)
+    return out
+
+
+def winner():
+    """The auto version the arena rates highest now (FALLBACK without ratings): what 'best' means."""
+    r = ratings()
+    return max(r, key=lambda k: r[k]["rating"]) if r else FALLBACK
 
 
 def version():
@@ -169,6 +208,7 @@ def clip_embedding(preview_bgr):
             ),
             app="strata-stills",
             model="clip-vit-b-32",
+            priority=PRIORITY,
         )
         return np.load(os.path.join(d, "e.npz"))["images"][0]
 
@@ -211,7 +251,9 @@ def faces(preview_bgr):
     with tempfile.TemporaryDirectory(prefix="look-faces-") as d:
         p = os.path.join(d, "p.jpg")
         cv2.imwrite(p, im, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        got = sm.faces(p, "strata-stills", fields=["bbox", "det_score", "landmark_3d_68", "pose"]).get("faces", [])
+        got = sm.faces(
+            p, "strata-stills", priority=PRIORITY, fields=["bbox", "det_score", "landmark_3d_68", "pose"]
+        ).get("faces", [])
         got = [
             f
             for f in got
@@ -221,7 +263,9 @@ def faces(preview_bgr):
         got.sort(key=lambda f: -(f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
         got = got[:6]
         kinds = (
-            sm.run("face-kind", dict(path=p, boxes=[f["bbox"] for f in got]), app="strata-stills")["faces"]
+            sm.run("face-kind", dict(path=p, boxes=[f["bbox"] for f in got]), app="strata-stills", priority=PRIORITY)[
+                "faces"
+            ]
             if got
             else []
         )

@@ -71,11 +71,16 @@ def clip_basis(clip_file):
     basis = dict(mu=mu, vt=vt, texts=[(g, ps, text[g]) for g, ps in C.GROUPS.items()])
     rows = np.stack([F.clip_row(e, basis) for e in E])
     want = np.stack([np.concatenate([ref["pca"][pos[int(i)]], ref["labels"][pos[int(i)]]]) for i in idx])
-    err = np.abs(rows - want).max()
-    if err > 1e-3:
-        raise SystemExit(f"CLIP columns differ from clip.npz by up to {err:.4f}")
+    d = np.abs(rows - want)
+    err_pca, err_lab = float(d[:, :32].max()), float(d[:, 32:].max())
+    if (
+        err_pca > 5e-3 or err_lab > 0.05
+    ):  # the embeddings of a new run differ in the 4th decimal; the prompt softmax (similarities x 100) magnifies that
+        raise SystemExit(
+            f"CLIP columns differ from clip.npz: up to {err_pca:.4f} in the components, {err_lab:.4f} in the labels"
+        )
     print(
-        f"CLIP basis: 32 components, {sum(len(p) for p in C.GROUPS.values())} prompts; all {len(idx)} rows reproduced (max diff {err:.1e})"
+        f"CLIP basis: 32 components, {sum(len(p) for p in C.GROUPS.values())} prompts; all {len(idx)} rows reproduced (largest difference {err_pca:.1e} in the components, {err_lab:.1e} in the labels)"
     )
     return mu, vt, text, C.GROUPS
 

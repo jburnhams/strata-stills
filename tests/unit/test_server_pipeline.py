@@ -34,6 +34,10 @@ def test_pipelines_generate_check_rules_and_download(client, tmp_path):
     iid = client.get("/api/project/items", params=dict(id="demo", source=s_["id"])).json()[0]["id"]
     q = dict(id="demo", item=iid)
 
+    lk = client.get("/api/look").json()
+    assert (
+        lk["best"] == "auto5" and [v["name"] for v in lk["versions"]][-1] == "auto7"
+    )  # no arena votes here: the fallback
     names = [p["name"] for p in client.get("/api/pipelines").json()]
     assert names[:3] == ["best", "archive", "web"]
     assert (

@@ -116,9 +116,14 @@ def test_versions_render_on_a_picture(stub_bundle):
     assert look.version() != f"{look.VERSION}-none"
 
 
-def test_the_pipeline_has_a_look_stage_set_to_auto7_by_default():
+def test_the_pipeline_has_a_look_stage_set_to_the_arena_leader(monkeypatch):
+    monkeypatch.setattr(
+        look, "ratings", lambda: {"auto5": dict(rating=1647, votes=241), "auto7": dict(rating=1700, votes=40)}
+    )
     st = PL.normalize(PL.BEST)
     assert [s["stage"] for s in st][-2:] == ["look", "encode"] and st[-2]["variant"] == "auto7"
+    monkeypatch.setattr(look, "ratings", lambda: {})
+    assert PL.normalize(PL.BEST)[-2]["variant"] == look.FALLBACK == "auto5"
     assert "look" not in [s["stage"] for s in PL.get_preset("neutral")["stages"]]
     assert "look" not in [s["stage"] for s in PL.apply_options(st, dict(look="none"))]
     assert PL.apply_options(PL.get_preset("neutral")["stages"], dict(look="auto5"))[-2] == dict(
