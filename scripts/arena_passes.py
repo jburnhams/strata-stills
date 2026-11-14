@@ -25,18 +25,30 @@ def main():
     for v in a.order.split(","):
         t = time.time()
         print(f"pass {v}: building", flush=True)
-        for attempt in range(
-            1, ATTEMPTS + 1
-        ):  # a fresh process each time: a CUDA error poisons the rest of a run, and what was made is kept
+        # a fresh process each attempt: a CUDA error poisons the rest of a run, and what was made is kept
+        for attempt in range(1, ATTEMPTS + 1):
             r = subprocess.run([sys.executable, os.path.join(HERE, "build_arena.py"), "--versions", v, *rest])
-            if r.returncode:
+            if r.returncode not in (
+                0,
+                1,
+            ):  # 1: some pictures missing, made by the next attempt; anything else is a crash
                 print(f"pass {v}: build_arena failed ({r.returncode}); stopping", flush=True)
                 return r.returncode
-            r = subprocess.run([sys.executable, os.path.join(HERE, "import_to_db.py"), "--write"])
-            if r.returncode:
-                print(f"pass {v}: built, but publishing to the database failed ({r.returncode}); stopping", flush=True)
-                return r.returncode
-            print(f"pass {v}: attempt {attempt} published", flush=True)
+            p = subprocess.run([sys.executable, os.path.join(HERE, "import_to_db.py"), "--write"])
+            if p.returncode:
+                print(f"pass {v}: built, but publishing to the database failed ({p.returncode}); stopping", flush=True)
+                return p.returncode
+            print(
+                f"pass {v}: attempt {attempt} published" + (", some pictures still missing" if r.returncode else ""),
+                flush=True,
+            )
+            if r.returncode == 0:
+                break
+        else:
+            print(
+                f"pass {v}: pictures still missing after {ATTEMPTS} attempts (see the build's list); going on",
+                flush=True,
+            )
         print(f"pass {v}: done in {(time.time() - t) / 60:.0f} min", flush=True)
     return 0
 
