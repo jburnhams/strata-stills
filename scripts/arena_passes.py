@@ -3,7 +3,7 @@ soon as that pass ends and the served pool picks them up (import_to_db --write a
 others are still being remade.
   OMARCHY_DB_LIVE=1 python scripts/arena_passes.py [--order auto7,auto5,...] [-- build_arena arguments]
 The first pass makes the neutral develops that every version starts from (cached in out/cache/report-auto-neutral, so later passes reuse
-them); a pass with nothing to do ends at once. Progress goes to stdout, one line per pass; a failed pass stops the queue."""
+them); a pass with nothing to do ends at once. Progress goes to stdout, one line per pass; a failed pass (its build or its import) stops the queue."""
 
 import argparse
 import os
@@ -29,11 +29,10 @@ def main():
             print(f"pass {v}: build_arena failed ({r.returncode}); stopping", flush=True)
             return r.returncode
         r = subprocess.run([sys.executable, os.path.join(HERE, "import_to_db.py"), "--write"])
-        print(
-            f"pass {v}: done in {(time.time() - t) / 60:.0f} min"
-            + ("" if r.returncode == 0 else f" (import failed: {r.returncode})"),
-            flush=True,
-        )
+        if r.returncode:
+            print(f"pass {v}: built, but publishing to the database failed ({r.returncode}); stopping", flush=True)
+            return r.returncode
+        print(f"pass {v}: done in {(time.time() - t) / 60:.0f} min", flush=True)
     return 0
 
 
