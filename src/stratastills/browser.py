@@ -30,6 +30,7 @@ _scans = {}  # folder -> (dir mtime_ns, time read, shots): every thumbnail reque
 SCAN_TTL = 120.0
 _checking = set()  # folders whose pictures the nudity filter is looking at in the background
 _check_lock = threading.Lock()
+_check_errors = {}  # folder -> why its background check stopped (the detector is not installed), told once at the next listing
 
 
 def _scan(path):
@@ -59,6 +60,11 @@ def _check_later(path, shots):
             for sh in shots:
                 try:
                     nsfw.shot_flagged(sh)
+                except nsfw.NsfwUnavailable as e:
+                    _check_errors[path] = str(
+                        e
+                    )  # no detector: say so at the next listing instead of 'still being checked' for ever
+                    return
                 except Exception:
                     pass  # an unreadable picture scores as flagged inside nsfw; anything else is retried at the next listing
         finally:
@@ -73,6 +79,8 @@ def _visible(path):
     from stratastills import nsfw
 
     shots = _scan(path)
+    if path in _check_errors:
+        raise BrowseError(_check_errors.pop(path))
     pending = [sh for sh in shots if not nsfw.shot_known(sh)]
     if pending:
         _check_later(path, pending)
@@ -309,10 +317,13 @@ def _make(path, how, px):
             if orient in _ORIENT:
                 im = im.rotate(_ORIENT[orient], expand=True)
     if how == "picture":
-        im = Image.open(path)
-        im.draft("RGB", (px, px))
-        im = ImageOps.exif_transpose(im).convert("RGB")
-    elif how == "develop":
+        try:
+            im = Image.open(path)
+            im.draft("RGB", (px, px))
+            im = ImageOps.exif_transpose(im).convert("RGB")
+        except Exception:
+            how = "develop"  # a picture Pillow cannot open (a 16-bit RGB TIFF): images.load has the readers for it
+    if how == "develop":
         import cv2
 
         bgr = images.load(path, px)

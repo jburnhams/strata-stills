@@ -128,3 +128,43 @@ def test_unchecked_pictures_wait_for_the_nudity_filter(roots, monkeypatch):
     assert [p["stem"] for p in B.pictures("raw/2019/2019-03-02")["pictures"]] == ["DSC00002"]
     with pytest.raises(B.BrowseError):
         B.thumb("raw/2019/2019-03-02", "DSC00001", "embedded", 320)
+
+
+def test_a_missing_detector_is_told_not_checked_for_ever(roots, monkeypatch):
+    from stratastills import nsfw
+
+    monkeypatch.setenv("STRATASTILLS_NSFW", "1")
+    nsfw.reset()
+    monkeypatch.setattr(nsfw, "shot_known", lambda sh: False)
+
+    def unavailable(sh):
+        raise nsfw.NsfwUnavailable("the nudity filter needs nudenet")
+
+    monkeypatch.setattr(nsfw, "shot_flagged", unavailable)
+    B._check_errors.clear()
+    B._checking.clear()
+    monkeypatch.setattr(B.threading, "Thread", lambda target, **kw: type("T", (), {"start": lambda self: target()})())
+    assert B.pictures("raw/2019/2019-03-02")["checking"] == 3  # the video too: shot_known is faked
+    with pytest.raises(B.BrowseError, match="nudenet"):
+        B.pictures("raw/2019/2019-03-02")
+
+
+def test_a_picture_pillow_cannot_open_is_read_by_the_app(roots, monkeypatch):
+    import numpy as np
+
+    day = roots / "2019" / "2019-03-02"
+    Image.new("RGB", (40, 30)).save(day / "PANO_1.JPG")
+    B._scans.clear()
+    from PIL import Image as PI
+
+    real = PI.open
+    monkeypatch.setattr(
+        PI,
+        "open",
+        lambda p, *a, **k: (
+            (_ for _ in ()).throw(OSError("16 bit")) if str(p).endswith("PANO_1.JPG") else real(p, *a, **k)
+        ),
+    )
+    monkeypatch.setattr(images, "load", lambda path, px: np.full((30, 40, 3), 200, np.uint8))
+    with PI.open(B.thumb("raw/2019/2019-03-02", "PANO_1", "jpeg", 160)) as im:
+        assert im.size == (40, 30)
