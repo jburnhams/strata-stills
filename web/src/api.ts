@@ -121,6 +121,9 @@ export function cropUrl(id: string, item: string, variant: string, transform: st
   return withBase('/api/project/crop' + qi(id, item) + '&variant=' + encodeURIComponent(variant) + '&transform=' + transform + `&x=${x.toFixed(4)}&y=${y.toFixed(4)}&size=${size}&zoom=${zoom}`)
 }
 
+/** A project item's grid thumbnail: its primary variant (a raw's embedded preview), from the cache the Browser fills too. */
+export const itemThumbUrl = (id: string, item: string, px = 320) => withBase('/api/project/thumb' + qi(id, item) + '&px=' + px)
+
 /** A cached thumbnail of a picture in the Browser, from one of its sources (the server rounds `px` up to 160, 320 or 640). */
 export const thumbUrl = (folder: string, stem: string, source: string, px: number) =>
   withBase('/api/browse/thumb?folder=' + encodeURIComponent(folder) + '&stem=' + encodeURIComponent(stem) + '&source=' + encodeURIComponent(source) + '&px=' + px)

@@ -336,8 +336,13 @@ def _make(path, how, px):
 
 def thumb(key, stem, source="embedded", px=320):
     """The path of the cached thumbnail of one picture from one of its sources, made if it is not there yet."""
-    px = _size(px)
     path, how = _resolve(key, stem, source)
+    return cached(path, how, px)
+
+
+def cached(path, how, px=320):
+    """The cached thumbnail of a file read as `how` (embedded | picture | develop), made if it is not there yet. Shared by the Browser and the project grid (`item_thumb`), so a thumbnail made in one is reused by the other."""
+    px = _size(px)
     st = os.stat(path)
     k = hashlib.sha1(
         json.dumps([os.path.normcase(os.path.abspath(path)), st.st_size, st.st_mtime_ns, how, px, VERSION]).encode()
@@ -358,6 +363,19 @@ def thumb(key, stem, source="embedded", px=320):
             f.write(data)
         os.replace(tmp, out)
     return out
+
+
+def item_thumb(pid, iid, px=320):
+    """The grid thumbnail of a project item, from the cache shared with the Browser: its primary variant, a raw read as its embedded preview (a develop only when it has none). The project's item list has already applied the nudity filter."""
+    item = P.get_item(pid, iid)
+    v = next((x for x in item["variants"] if x["id"] == item["primary"]), None)
+    if v is None:
+        raise BrowseError(f"item {iid!r} has no picture")
+    if v["kind"] == "raw":
+        how = "embedded" if images.is_camera_raw(v["path"]) else "develop"
+    else:
+        how = "develop" if images.is_camera_raw(v["path"]) or v["ext"] in (".tif", ".tiff") else "picture"
+    return cached(v["path"], how, px)
 
 
 # ---- adding to a project -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

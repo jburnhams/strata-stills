@@ -3,7 +3,7 @@
     ./stratastills serve [--host 127.0.0.1] [--port 8361]
 
 API (JSON): GET /api/report (is there a visual report) and GET /report/ (the report's own pages, from settings.report_dir()); GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
-GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=;
+GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/thumb?id=&item=&px= (the grid's thumbnail: the primary variant, a raw's embedded preview, cached with the Browser's); GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=;
 the Browser (browser.py): GET /api/browse/folders?folder= (sub-folders of a folder key `<root label>/<path>`, the roots without one), GET /api/browse/pictures?folder=, GET /api/browse/thumb?folder=&stem=&source=&px= (cached), POST /api/browse/add {project | name, group, folders, subfolders, pictures}.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 
@@ -512,6 +512,11 @@ def create_app():
     @app.get("/api/browse/thumb")
     def browse_thumb(folder: str, stem: str, source: str = "embedded", px: int = 320):
         path = bguard(browser.thumb, folder, stem, source, px)
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/api/project/thumb")
+    def project_thumb(id: str, item: str, px: int = 320):
+        path = bguard(browser.item_thumb, id, item, px)
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
     @app.post("/api/browse/add")
