@@ -3,7 +3,7 @@ import { cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { installLayoutShims } from 'strata-react/testing'
 import { toast } from 'strata-react'
-import { resetMock, server } from './server'
+import { resetBrowse, resetMock, server } from './server'
 import { images, installImages } from './images'
 
 // jsdom: relative `/api/...` URLs resolve against jsdom's origin, so msw sees them as they are. An endpoint without a handler fails the test.
@@ -11,5 +11,5 @@ import { images, installImages } from './images'
 installLayoutShims()
 installImages()
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))
-afterEach(() => { server.resetHandlers(); cleanup(); resetMock(); toast.clear(); images.release() })
+afterEach(() => { server.resetHandlers(); cleanup(); resetMock(); resetBrowse(); toast.clear(); images.release() })
 afterAll(() => server.close())

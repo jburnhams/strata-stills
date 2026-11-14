@@ -3,7 +3,8 @@
     ./stratastills serve [--host 127.0.0.1] [--port 8361]
 
 API (JSON): GET /api/report (is there a visual report) and GET /report/ (the report's own pages, from settings.report_dir()); GET /api/settings; PUT /api/settings {projects_dir}; GET /api/projects; POST /api/projects {name, sources?, group?};
-GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=.
+GET /api/project?id=; GET /api/project/sources?id=; GET /api/project/items?id=&source=; GET /api/project/item?id=&item=; PUT /api/project/primary?id=&item= {variant}; GET /api/project/image?id=&item=&variant=&transform=&px=; GET /api/project/crop?id=&item=&variant=&transform=&x=&y=&size=&zoom= (the loupe: the same scene area of any variant and transform at full resolution; 202 while the variant's full-size copy is being made); GET /api/project/fullres?id=&item=&variant= (starts making it and reports {state: ready|running|failed|idle, text}); GET /api/project/transform?id=&item=&variant=&transform=; GET /api/project/detail?id=&item=&variant=; GET /api/pipelines, PUT/DELETE /api/pipeline?name= (presets); POST /api/project/generate/check?id=&item= and POST /api/project/generate?id=&item= {variant, preset, options, stages} (a new generated variant; runs in the background), GET /api/project/generate?id=&item= (progress), GET /api/project/generated/file?id=&item=&variant=; GET/PUT /api/project/rules?id=, POST (optional &workers=: how many pictures at once, default by machine) /GET/DELETE /api/project/apply?id= (apply the rules to the sources); GET /api/project/shots?id=; POST /api/project/sources?id= {path}; DELETE /api/project/sources?id=&path=;
+the Browser (browser.py): GET /api/browse/folders?folder= (sub-folders of a folder key `<root label>/<path>`, the roots without one), GET /api/browse/pictures?folder=, GET /api/browse/thumb?folder=&stem=&source=&px= (cached), POST /api/browse/add {project | name, group, folders, subfolders, pictures}.
 Project ids contain slashes, so they are query parameters. The page at / is a plain single-file stand-in until the React app (web/) exists. Binds to 127.0.0.1 by default: the person using it can name any folder as a source (read-only)."""
 
 import hashlib
@@ -24,6 +25,7 @@ from stratastills import (
 )
 from stratastills import (
     arena_store,
+    browser,
     flags_store,
     ingest,
     nsfw,
@@ -119,6 +121,17 @@ class AlertStatusIn(BaseModel):
     resolved: bool | None = None  # older clients: True = fixed, False = open
     status: str | None = None  # open | investigating | fixed | wontfix
     note: str | None = None  # the reason, written afterwards
+
+
+class BrowseAddIn(BaseModel):
+    """What the Browser adds: to `project`, or to a new project called `name` (in `group`); whole `folders` (and every folder below that holds pictures when `subfolders`) and single `pictures` ({folder key: [stems]})."""
+
+    project: str | None = None
+    name: str | None = None
+    group: str | None = None
+    folders: list[str] = []
+    subfolders: bool = False
+    pictures: dict[str, list[str]] = {}
 
 
 class SettingsIn(BaseModel):
@@ -478,6 +491,32 @@ def create_app():
                 "no report here: build it with scripts/build_report.py (see the README), or set STRATASTILLS_REPORT to its folder",
             )
         return FileResponse(f, headers={"Cache-Control": "no-cache"})
+
+    # ---- the Browser: folders of the source roots, their pictures as cached thumbnails, adding them to a project (browser.py) --------------------------------------------------
+    def bguard(fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except (browser.BrowseError, P.ProjectError) as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+
+    @app.get("/api/browse/folders")
+    def browse_folders(folder: str | None = None):
+        return bguard(browser.folders, folder)
+
+    @app.get("/api/browse/pictures")
+    def browse_pictures(folder: str):
+        return bguard(browser.pictures, folder)
+
+    @app.get("/api/browse/thumb")
+    def browse_thumb(folder: str, stem: str, source: str = "embedded", px: int = 320):
+        path = bguard(browser.thumb, folder, stem, source, px)
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.post("/api/browse/add")
+    def browse_add(b: BrowseAddIn):
+        return bguard(browser.add, b.project, b.name, b.group, b.folders, b.subfolders, b.pictures)
 
     @app.get("/api/settings")
     def get_settings():

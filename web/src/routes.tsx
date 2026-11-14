@@ -9,6 +9,7 @@ import ItemPage from './components/ItemPage'
 import ArenaPage from './components/ArenaPage'
 import AlertsPage from './components/AlertsPage'
 import FlaggedPage from './components/FlaggedPage'
+import BrowserPage from './components/BrowserPage'
 
 /** Every screen, and the one place toasts appear (strata-react: once at the app root). */
 function Root() {
@@ -29,6 +30,7 @@ export const routes: RouteObject[] = [
           { path: 'p/:project/i/:item', element: <ItemPage /> },
           { path: 'alerts', element: <AlertsPage /> },
           { path: 'flagged', element: <FlaggedPage /> },
+          { path: 'browse', element: <BrowserPage /> },
         ],
       },
       // The arena is a screen of its own, outside the shell: the two pictures get the whole width.

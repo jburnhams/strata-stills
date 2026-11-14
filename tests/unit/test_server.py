@@ -263,3 +263,27 @@ def test_arena_alerts_hide_a_version_until_resolved_and_are_listed_with_metadata
         client.post("/api/arena/alert/clear", json=dict(token=p["token"], side="right")).json()["cleared"] == 1
         and client.get("/api/arena/next").status_code == 200
     )  # pressed again: undone, the version is offered again
+
+
+def test_browser_endpoints(client, tmp_path, monkeypatch):
+    from PIL import Image
+
+    day = tmp_path / "raw" / "2019-03-02"
+    day.mkdir(parents=True)
+    Image.new("RGB", (400, 300), (10, 200, 10)).save(day / "IMG_0001.JPG")
+    Image.new("RGB", (400, 300), (10, 20, 200)).save(day / "IMG_0002.JPG")
+    monkeypatch.setenv("STRATASTILLS_SOURCES", str(tmp_path / "raw"))
+    monkeypatch.setenv("STRATASTILLS_THUMBS", str(tmp_path / "thumbs"))
+    assert client.get("/api/browse/folders").json()[0]["key"] == "raw"
+    assert client.get("/api/browse/folders", params=dict(folder="raw")).json()[0]["pictures"] == 2
+    assert client.get("/api/browse/folders", params=dict(folder="raw/..")).status_code == 400
+    pics = client.get("/api/browse/pictures", params=dict(folder="raw/2019-03-02")).json()["pictures"]
+    assert [p["stem"] for p in pics] == ["IMG_0001", "IMG_0002"]
+    r = client.get("/api/browse/thumb", params=dict(folder="raw/2019-03-02", stem="IMG_0001", source="jpeg", px=160))
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert client.get("/api/browse/thumb", params=dict(folder="raw/2019-03-02", stem="x")).status_code == 400
+    r = client.post("/api/browse/add", json=dict(name="Picks", pictures={"raw/2019-03-02": ["IMG_0002"]})).json()
+    assert r == dict(project="picks", sources=0, pictures=1, unchanged=0)
+    src = client.get("/api/project/sources", params=dict(id="picks")).json()[0]
+    assert src["stills"] == 1 and src["picked"] == 1
+    assert client.post("/api/browse/add", json=dict(folders=["raw/2019-03-02"])).status_code == 400

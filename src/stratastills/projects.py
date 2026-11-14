@@ -1,7 +1,7 @@
 """Projects. A project is a folder inside the projects directory (settings.projects_dir) holding `project.json`, the analysis and the output. It is separate from the photos:
 a project has any number of SOURCE FOLDERS (a shoot on a drone card, a phone dump, a folder on the NAS ...), added and removed at any time. Source folders are only ever read.
 
-  <projects_dir>/<id>/project.json   {schema, id, name, created, sources: [{path, added}]}
+  <projects_dir>/<id>/project.json   {schema, id, name, created, sources: [{path, added, rel?, stems?}]}  (`stems`: the source holds only those pictures)
   <projects_dir>/<id>/...            everything the pipeline makes for the project
 
 Projects may be grouped in plain sub-folders of the projects directory (`<projects_dir>/2025/hazelmere/`): `list_projects` looks `MAX_DEPTH` levels down. A project's id is its path relative to the projects directory, with forward slashes."""
@@ -138,8 +138,8 @@ def resolve(source):
     return source["path"]
 
 
-def add_source(pid, path, root=None):
-    """Add a source folder (it must exist and not already be one of the project's). Paths are stored absolute; UNC paths (\\\\Server\\share) are kept as they are."""
+def add_source(pid, path, root=None, stems=None):
+    """Add a source folder (it must exist and not already be one of the project's), whole or, with `stems`, for those pictures only. Paths are stored absolute; UNC paths (\\\\Server\\share) are kept as they are."""
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isdir(path):
         raise ProjectError(f"not a folder: {path}")
@@ -150,8 +150,40 @@ def add_source(pid, path, root=None):
     src = dict(path=path, added=dt.datetime.now().astimezone().isoformat(timespec="seconds"))
     if rel:
         src["rel"] = rel
+    if stems is not None:
+        src["stems"] = sorted(set(stems))
     doc["sources"].append(src)
     return _save(doc, root)
+
+
+def include(pid, path, stems=None, root=None):
+    """Make `path` a source of the project, whole (`stems` None) or for those pictures only (a source's `stems`: the stems of the items it holds; absent = every picture in the folder). Idempotent: returns how much was added (1 for a folder made whole or newly added whole, the number of new stems otherwise; 0 when it was all there)."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isdir(path):
+        raise ProjectError(f"not a folder: {path}")
+    doc = load(pid, root)
+    s = next((x for x in doc["sources"] if os.path.normcase(x["path"]) == os.path.normcase(path)), None)
+    if s is None:
+        add_source(pid, path, root, stems)
+        return 1 if stems is None else len(set(stems))
+    have = s.get("stems")
+    if have is None:
+        return 0  # the whole folder is in already
+    if stems is None:
+        s.pop("stems")
+        _save(doc, root)
+        return 1
+    new = set(stems) - set(have)
+    if new:
+        s["stems"] = sorted(set(have) | new)
+        _save(doc, root)
+    return len(new)
+
+
+def _held(source, shots):
+    """The shots of a source that it holds: all of them, or those named in its `stems`."""
+    only = source.get("stems")
+    return shots if only is None else [sh for sh in shots if sh.stem in set(only)]
 
 
 def remove_source(pid, path, root=None):
@@ -170,7 +202,7 @@ def shots(pid, root=None, recursive=False):
     out = []
     for s in load(pid, root)["sources"]:
         try:
-            out += [(s["path"], sh) for sh in ingest.scan(resolve(s), recursive=recursive)]
+            out += [(s["path"], sh) for sh in _held(s, ingest.scan(resolve(s), recursive=recursive))]
         except OSError:
             out.append((s["path"], None))
     return out
@@ -263,10 +295,17 @@ def source_summaries(pid, root=None):
     out = []
     for s in load(pid, root)["sources"]:
         d = dict(
-            id=source_id(s["path"]), path=resolve(s), added=s.get("added"), reachable=True, stills=0, panos=0, videos=0
+            id=source_id(s["path"]),
+            path=resolve(s),
+            added=s.get("added"),
+            reachable=True,
+            stills=0,
+            panos=0,
+            videos=0,
+            picked=None if s.get("stems") is None else len(s["stems"]),
         )
         try:
-            for sh in ingest.scan(resolve(s)):
+            for sh in _held(s, ingest.scan(resolve(s))):
                 k = sh.kind
                 d["stills" if k == "still" else "panos" if k == "pano" else "videos"] += 1
         except OSError:
@@ -280,7 +319,7 @@ def source_items(pid, sid, root=None):
     s = _source(pid, sid, root)
     st = load_state(pid, root)
     out = []
-    for sh in ingest.scan(resolve(s)):
+    for sh in _held(s, ingest.scan(resolve(s))):
         iid = item_id(sid, sh.stem)
         vs = sh.variants() + generated_variants(pid, iid, root)
         prim = st.get(iid, {}).get("primary")

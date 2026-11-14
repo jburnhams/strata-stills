@@ -130,6 +130,73 @@ def load(path, px=2048):
         raise ImageError(f"cannot read {os.path.basename(path)}: {e}")
 
 
+def _one(v):
+    """A TIFF tag value that may come as a 1-tuple."""
+    return int(v[0] if isinstance(v, (tuple, list)) else v)
+
+
+def embedded_preview(path):
+    """(JPEG bytes, EXIF orientation) of the largest preview a TIFF-based raw (ARW, DNG, NEF, CR2 ...) carries, read by its offset; None when it has none. CR3/RAF are not TIFF: LibRaw's thumbnail then (it reads more of the file)."""
+    import tifffile
+
+    best, orient = None, 1
+    try:
+        with tifffile.TiffFile(path) as t:
+            pages = []
+            for pg in t.pages:
+                pages.append(pg)
+                pages += list(getattr(pg, "pages", None) or [])
+            o = t.pages[0].tags.get(274) if t.pages else None
+            orient = int(o.value) if o is not None else 1
+            for pg in pages:
+                tags = pg.tags
+                cand = []
+                if 513 in tags and 514 in tags:  # JPEGInterchangeFormat(Length): Sony's PreviewImage, a DNG's thumbnail
+                    cand.append((_one(tags[513].value), _one(tags[514].value)))
+                if pg.compression in (6, 7) and len(pg.dataoffsets) == 1 and pg.photometric not in (32803, 34892):
+                    cand.append(
+                        (int(pg.dataoffsets[0]), int(pg.databytecounts[0]))
+                    )  # a JPEG strip that is not the raw data
+                for off, n in cand:
+                    if n > 0 and (best is None or n > best[1]):
+                        best = (off, n)
+            if best is None:
+                raise ValueError("no preview")
+            fh = t.filehandle
+            fh.seek(best[0])
+            data = fh.read(best[1])
+    except Exception:
+        data = None
+    if data is None or data[:2] != b"\xff\xd8":
+        try:
+            import rawpy
+
+            with rawpy.imread(path) as r:
+                t, flip = r.extract_thumb(), r.sizes.flip
+            if t.format != rawpy.ThumbFormat.JPEG:
+                return None
+            return bytes(t.data), {3: 3, 5: 8, 6: 6}.get(flip, 1)  # LibRaw's flip as an EXIF orientation
+        except Exception:
+            return None
+    return data, orient
+
+
+_TURN = {3: cv2.ROTATE_180, 6: cv2.ROTATE_90_CLOCKWISE, 8: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def preview_bgr(path, px=2048):
+    """The embedded preview of a raw as BGR (turned upright, long side <= px), or None: a quick look at a raw (the nudity filter's probe) without developing it."""
+    got = embedded_preview(path)
+    if got is None:
+        return None
+    im = cv2.imdecode(np.frombuffer(got[0], np.uint8), cv2.IMREAD_COLOR)
+    if im is None or im.shape[0] * im.shape[1] < 19200:  # a 160x120 thumbnail is too coarse to judge
+        return None
+    if got[1] in _TURN:
+        im = cv2.rotate(im, _TURN[got[1]])
+    return _fit(im, px)
+
+
 def cache_key(path, *parts):
     st = os.stat(path)
     return hashlib.sha1(

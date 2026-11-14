@@ -8,7 +8,7 @@ import { api, type SourceSummary } from '../api'
 import { href, useIds } from '../route'
 
 /** What a reachable folder holds, in words. */
-export const holds = (s: SourceSummary) => [`${s.stills} stills`, s.panos ? `${s.panos} panoramas` : '', s.videos ? `${s.videos} videos` : ''].filter(Boolean).join(', ')
+export const holds = (s: SourceSummary) => [s.picked != null ? 'Chosen pictures only' : '', `${s.stills} stills`, s.panos ? `${s.panos} panoramas` : '', s.videos ? `${s.videos} videos` : ''].filter(Boolean).join(', ')
 
 export default function ProjectPage() {
   const { project } = useIds()

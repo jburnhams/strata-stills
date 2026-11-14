@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import type { ArenaAlert, FlaggedPicture, GenerateBody, GenerateRecord, Item, Preset, Project, Rule, SourceSummary, Stage } from '../../src/api'
+import type { ArenaAlert, BrowseAdd, BrowsePicture, FlaggedPicture, GenerateBody, GenerateRecord, Item, Preset, Project, Rule, SourceSummary, Stage } from '../../src/api'
 
 export const project: Project = { id: 'demo', name: 'Demo', created: null, n_sources: 1, sources: [{ path: 'C:\\shoot' }] }
 export const sources: SourceSummary[] = [{ id: 'abcd1234', path: 'C:\\shoot', reachable: true, stills: 2, panos: 1, videos: 1 }]
@@ -93,4 +93,22 @@ handlers.push(
   http.post('/api/flagged/scan', async ({ request }) => { const b = await request.json() as { folder: string }; mock.scans.push(b.folder); return b.folder === 'bad' ? HttpResponse.json({ detail: 'not a folder: bad' }, { status: 400 }) : HttpResponse.json({ kept: 12, flagged: 2 }) }),
 )
 
+/** The Browser's folders and pictures, and what was added (reset after each test). */
+const browsePics: BrowsePicture[] = [
+  { stem: 'DSC00001', kind: 'still', files: ['DSC00001.ARW', 'DSC00001.JPG'], taken: '2019-03-02T10:00:00Z', bytes: 1, projects: ['trip'], sources: [{ id: 'lightroom', label: 'Lightroom export' }, { id: 'embedded', label: 'Camera preview' }] },
+  { stem: 'DSC00002', kind: 'still', files: ['DSC00002.ARW'], taken: '2019-03-02T10:01:00Z', bytes: 1, projects: [], sources: [{ id: 'embedded', label: 'Camera preview' }] },
+]
+export const browse = { added: [] as BrowseAdd[] }
+export const resetBrowse = () => { browse.added = [] }
+handlers.push(
+  http.get('/api/browse/folders', ({ request }) => {
+    const f = new URL(request.url).searchParams.get('folder')
+    return HttpResponse.json(!f ? [{ key: 'raw', name: 'raw', folders: 1, pictures: 0 }] : f === 'raw' ? [{ key: 'raw/2019-03-02', name: '2019-03-02', folders: 0, pictures: 2 }] : [])
+  }),
+  http.get('/api/browse/pictures', () => HttpResponse.json({ pictures: browsePics, checking: 0 })),
+  http.get('/api/browse/thumb', () => new HttpResponse(null, { status: 404 })),
+  http.post('/api/browse/add', async ({ request }) => { const b = await request.json() as BrowseAdd; browse.added.push(b); return HttpResponse.json({ project: b.project ?? 'picks', sources: b.folders?.length ?? 0, pictures: 1, unchanged: 0 }) }),
+)
+
 export const server = setupServer(...handlers)
+

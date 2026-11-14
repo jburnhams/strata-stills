@@ -86,8 +86,8 @@ def split_name(filename):
     return (m.group("stem"), m.group("tag"), ext.lower()) if m else (base, "", ext.lower())
 
 
-def scan(folder, recursive=False):
-    """The items in `folder` (paths are absolute). Files that are neither stills, raws, videos nor their sidecars are skipped."""
+def scan(folder, recursive=False, filter=True):
+    """The items in `folder` (paths are absolute). Files that are neither stills, raws, videos nor their sidecars are skipped. `filter=False` leaves the nudity filter to the caller, who must apply it before anything is shown (the Browser checks in the background: browser.py)."""
     shots = {}
     derived = []
     walk = os.walk(folder) if recursive else [(folder, [], os.listdir(folder))]
@@ -126,6 +126,8 @@ def scan(folder, recursive=False):
             shots[key].derived.append((tag, path))
         else:
             shots[key] = Shot(stem=stem, derived=[(tag, path)])
+    if not filter:
+        return [shots[k] for k in sorted(shots)]
     from stratastills import nsfw
 
     return nsfw.keep_shots(
