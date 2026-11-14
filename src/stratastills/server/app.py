@@ -27,6 +27,7 @@ from stratastills import (
     arena_store,
     browser,
     flags_store,
+    gpu,
     ingest,
     nsfw,
     preview,
@@ -667,6 +668,10 @@ def create_app():
                 job["state"] = "done"
             except Exception as e:
                 job.update(state="failed", error=str(e))
+                if gpu.exit_if_cuda_broken(e):
+                    job.update(
+                        error=f"{e} (the GPU hit an error it cannot recover from: the app restarts itself; try again in a minute)"
+                    )
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -716,6 +721,10 @@ def create_app():
                 )
             except Exception as e:
                 job.update(state="failed", text=str(e))
+                if gpu.exit_if_cuda_broken(e):
+                    job.update(
+                        text=f"{e} (the GPU hit an error it cannot recover from: the app restarts itself; start again in a minute)"
+                    )
 
         threading.Thread(target=run, daemon=True).start()
         return job

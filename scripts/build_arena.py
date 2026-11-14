@@ -334,6 +334,12 @@ def main():
             f"  {kind} FAILED ({type(e).__name__}: {e}): "
             + (", ".join(sid for _, sid, _ in what) if kind == "chunk" else what[0][1])
         )
+        if type(e).__name__ == "AcceleratorError" or "device-side assert" in str(e):
+            say(
+                "  the CUDA context is broken (every later picture of this run would fail): stopping; what was made is saved, scripts/arena_passes.py starts a fresh run"
+            )
+            sys.stdout.flush()
+            os._exit(1)  # a sticky CUDA error cannot be cleared in the process
 
     try:
         st = AS.run(chunks, produce, make, gpu_workers=gw, cpu_workers=cw, serial=a.serial, on_error=failed)

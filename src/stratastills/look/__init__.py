@@ -363,14 +363,16 @@ def predictions(x, fl, b=None):
     )
 
 
-def apply_params(bgr, p):
+def apply_params(bgr, p, gpu=None):
     """The transform (look/transform.py) with parameters `p` applied to a picture (scripts/lr_tmodel.py apply_params): on the GPU when the picture fits."""
     import cv2
     import torch
 
     from stratastills.look import transform as T
 
-    dev = "cuda" if torch.cuda.is_available() and bgr.shape[0] * bgr.shape[1] < 4_000_000 else "cpu"
+    dev = (
+        "cuda" if gpu is not False and torch.cuda.is_available() and bgr.shape[0] * bgr.shape[1] < 4_000_000 else "cpu"
+    )
     with torch.no_grad():
         out = (
             T.transform(T.to_lab(bgr[None]).to(dev), torch.from_numpy(np.asarray(p, np.float32))[None].to(dev))[0]
@@ -391,26 +393,26 @@ def neutral_params(neu, x, b=None):
 _render_lock = threading.Lock()  # one picture at a time through the look: the arena makes versions in several threads, and two at once on the card ended in a device-side assert that broke every later picture of the run (2026-11-14)
 
 
-def render(variant, neu, x, fl, b=None, preds=None):
-    """One version of a picture: `neu` our neutral picture (uint8 BGR), `x` its features, `fl` its faces (look.faces: boxes as fractions of `neu`'s frame). -> (picture, what was done)."""
+def render(variant, neu, x, fl, b=None, preds=None, gpu=None):
+    """One version of a picture: `neu` our neutral picture (uint8 BGR), `x` its features, `fl` its faces (look.faces: boxes as fractions of `neu`'s frame). -> (picture, what was done). `gpu` False keeps the per-pixel work on the CPU (the arena, whose develop workers have the card)."""
     with _render_lock:
-        return _render(variant, neu, x, fl, b, preds)
+        return _render(variant, neu, x, fl, b, preds, gpu)
 
 
-def _render(variant, neu, x, fl, b=None, preds=None):
+def _render(variant, neu, x, fl, b=None, preds=None, gpu=None):
     b = b or bundle()
     if variant not in VARIANTS:
         raise ValueError(f"unknown look {variant!r}")
     p = preds or predictions(x, fl, b)
     cam = dict(zip(b.names, x))
     if variant == "auto1":
-        return A.apply_look(neu, p["pred"], cam)
+        return A.apply_look(neu, p["pred"], cam, gpu=gpu)
     if variant == "auto2":
-        return A.apply_look(neu, p["pred"], cam, colour=p["colour"])
+        return A.apply_look(neu, p["pred"], cam, colour=p["colour"], gpu=gpu)
     if variant == "auto3":
-        return A.apply_look(neu, p["pred"], cam, colour=p["colour"], face=p["face"])
+        return A.apply_look(neu, p["pred"], cam, colour=p["colour"], face=p["face"], gpu=gpu)
     if variant in ("auto4", "auto6"):
-        out = apply_params(neu, neutral_params(neu, x, b))
+        out = apply_params(neu, neutral_params(neu, x, b), gpu)
         did = dict(transform="network")
         if out.std() < 0.3 * neu.std():
             out, did = (
@@ -418,7 +420,7 @@ def _render(variant, neu, x, fl, b=None, preds=None):
                 dict(transform="typical (the network's would flatten this picture)"),
             )
     else:  # auto5, auto7
-        out, did = A.apply_look(neu, p["pred"], cam, colour=neutral_params(neu, x, b), face=p["face"])
+        out, did = A.apply_look(neu, p["pred"], cam, colour=neutral_params(neu, x, b), face=p["face"], gpu=gpu)
     if variant in ("auto6", "auto7"):
         main = FF.main_face(fl)
         if main is not None and main.get("lm"):

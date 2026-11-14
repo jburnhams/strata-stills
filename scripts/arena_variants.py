@@ -49,7 +49,11 @@ def _look(name):
     """An auto version is the pipeline's look stage (stratastills.look.render) on our neutral picture: the arena judges exactly the code a project runs."""
 
     def f(c):
-        return look.render(name, c.neu, c.x, c.fl, c.bundle, c.preds)[0]
+        return look.render(
+            name, c.neu, c.x, c.fl, c.bundle, c.preds, gpu=False
+        )[
+            0
+        ]  # on the CPU: the build's develop workers have the card, and a look running beside them there came out as static or ended in a device-side assert that broke the rest of the run (2026-11-14); at the arena's 1400 px the CPU takes a second or two
 
     f.__name__ = name
     f.__doc__ = f"stratastills.look {name}"
