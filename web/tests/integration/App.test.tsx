@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { waitFor, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { open } from '../utils/render'
@@ -9,9 +9,7 @@ describe('the app', () => {
   it('goes from the project list to a folder to a picture', async () => {
     const { router } = open('/')
     await userEvent.click(await screen.findByRole('link', { name: 'Demo' }))
-    expect(router.state.location.pathname).toBe('/p/demo')
-    await userEvent.click(await screen.findByRole('link', { name: 'C:\\shoot' }))
-    expect(router.state.location.pathname).toBe('/p/demo/s/abcd1234')
+    await waitFor(() => expect(router.state.location.pathname).toBe('/p/demo/s/abcd1234'))  // one folder: straight into it
     await userEvent.click(await screen.findByRole('link', { name: /A_1/ }))
     expect(router.state.location.pathname).toBe('/p/demo/i/abcd1234~A_1')
     expect(await screen.findByRole('heading', { name: 'A_1', level: 1 })).toBeInTheDocument()

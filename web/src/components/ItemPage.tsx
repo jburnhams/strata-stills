@@ -82,7 +82,7 @@ export default function ItemPage() {
 
   return (
     <section className="grid gap-6">
-      <Breadcrumb items={[{ label: 'Projects', to: href.projects() }, { label: name, to: href.project(project) }, { label: 'Contents', to: href.source(project, source) }, { label: data?.stem ?? item }]} />
+      <Breadcrumb items={[{ label: 'Projects', to: href.projects() }, { label: name, to: href.folders(project) }, { label: 'Contents', to: href.source(project, source) }, { label: data?.stem ?? item }]} />
       <DataView state={it} isEmpty={() => false} skeleton={<Skeleton className="h-96" />} empty={null}>
         {d => (
           <div className="grid gap-6">

@@ -34,8 +34,8 @@ export default function SourcePage() {
 
   return (
     <section className="grid gap-6">
-      <Breadcrumb items={[{ label: 'Projects', to: href.projects() }, { label: name, to: href.project(project) }, { label: path ?? 'Contents' }]} />
-      <PageHeader title="Contents" scope={path ? <span className="font-mono break-all">{path}</span> : undefined} />
+      <Breadcrumb items={[{ label: 'Projects', to: href.projects() }, { label: name, to: href.folders(project) }, { label: path ?? 'Contents' }]} />
+      <PageHeader title="Contents" scope={path ? <span className="font-mono break-all">{path}</span> : undefined} actions={<Link to={href.folders(project)} className="type-body-sm">All folders of {name}</Link>} />
       <AutoGenerate project={project} source={source} />
       {nVideo > 0 && <Switch label={`Show ${format.count(nVideo, 'video')}`} detail="Videos are not processed yet." on={videos} onChange={setVideos} />}
       <DataView
