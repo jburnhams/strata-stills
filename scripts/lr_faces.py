@@ -12,30 +12,16 @@ import sys
 import tempfile
 
 import cv2
-import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 import lr_dataset as D
+
+from stratastills.look.features import face_stats as stats
 
 MIN_SCORE = 0.6  # as bright-horizons: lower is mostly toys, hair and the backs of heads
 MIN_SIZE = 24
 PREVIEW_LONG = 960
 BATCH = 100
-
-
-def stats(img, box):
-    """Median CIELAB (L 0-100, a, b) of the inner half of `box` (x, y, w, h in pixels) of a BGR image."""
-    x, y, w, h = box
-    x0, x1, y0, y1 = int(x + w / 4), int(x + 3 * w / 4), int(y + h / 4), int(y + 3 * h / 4)
-    p = img[max(0, y0) : y1, max(0, x0) : x1]
-    if p.size == 0:
-        return None
-    lab = cv2.cvtColor(p, cv2.COLOR_BGR2LAB).astype(np.float32).reshape(-1, 3)
-    return [
-        float(np.median(lab[:, 0]) * 100 / 255),
-        float(np.median(lab[:, 1]) - 128),
-        float(np.median(lab[:, 2]) - 128),
-    ]
 
 
 def main():

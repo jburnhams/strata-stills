@@ -88,6 +88,11 @@ export default function GeneratePanel({ project, item, variant, onGenerated, onS
                 </NativeSelect>
               </Field>
             )}
+            <Field label="Look">
+              <NativeSelect value={String(stageValue(st, 'look', 'variant') ?? 'none')} onChange={e => set({ look: e.target.value })}>
+                <option value="auto7">Your look (auto7: auto5 with the face step)</option><option value="auto5">auto5 (the arena's best so far)</option><option value="auto6">auto6</option><option value="auto4">auto4</option><option value="auto3">auto3</option><option value="auto2">auto2</option><option value="auto1">auto1</option><option value="none">None (our neutral develop)</option>
+              </NativeSelect>
+            </Field>
             <Field label="Exposure">
               <NativeSelect value={String(stageValue(st, 'develop', 'exposure') ?? 'auto')} onChange={e => { const v = e.target.value; set({ exposure: v === 'auto' || v === 'camera' || v === 'match' ? v : Number(v) }) }}>
                 <option value="auto">Auto (an even lightness)</option><option value="match">Match the camera's JPEG (each picture)</option><option value="camera">Camera's own (fixed curve)</option><option value="-1">Camera −1 EV</option><option value="1">Camera +1 EV</option>

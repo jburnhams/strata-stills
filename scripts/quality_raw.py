@@ -158,7 +158,7 @@ def measure(pid, item, path):
     PL.generate(
         pid,
         item["id"],
-        preset="best",
+        preset="neutral",
         options=dict(quality=95, size="3000"),
         progress=lambda m: None,
         on_stage=on_stage,

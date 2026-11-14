@@ -158,12 +158,12 @@ def _develop_alone(raw, work):
     pid = P.create("lr-retry-%d" % time.time_ns(), [src])["id"]
     it = P.source_items(pid, P.source_id(P.load(pid)["sources"][0]["path"]))[0]
     return PL.generate(
-        pid, it["id"], preset="best", options=dict(quality=95, level=False, size="native"), progress=lambda m: None
+        pid, it["id"], preset="neutral", options=dict(quality=95, level=False, size="native"), progress=lambda m: None
     )
 
 
 def neutral(raws, work, say, rebuild=False, retry_now=True):
-    """Our pipeline's 'best' preset, without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
+    """Our pipeline's 'neutral' preset ('best' without the look), without the levelling (the final's crop decides the angle), on each raw: {raw: (BGR picture, record)}. The raws are linked into one folder for a temporary project; the originals are only read. A raw whose neutral picture was made before by the same code (BR.code_hash) is read from out/cache/ instead: only the look model changes between runs, the neutral picture rarely does."""
     cdir = os.path.join(BR.ROOT, "out", "cache", "report-auto-neutral")
     os.makedirs(cdir, exist_ok=True)
     out = {}
@@ -204,7 +204,7 @@ def neutral(raws, work, say, rebuild=False, retry_now=True):
             rec = PL.generate(
                 pid,
                 it["id"],
-                preset="best",
+                preset="neutral",
                 options=dict(quality=95, level=False, size="native"),
                 progress=lambda m: None,
             )

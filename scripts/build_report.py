@@ -280,7 +280,12 @@ def run_ours(folder, items_wanted, quality, workdir, say):
 
         try:
             r = PL.generate(
-                pid, it["id"], preset="best", options=dict(quality=quality), progress=lambda m: None, on_stage=on_stage
+                pid,
+                it["id"],
+                preset="neutral",
+                options=dict(quality=quality),
+                progress=lambda m: None,
+                on_stage=on_stage,
             )
         except Exception as e:  # one picture that fails does not stop the report
             say(f"  {stem}: FAILED ({type(e).__name__}: {e})")
@@ -358,15 +363,36 @@ def write_landing(root):
 CACHE_VERSION = 1  # bump when the code of this script that makes the pictures or numbers of a photo changes (the pipeline's own code is hashed, this script's page layout is not part of it)
 
 
+NOT_PIXELS = (
+    "server",
+    "__pycache__",
+    "db",
+    "look",
+    "settings.py",
+    "cli.py",
+    "browser.py",
+    "projects.py",
+    "projects_store.py",
+    "arena.py",
+    "arena_store.py",
+    "arena_revision.py",
+    "flags_store.py",
+    "meta_store.py",
+    "nsfw.py",
+    "nsfw_store.py",
+    "presets_store.py",
+)  # code that does not make our neutral picture (the app around it, the stores, the look applied after it): a change there must not make every neutral picture again (2026-11-14: the Browser's files did)
+
+
 @functools.cache
 def code_hash():
-    """A hash of the code and data the pictures of ours depend on (src/stratastills without the server, settings.py and cli.py, with its profiles, and the detail metrics): any change there makes every photo again."""
+    """A hash of the code and data the pictures of ours depend on (src/stratastills without NOT_PIXELS, with its profiles, and the detail metrics): any change there makes every photo again."""
     h = hashlib.sha1()
     base = os.path.join(ROOT, "src", "stratastills")
     for dp, dn, fn in sorted(os.walk(base)):
-        dn[:] = sorted(d for d in dn if d not in ("server", "__pycache__"))
+        dn[:] = sorted(d for d in dn if d not in NOT_PIXELS)
         for f in sorted(fn):
-            if f.endswith((".py", ".json")) and f not in ("settings.py", "cli.py"):
+            if f.endswith((".py", ".json")) and f not in NOT_PIXELS:
                 h.update(f.encode())
                 h.update(open(os.path.join(dp, f), "rb").read())
     h.update(open(os.path.join(os.path.dirname(__file__), "compare_detail.py"), "rb").read())

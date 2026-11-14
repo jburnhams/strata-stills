@@ -23,13 +23,10 @@ import arena_sched as AS
 import arena_variants as AV
 import build_lr_report as LRR
 import lr_dataset as D
-import lr_face_first as FF
-import lr_ftarget as FT
 import lr_look as LK
-import lr_tmodel as TM
 
 from stratastills import arena_revision as AREV
-from stratastills import images, settings
+from stratastills import images, look, settings
 
 DISPLAY = 1400
 JPEG_Q = 88
@@ -38,11 +35,11 @@ DEPS = {
     "camera": [],
     "neutral": [],
 }  # the files a version depends on besides its own function: the learned looks depend on the models' code
-LOOK = ["lr_look.py", "lr_tmodel.py", "lr_ftarget.py", "lr_fit.py"]
+LOOK_SRC = os.path.join(os.path.dirname(__file__), "..", "src", "stratastills", "look")
 
 
 def code_key(name):
-    """A version is made again when its own function, the brightness helper or (for the automatic ones) the look code changed, not when another version did."""
+    """A version is made again when its own function, the brightness helper or (for the automatic ones) the look's code or its frozen models (the bundle) changed, not when another version did."""
     import inspect
 
     h = hashlib.sha1(name.encode())
@@ -54,22 +51,22 @@ def code_key(name):
     )  # the framing code itself, so a fix to it (the square-crop turn) reaches pictures already in the pool
     if name in ("camera", "neutral"):
         h.update(inspect.getsource(AV.match_brightness).encode())
-    if name in ("camera", "neutral") or name.startswith("auto"):
-        h.update(inspect.getsource(AV.auto1).encode())
-    for f in DEPS.get(name, LOOK):
-        h.update(open(os.path.join(os.path.dirname(__file__), f), "rb").read())
-    if name == "auto6":  # face first: its code, the skin-target models and the faces it reads
-        import lr_face_first as FF
-
-        h.update(inspect.getsource(AV.auto4).encode())  # it starts from auto4's picture
-        for f in (os.path.join(os.path.dirname(__file__), "lr_face_first.py"), FF.MODEL_FILE, FF.FACES_FILE):
-            h.update(open(f, "rb").read() if os.path.exists(f) else b"missing")
-    if name in ("auto4", "auto5", "auto6"):  # the neutral-trained network: its code and its saved weights
-        import lr_neutral_model as NM
-
-        h.update(open(os.path.join(os.path.dirname(__file__), "lr_neutral_model.py"), "rb").read())
-        h.update(open(NM.NET_FILE, "rb").read() if os.path.exists(NM.NET_FILE) else b"no net")
+    if name in ("camera", "neutral") or name.startswith("auto"):  # neutral and camera are matched to auto1's lightness
+        for f in sorted(os.listdir(LOOK_SRC)):
+            if f.endswith(".py"):
+                h.update(open(os.path.join(LOOK_SRC, f), "rb").read())
+        h.update(look.version().encode())
     return h.hexdigest()[:12]
+
+
+def arena_inputs(raw, row, orientation, b):
+    """What the look sees of an arena picture, made the way a project makes it (stratastills.look) but from the camera's preview cut as the final was (the frame the models were trained on and the arena shows): (features, faces with boxes and landmarks as fractions of the final's frame)."""
+    got = images.embedded_preview(raw)
+    pv = cv2.imdecode(np.frombuffer(got[0], np.uint8), cv2.IMREAD_COLOR) if got else D.camera_picture(raw)
+    pv = D.orient(D.lr_crop(pv, row), orientation)
+    ex, meta = look.exif(raw)
+    emb = look.clip_embedding(pv)
+    return look.feature_row(pv, ex, meta, emb, b), look.faces(pv), emb is not None
 
 
 def smear_rect(img, frac=0.3, floor=0.35, max_frac=0.08, margin=6):
@@ -183,10 +180,7 @@ def main():
     pool = json.load(open(pf)) if os.path.exists(pf) else {}
     rows, X, names, Y, idx, G = LK.load()
     test = np.array([LK.test_shoot(g) for g in G])
-    FACES = (
-        json.load(open(os.path.join(D.OUT, "faces.json"))) if os.path.exists(os.path.join(D.OUT, "faces.json")) else {}
-    )
-    models, tmodels, fmodels = LK.train_cached(X[~test], Y[~test]), TM.train_cached(), FT.train_cached()
+    bundle = look.bundle()  # the frozen models a project's look stage uses (scripts/export_look_bundle.py)
     keys = {n: code_key(n) for n in AV.VARIANTS}
     todo = []
     valid = {sid for _, sid in order(rows, idx, G, test, a.seed)}
@@ -222,14 +216,6 @@ def main():
     lock = threading.Lock()
     predict_lock = threading.Lock()  # the pool dict and its file, and xgboost's predict, one thread at a time
 
-    def predictions(i, fl):
-        with predict_lock:
-            return dict(
-                pred=LK.predict(models, X[i : i + 1])[0],
-                colour=TM.predict(tmodels, X[i : i + 1])[0],
-                face=dict(box=fl[0]["box"], target=FT.face_target(fmodels, X[i], fl[0])) if fl else None,
-            )
-
     def produce(chunk):
         """The neutral develop of a chunk of pictures (GPU-heavy): [(item, developed pictures, exif)], one per picture."""
         raws = [rows[idx[i]]["raw"] for i, _, _ in chunk]
@@ -261,7 +247,7 @@ def main():
             fin,
             with_rect=True,
         )
-        fl = FACES.get(str(int(idx[i])), [])
+        x, fl, _clip = arena_inputs(raw, row, ex.get(raw, {}).get("Orientation", 1), bundle)
         camera = D.camera_picture(raw)
         cam, _, r2 = (
             LRR.to_final(camera, row, ex.get(raw, {}).get("Orientation", 1), fin, with_rect=True)
@@ -276,33 +262,23 @@ def main():
         sx0, sy0, sx1, sy1 = smear_rect(neu)
         x0, y0, x1, y1 = max(x0, sx0), max(y0, sy0), min(x1, sx1), min(y1, sy1)
         H, W = fin.shape[:2]
+        sx, sy, ox, oy = W / (x1 - x0), H / (y1 - y0), x0 / W, y0 / H
         fl = [
             dict(
                 f,
-                box=[
-                    (f["box"][0] * W - x0) / (x1 - x0),
-                    (f["box"][1] * H - y0) / (y1 - y0),
-                    f["box"][2] * W / (x1 - x0),
-                    f["box"][3] * H / (y1 - y0),
-                ],
+                box=[(f["box"][0] - ox) * sx, (f["box"][1] - oy) * sy, f["box"][2] * sx, f["box"][3] * sy],
+                lm=[[(p[0] - ox) * sx, (p[1] - oy) * sy] for p in f["lm"]],
             )
             for f in fl
-        ]
+        ]  # boxes and landmarks (fractions of the final's frame) into the cut below
         fin, neu, cam = (
             fin[y0:y1, x0:x1],
             neu[y0:y1, x0:x1],
             cam[y0:y1, x0:x1],
         )  # every version on the part where all of them have real pixels: the moved pictures smear their last row and column outside it, and our own develop repeats its edge pixels where the lens correction pulls from outside the frame (streaks on the edges, smear_rect); the person's final is cut the same way so that nothing shows the difference
-        f2 = FF.main_face(idx[i])
-        if f2 is not None:  # on the same cut as the versions: box and landmarks into its frame
-            sx, sy = W / (x1 - x0), H / (y1 - y0)
-            ox, oy = x0 / W, y0 / H
-            f2 = dict(
-                f2,
-                box=[(f2["box"][0] - ox) * sx, (f2["box"][1] - oy) * sy, f2["box"][2] * sx, f2["box"][3] * sy],
-                lm=(np.asarray(f2["lm"]) - [ox, oy]) * [sx, sy],
-            )
-        c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, x=X[i], names=names, face2=f2, **predictions(i, fl))
+        with predict_lock:
+            preds = look.predictions(x, fl, bundle)
+        c = types.SimpleNamespace(fin=fin, neu=neu, cam=cam, x=x, fl=fl, bundle=bundle, preds=preds)
         d = os.path.join(root, "img", sid)
         os.makedirs(d, exist_ok=True)
         entry = pool.get(sid, {})

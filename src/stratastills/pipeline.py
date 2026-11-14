@@ -4,6 +4,7 @@
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
+  look      the person's learned look (stratastills.look: auto1 ... auto7, the arena's versions; 'none' leaves our neutral develop)        settings: variant
   encode    JPEG (4:4:4; quality 90 by default, or 'auto' = the lowest whose error the picture's own noise hides, jpeg_quality.py) or 16 bit TIFF      settings: format, quality
 
 `develop` comes first and `encode` last; the others are in that order and each appears at most once. A generated picture is a new VARIANT of the item (projects.generated_variants), identified by the KEY of the stage settings that made it (item, source variant, every stage's settings and version):
@@ -49,8 +50,15 @@ from stratastills import (
 
 DEFAULT_QUALITY = 90  # the JPEG quality of the built-in presets: chosen by the user from side-by-side crops of q85 to q99 (docs/progress.md); 'auto' (jpeg_quality.py) stays available in the Advanced panel
 SHARPEN_AMOUNT = 2.0  # 2026-10-30: 3.0 -> 2.0 with detail.KNEE 0.03 in place of the hard clamp (amount 3 went far past the measured blur and the clamp cut it back, so thin lines came out as flat stepped bands and low-contrast fur as flat cells; docs/progress.md). Earlier: chosen with scripts/sharpen_sweep.py + compare_detail.py against RawTherapee, darktable and the camera JPEG (docs/progress.md): with the roll-off and overshoot of detail.py at 3.0 the sharpness is the camera JPEG's on the A7C set and RawTherapee's on the DJI set, with less overshoot than either
-ORDER = ("develop", "level", "resize", "sharpen", "encode")
-LABELS = dict(develop="Develop", level="Level", resize="Size", sharpen="Sharpen", encode="Encode")
+ORDER = (
+    "develop",
+    "level",
+    "resize",
+    "sharpen",
+    "look",
+    "encode",
+)  # the look last, on the finished picture: what the arena's versions were voted on (the look applied to our sharpened neutral picture), so the arena and a project make the same picture
+LABELS = dict(develop="Develop", look="Look", level="Level", resize="Size", sharpen="Sharpen", encode="Encode")
 
 
 # ---- the stages -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -130,6 +138,15 @@ def _develop_params(p):
     )  # match: a merged panorama is brought to the levels of its neighbouring frames (match.py)
 
 
+def _look_params(p):
+    from stratastills import look
+
+    v = str(p.get("variant", look.DEFAULT)).lower()
+    if v not in look.VARIANTS + ("none",):
+        raise P.ProjectError(f"look is one of {', '.join(look.VARIANTS)} or none")
+    return dict(variant=v)
+
+
 def _level_params(p):
     return dict(
         nadir=bool(p.get("nadir", False))
@@ -174,12 +191,21 @@ def _encode_params(p):
 
 
 PARAMS = dict(
-    develop=_develop_params, level=_level_params, resize=_resize_params, sharpen=_sharpen_params, encode=_encode_params
+    develop=_develop_params,
+    look=_look_params,
+    level=_level_params,
+    resize=_resize_params,
+    sharpen=_sharpen_params,
+    encode=_encode_params,
 )
 
 
 def version(stage):
     """The version of a stage's code: part of a picture's key, so a change of the recipe is a different picture."""
+    if stage == "look":
+        from stratastills import look
+
+        return look.version()  # the code's version and the bundle's models: a new bundle is a different picture
     return dict(
         develop=develop.VERSION, level=transforms.VERSION["level"], resize=1000 * detail.TILE + 3, sharpen=7, encode=4
     )[stage]  # encode 4: nvJPEG output checked, so a corrupt file made by version 3 is generated again
@@ -331,6 +357,47 @@ def run_develop(st, p):
             )
 
 
+def run_look(st, p):
+    """The person's learned look on the finished picture (stratastills.look): after resize and sharpen, as the arena's versions were made. Its inputs come from the camera's preview of this picture (features, faces) and the strata-models service (faces, CLIP); without a look bundle the picture is left as developed and the record says why."""
+    from stratastills import look
+
+    if p["variant"] == "none":
+        return
+    try:
+        b = look.bundle()
+    except look.LookUnavailable as e:
+        st.rec["look"] = dict(applied=False, variant=p["variant"], reason=str(e))
+        st.rec["steps"].append(f"look {p['variant']} not applied: {e}")
+        return
+    st.say(f"applying your look ({p['variant']})")
+    pv = look.preview(st.path)
+    ex, meta = look.exif(st.path)
+    emb = look.clip_embedding(pv)
+    fl = look.faces(pv)
+    x = look.feature_row(pv, ex, meta, emb, b)
+    rgb = st.rgb
+    neu = np.ascontiguousarray((np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8)[..., ::-1])
+    out, did = look.render(p["variant"], neu, x, fl, b)
+    st.rgb = out[..., ::-1].astype(np.float32) / 255
+    st.rec["look"] = dict(
+        applied=True,
+        variant=p["variant"],
+        faces=len(fl),
+        real_faces=sum(f["real"] >= 0.5 for f in fl),
+        clip=emb is not None,
+        **{
+            k: v
+            for k, v in did.items()
+            if k in ("transform", "chroma_scale", "cast", "sliders", "face_dL", "face_target", "face_shift_ab")
+        },
+    )
+    st.rec["steps"].append(
+        f"your look ({p['variant']})"
+        + ("" if emb is not None else ", without CLIP (strata-models not running)")
+        + (f", {len(fl)} face{'s' if len(fl) != 1 else ''}" if fl else "")
+    )
+
+
 def run_level(st, p):
     st.say("levelling")
     if (
@@ -454,10 +521,11 @@ BEST = [
     dict(stage="level"),
     dict(stage="resize", size="auto"),
     dict(stage="sharpen", amount=SHARPEN_AMOUNT),
+    dict(stage="look", variant="auto7"),
     dict(stage="encode", format="jpeg", quality=DEFAULT_QUALITY),
 ]
 BUILTIN = {
-    "best": dict(label="Best quality (automatic)", stages=BEST),
+    "best": dict(label="Best quality (automatic, your look)", stages=BEST),
     "archive": dict(
         label="Archive: 16 bit TIFF, native size, as developed",
         stages=[
@@ -477,6 +545,10 @@ BUILTIN = {
             dict(stage="encode", format="jpeg", quality=DEFAULT_QUALITY),
         ],
     ),
+    "neutral": dict(
+        label="Neutral develop (no look)",
+        stages=[s for s in BEST if s["stage"] != "look"],
+    ),  # the arena's 'neutral': what the look starts from
 }
 DEFAULT_PRESET = "best"
 
@@ -503,7 +575,7 @@ def normalize(stages):
 
 
 def apply_options(stages, options):
-    """The stages with the Advanced panel's flat options laid over them (only those given): size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
+    """The stages with the Advanced panel's flat options laid over them (only those given): look (a variant, or 'none' to leave the stage out), size, format, quality, level (False removes the stage), sharpen (False removes it), sharpen_amount, highlight_contrast. Returns a new, normalised list."""
     st = [dict(s) for s in stages]
     o = dict(options or {})
     unknown = set(o) - {
@@ -520,6 +592,7 @@ def apply_options(stages, options):
         "lens",
         "denoise",
         "frame",
+        "look",
     }
     if unknown:
         raise P.ProjectError(f"unknown option {sorted(unknown)[0]!r}")
@@ -550,6 +623,10 @@ def apply_options(stages, options):
         ensure("develop", denoise=o["denoise"])
     if o.get("frame") is not None:
         ensure("develop", frame=o["frame"])
+    if o.get("look") == "none":
+        st = [s for s in st if s["stage"] != "look"]
+    elif o.get("look") is not None:
+        ensure("look", variant=o["look"])
     if o.get("size") is not None:
         ensure("resize", size=o["size"])
     if o.get("level") is False:
@@ -660,6 +737,8 @@ def summary(stages):
     ]
     r = d.get("resize")
     parts.append("size " + ({"auto": "auto", "native": "native"}.get(r["size"], r["size"] + " px") if r else "native"))
+    if d.get("look", {}).get("variant", "none") != "none":
+        parts.append(f"look {d['look']['variant']}")
     if "level" in d:
         parts.append("levelled")
     if "sharpen" in d:
@@ -719,7 +798,7 @@ def generate(pid, iid, variant=None, preset=None, options=None, stages=None, pro
         if r is not None:
             return dict(r, existing=True)
     state = State(pid, iid, item, v, say)
-    runners = dict(develop=run_develop, level=run_level, resize=run_resize, sharpen=run_sharpen)
+    runners = dict(develop=run_develop, look=run_look, level=run_level, resize=run_resize, sharpen=run_sharpen)
     timing = state.rec[
         "timing"
     ] = []  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
