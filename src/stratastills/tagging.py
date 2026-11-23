@@ -14,6 +14,7 @@ answers them) with the models that made them under `_models`."""
 import hashlib
 import json
 import os
+import time
 
 import cv2
 
@@ -70,10 +71,31 @@ def context(meta):
     )
 
 
+def retry(sm, fn, wait_s=30, give_up_s=3600, sleep=time.sleep):
+    """fn() again while strata-models is unreachable (a restart for a deploy takes a minute or two); gives up after `give_up_s`."""
+    waited = 0
+    while True:
+        try:
+            return fn()
+        except sm.Unavailable:
+            if waited >= give_up_s:
+                raise
+            sleep(wait_s)
+            waited += wait_s
+
+
 def submit(sm, image, ctx, app, priority="batch"):
     """Queue both calls for one picture; [(role, job id)]."""
     return [
-        (role, sm.submit(role, dict(image=image, preset=preset, context=ctx, max_tokens=mt), app, priority)["id"])
+        (
+            role,
+            retry(
+                sm,
+                lambda r=role, p=preset, m=mt: sm.submit(
+                    r, dict(image=image, preset=p, context=ctx, max_tokens=m), app, priority
+                ),
+            )["id"],
+        )
         for role, preset, mt in CALLS
     ]
 
@@ -82,7 +104,7 @@ def collect(sm, jobs):
     """Wait for a photo's calls and merge their answers into one record; TagError if any failed or answered without JSON."""
     out, models = {}, {}
     for role, jid in jobs:
-        j = sm.wait_job(jid)
+        j = retry(sm, lambda j=jid: sm.wait_job(j))  # a queued job survives a restart of the service
         r = j.get("result") or {}
         if j.get("status") != "done" or not isinstance(r.get("json"), dict):
             raise TagError(f"{role}: {j.get('error') or j.get('status')}")

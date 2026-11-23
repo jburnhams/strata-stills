@@ -36,6 +36,9 @@ def test_context_rounds_gps_and_handles_no_meta():
 
 
 class FakeSM:
+    class Unavailable(RuntimeError):
+        pass
+
     def __init__(self, results):
         self.results, self.sent = results, []
 
@@ -83,3 +86,21 @@ def test_a_failed_call_or_an_answer_without_json_fails_the_photo():
         with pytest.raises(tagging.TagError):
             tagging.collect(sm, tagging.submit(sm, "/p.jpg", {}, "app"))
     assert tagging.row(1, "k", dict(caption="", aesthetic=True))["score"] is None
+
+
+def test_retry_waits_out_a_restart_and_gives_up_in_the_end():
+    sm, calls, slept = FakeSM([]), [], []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise sm.Unavailable("connection refused")
+        return "ok"
+
+    assert tagging.retry(sm, flaky, wait_s=5, sleep=slept.append) == "ok" and slept == [5, 5]
+
+    def down():
+        raise sm.Unavailable("down")
+
+    with pytest.raises(sm.Unavailable):
+        tagging.retry(sm, down, wait_s=10, give_up_s=20, sleep=lambda s: None)
