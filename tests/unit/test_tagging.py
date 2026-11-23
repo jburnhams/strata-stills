@@ -104,3 +104,18 @@ def test_retry_waits_out_a_restart_and_gives_up_in_the_end():
 
     with pytest.raises(sm.Unavailable):
         tagging.retry(sm, down, wait_s=10, give_up_s=20, sleep=lambda s: None)
+
+
+def test_a_corrupt_camera_jpeg_falls_back_to_the_raw_preview_and_a_bad_raw_fails_only_its_photo(tmp_path, monkeypatch):
+    raw = tmp_path / "DSC3.ARW"
+    raw.write_bytes(b"x")
+    (tmp_path / "DSC3.JPG").write_bytes(b"not a jpeg")
+    monkeypatch.setattr(tagging.images, "preview_bgr", lambda path, px: np.full((10, 20, 3), 50, np.uint8))
+    assert tagging.camera_picture(str(raw)).shape == (10, 20, 3)
+
+    def boom(path, px):
+        raise ValueError("bad raw")
+
+    monkeypatch.setattr(tagging.images, "preview_bgr", boom)
+    with pytest.raises(tagging.TagError, match="bad raw"):
+        tagging.preview(str(raw), str(tmp_path / "prev"))

@@ -82,7 +82,11 @@ def main(a):
     Xn, Gn = X[xr], G[xr]
     con = psycopg.connect("dbname=omarchy", options="-csearch_path=photos,public")
     rawid = dict(con.execute("select relpath, photo_id from file where role='raw'").fetchall())
-    tags = dict(con.execute("select photo_id, data from analysis where kind='vision_tags'").fetchall())
+    tags = dict(
+        con.execute(
+            "select photo_id, data from analysis where kind='vision_tags' and producer_version='schema-v1'"
+        ).fetchall()
+    )  # tag_vector reads schema-v1's nesting; the strata-models rows (fields-v2+caption-v1) are flat
     pid = [rawid.get(os.path.relpath(rows[int(i)]["raw"], os.path.expanduser("~/raw"))) for i in nidx]
     has = np.array([p in tags for p in pid])
     T = np.stack([tag_vector(tags[p]) if p in tags else np.full(len(tag_vector({})), np.nan, np.float32) for p in pid])

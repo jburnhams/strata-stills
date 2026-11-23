@@ -35,8 +35,14 @@ def camera_picture(raw, px=PX):
     for ext in (".JPG", ".jpg", ".JPEG", ".jpeg"):
         j = os.path.splitext(raw)[0] + ext
         if os.path.exists(j):
-            return images.load(j, px)
-    return images.preview_bgr(raw, px)
+            try:
+                return images.load(j, px)
+            except (images.ImageError, OSError):
+                break  # a corrupt or unreadable camera JPEG: the raw's own preview instead
+    try:
+        return images.preview_bgr(raw, px)
+    except Exception as e:  # any decoder failure is this photo's alone: the run goes on
+        raise TagError(f"no camera picture for {raw}: {type(e).__name__}: {e}") from e
 
 
 def preview(raw, folder, px=PX):
