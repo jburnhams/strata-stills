@@ -185,11 +185,9 @@ def exif(raw):
 
 
 def _service():
-    """The strata-models client when the service can answer now, else None: not installed, not running, or this process holds the whole card (the service could not run the job until the lease ends)."""
-    try:
-        import strata_models_client as sm
-    except ImportError:
-        return None
+    """The strata-models client (strata_python.clients.models) when the service can answer now, else None: not running, or this process holds the whole card (the service could not run the job until the lease ends)."""
+    from strata_python.clients import models as sm
+
     from stratastills import gpu
 
     if gpu.lease_is_exclusive() or not sm.available():

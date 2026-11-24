@@ -184,17 +184,16 @@ def lease(note, vram_gb="default"):
     process then plans with no more than the lease (_cuda_total), so the two never fight over memory, which is what made the arena build write
     grey, truncated pictures on 2026-11-08 when nothing coordinated them. vram_gb None asks for the whole card (nothing else runs).
     Blocks nest and threads share one lease (the batch's workers are all this app).
-    No CUDA device, no client installed, the service not running, or STRATASTILLS_LEASE=0: the block simply runs."""
+    No CUDA device, the service not running, or STRATASTILLS_LEASE=0: the block simply runs."""
     global _lease_cap
     vram_gb = lease_gb() if vram_gb == "default" else vram_gb
     if os.environ.get("STRATASTILLS_LEASE") == "0" or not available() or dev().type != "cuda":
         yield None
         return
-    try:
-        import strata_models_client as sm
-    except ImportError:
-        yield None
-        return
+    from strata_python.clients import (
+        models as sm,  # standard library only; read here, so a process that never leases does not load it
+    )
+
     with _lease_lock:
         if _lease_held[0] == 0:
             try:

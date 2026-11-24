@@ -158,19 +158,13 @@ def _face_lm(cx=0.5, cy=0.5, r=0.15):
     return np.concatenate([jaw, brows, rest]).tolist()
 
 
-class FakeSM:
-    """strata_models_client as the look uses it: one face, its kind, and a CLIP embedding."""
+def script_models(fake, emb):
+    """strata-python's stand-in strata-models answering the look's three roles: one face, its kind, and a CLIP embedding (written where the job asks)."""
 
-    def __init__(self, emb):
-        self.emb = emb
-
-    def available(self):
-        return True
-
-    def faces(self, path, app, priority="batch", **kw):
+    def faces(params):
         from PIL import Image
 
-        w, h = Image.open(path).size
+        w, h = Image.open(params["path"]).size
         lm = [[x * w, y * h, 0.0] for x, y in _face_lm()]
         return dict(
             faces=[
@@ -178,18 +172,22 @@ class FakeSM:
             ]
         )
 
-    def run(self, role, params, app, priority="batch", model=None):
-        if role == "face-kind":
-            return dict(faces=[dict(real=0.95, kind="real") for _ in params["boxes"]])
-        np.savez(params["out"], images=self.emb[None])
+    def embed(params):
+        np.savez(params["out"], images=emb[None])
         return {}
+
+    fake.results.update(
+        {
+            "faces": faces,
+            "face-kind": lambda params: dict(faces=[dict(real=0.95, kind="real") for _ in params["boxes"]]),
+            "image-embed": embed,
+        }
+    )
 
 
 @pytest.fixture
-def full_bundle(stub_bundle, monkeypatch):
-    """The stub bundle with metadata and CLIP blocks, a stand-in network and skin models, and a fake strata-models."""
-    import sys
-
+def full_bundle(stub_bundle, fake_models):
+    """The stub bundle with metadata and CLIP blocks, a stand-in network and skin models, and a stand-in strata-models."""
     import torch
 
     from stratastills.look import transform as T
@@ -221,7 +219,7 @@ def full_bundle(stub_bundle, monkeypatch):
     b._m["net"] = dict(
         net=Net(), mu=np.zeros(len(names)), sd=np.ones(len(names)), dev="cpu", lo=ident - 1, hi=ident + 1, typical=ident
     )
-    monkeypatch.setitem(sys.modules, "strata_models_client", FakeSM(rng.normal(size=8)))
+    script_models(fake_models, rng.normal(size=8))
     return b
 
 

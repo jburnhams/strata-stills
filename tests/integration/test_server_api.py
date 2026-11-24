@@ -8,7 +8,7 @@ def wait(client, url, **params):
     deadline = time.time() + 10.0
     while time.time() < deadline:
         j = client.get(url, params=params).json()
-        if j["state"] != "running":
+        if j["state"] not in ("queued", "running"):
             return j
         time.sleep(0.05)
     raise AssertionError("still running")
@@ -53,9 +53,11 @@ def test_a_variant_is_generated_downloaded_and_not_made_twice(client, project):
     body = dict(options=dict(size="native", sharpen=False, quality=88))
     check = client.post("/api/project/generate/check", params=q, json=body).json()
     assert check["exists"] is False and check["summary"].startswith("JPEG q88")
-    assert client.post("/api/project/generate", params=q, json=body).json()["state"] in ("running", "done")
+    started = client.post("/api/project/generate", params=q, json=body).json()
+    assert started["kind"] == "generate" and started["state"] in ("queued", "running", "done")
     j = wait(client, "/api/project/generate", **q)
-    assert j["state"] == "done", j
+    assert j["state"] == "done" and j["id"] == started["id"] and j["result"]["key"] == check["key"], j
+    assert client.get(f"/api/jobs/{j['id']}").json()["state"] == "done"  # the same job in strata-python's job routes
     assert client.post("/api/project/generate", params=q, json=body).json() == dict(
         state="exists", variant="gen-" + check["key"]
     )
@@ -77,12 +79,13 @@ def test_a_rule_makes_every_picture_of_the_source(client, project):
         ).json()["pending"]
         == 3
     )
-    assert client.post("/api/project/apply", params=dict(id=pid)).json()["state"] in ("running", "done")
+    assert client.post("/api/project/apply", params=dict(id=pid)).json()["state"] in ("queued", "running", "done")
     j = wait(client, "/api/project/apply", id=pid)
     assert (
         j["state"] == "done"
-        and j["done"] == 3
-        and j["failed"] == []
+        and j["result"]["done"] == 3
+        and j["result"]["failed"] == []
+        and j["progress"]["done"] == j["progress"]["total"] == 3
         and client.get("/api/project/rules", params=dict(id=pid)).json()["pending"] == 0
     )
 
@@ -117,31 +120,25 @@ def test_server_api_job_conflicts_and_cancel(client, project):
     q = dict(id=pid, item=iid)
     body = dict(options=dict(size="native", sharpen=False, quality=88))
 
-    # Start generation
+    # Start generation; starting it again while it is queued or running is the same job
     j = client.post("/api/project/generate", params=q, json=body).json()
-    assert j["state"] in ("running", "done")
+    assert j["state"] in ("queued", "running", "done")
+    second = client.post("/api/project/generate", params=q, json=body).json()
+    assert (
+        second.get("id") == j["id"] or second["state"] == "exists"
+    )  # the same job, or (finished already) the picture it made
+    wait(client, "/api/project/generate", **q)
 
-    # Try again while running, if not finished yet, will get 409
-    try:
-        if j["state"] == "running":
-            res = client.post("/api/project/generate", params=q, json=body)
-            assert res.status_code == 409
-    finally:
-        wait(client, "/api/project/generate", **q)
-
-    # Start apply rules
+    # Start apply rules; a second start while it runs is the same job, and stopping it cancels it
     client.put("/api/project/rules", params=dict(id=pid), json=dict(rules=[dict(source=sid, pipeline="web")]))
     j2 = client.post("/api/project/apply", params=dict(id=pid)).json()
-
-    if j2["state"] == "running":
-        # Post apply rules while running -> 409
-        res = client.post("/api/project/apply", params=dict(id=pid))
-        assert res.status_code == 409
-
-    # Stop apply
+    again = client.post("/api/project/apply", params=dict(id=pid)).json()
+    assert again["id"] == j2["id"] or j2["state"] == "done" or again["state"] == "done"
     stop_res = client.delete("/api/project/apply", params=dict(id=pid)).json()
-    assert stop_res["stop"] is True or stop_res["state"] == "idle"
-    wait(client, "/api/project/apply", id=pid)
+    assert stop_res["state"] in ("queued", "running", "done", "cancelled")
+    end = wait(client, "/api/project/apply", id=pid)
+    assert end["state"] in ("done", "cancelled")
+    assert {t["kind"] for t in client.get("/api/jobs").json()["items"]} == {"generate", "apply"}
 
 
 def test_server_api_pipelines(client):
@@ -283,7 +280,11 @@ def test_server_api_job_failures(client, project, monkeypatch):
     q = dict(id=pid, item=iid)
     body = dict(options=dict(size="native", sharpen=False, quality=88))
 
+    from stratastills import jobs
     from stratastills import pipeline as PL
+
+    # fail for good at once (the server runs a failed job once more, after a pause)
+    monkeypatch.setattr(jobs.queue(), "retries", 0)
 
     def failing_generate(*args, **kw):
         raise RuntimeError("Simulated generate failure")
@@ -296,7 +297,7 @@ def test_server_api_job_failures(client, project, monkeypatch):
     monkeypatch.setattr(PL, "find_existing", dummy_find)
 
     res = client.post("/api/project/generate", params=q, json=body).json()
-    assert res["state"] in ("running", "done", "failed")
+    assert res["state"] in ("queued", "running", "failed")
 
     j = wait(client, "/api/project/generate", **q)
     assert j["state"] == "failed"
@@ -309,11 +310,11 @@ def test_server_api_job_failures(client, project, monkeypatch):
     client.put("/api/project/rules", params=dict(id=pid), json=dict(rules=[dict(source=sid, pipeline="web")]))
 
     res = client.post("/api/project/apply", params=dict(id=pid)).json()
-    assert res["state"] in ("running", "done", "failed")
+    assert res["state"] in ("queued", "running", "failed")
 
     j = wait(client, "/api/project/apply", id=pid)
     assert j["state"] == "failed"
-    assert "Simulated apply failure" in j["text"]
+    assert "Simulated apply failure" in j["error"]
 
 
 def test_server_main_entrypoint(monkeypatch):

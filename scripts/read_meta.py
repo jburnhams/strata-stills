@@ -10,21 +10,10 @@ import subprocess
 import sys
 import tempfile
 
+from strata_python import oslib
+
 VOLATILE = ("System:FileAccessDate", "System:FileInodeChangeDate", "System:FilePermissions", "System:Directory")
 ARGS = ["-j", "-G1", "-a", "-n", "-struct"]
-
-
-def lower_priority():
-    try:
-        if hasattr(os, "nice"):
-            os.nice(15)
-    except (OSError, AttributeError):
-        pass
-    try:
-        if shutil.which("ionice"):
-            subprocess.run(["ionice", "-c3", "-p", str(os.getpid())], check=False, capture_output=True)
-    except OSError:
-        pass
 
 
 def is_error(tags):
@@ -64,7 +53,8 @@ def main():
     if not shutil.which("exiftool"):
         print("exiftool not found", file=sys.stderr)
         return 2
-    lower_priority()
+    # nice 15 and the idle I/O class (Windows: background mode); whatever is refused is skipped
+    oslib.lower_priority(15, io=True)
     done = set()
     if os.path.exists(a.out):
         for ln in open(a.out, encoding="utf8"):

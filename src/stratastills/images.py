@@ -12,6 +12,7 @@ import os
 
 import cv2
 import numpy as np
+from strata_python import files
 
 CACHE = "cache"
 JPEG_QUALITY = 90
@@ -211,9 +212,8 @@ def cache_path(project_dir, key, ext=".jpg"):
 
 
 def write_jpeg(path, bgr):
-    tmp = path + ".tmp.jpg"
-    cv2.imwrite(tmp, bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-    os.replace(tmp, path)
+    with files.atomic_path(path) as tmp:  # keeps the .jpg, which cv2 reads the format from
+        cv2.imwrite(tmp, bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
 
 
 def working(project_dir, path, px=2048):

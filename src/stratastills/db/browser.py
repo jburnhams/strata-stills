@@ -25,9 +25,7 @@ def lightroom_finals(folder, url=None, roots=None):
     from .hashes import root_labels
     from .models import File, LightroomEdit
 
-    dirs = (
-        roots if roots is not None else list(settings.source_roots()) + list(settings.load().get("extra_roots") or [])
-    )
+    dirs = roots if roots is not None else list(settings.source_roots()) + settings.extra_roots()
     labels = root_labels(dirs)
     where = dict(labels)
     ap = os.path.normpath(folder)

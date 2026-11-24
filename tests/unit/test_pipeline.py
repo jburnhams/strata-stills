@@ -603,3 +603,26 @@ def test_generate_keeps_the_time_and_gpu_use_of_each_stage(proj):
     assert [x["stage"] for x in t] == [x["stage"] for x in r["stages"]] and all(
         x["seconds"] >= 0 and x["gpu"] in (True, False, None) for x in t
     )
+
+
+def test_generate_reports_each_stage_to_the_job_running_it(proj):
+    """The stages run as a strata_python.workflow pipeline: a job sees 'Developing', 1 of n ... 'Encoding'; outside a job nothing is reported."""
+    from strata_python.tasks.progress import ProgressReporter, reporting
+
+    pid, sid, iid = proj
+    seen = []
+    with reporting(ProgressReporter(seen.append, min_interval_s=0)):
+        r = PL.generate(pid, iid, options=dict(size="native", quality=91))
+    n = len(r["stages"])
+    assert [(p.stage, p.done, p.total) for p in seen] == [(s["stage"], i, n) for i, s in enumerate(r["stages"])]
+    assert seen[0].text == "Developing" and seen[-1].text == "Encoding"
+
+
+def test_a_failed_stage_stops_the_rest_and_is_raised(proj, monkeypatch):
+    pid, sid, iid = proj
+    ran = []
+    monkeypatch.setattr(PL, "run_resize", lambda state, p: (_ for _ in ()).throw(ValueError("no pixels")))
+    monkeypatch.setattr(PL, "run_encode", lambda *a: ran.append("encode"))
+    with pytest.raises(ValueError, match="no pixels"):
+        PL.generate(pid, iid, options=dict(size="native", quality=92))
+    assert ran == []

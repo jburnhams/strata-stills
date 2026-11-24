@@ -13,7 +13,6 @@ import sys
 import threading
 import time
 
-DEFAULT_THRESHOLD = 0.45
 EXPOSED = (
     "FEMALE_GENITALIA_EXPOSED",
     "MALE_GENITALIA_EXPOSED",
@@ -44,20 +43,13 @@ def home():
 def enabled():
     from stratastills import settings
 
-    e = os.environ.get("STRATASTILLS_NSFW")
-    if e is not None:
-        return e.strip().lower() not in ("0", "false", "off", "no", "")
-    return bool(settings.load().get("nsfw_filter", True))
+    return settings.nsfw_filter()
 
 
 def threshold():
     from stratastills import settings
 
-    v = os.environ.get("STRATASTILLS_NSFW_THRESHOLD") or settings.load().get("nsfw_threshold")
-    try:
-        return min(1.0, max(0.0, float(v)))
-    except (TypeError, ValueError):
-        return DEFAULT_THRESHOLD
+    return settings.nsfw_threshold()
 
 
 def set_detector(fn):

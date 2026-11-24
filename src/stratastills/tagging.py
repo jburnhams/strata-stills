@@ -11,12 +11,12 @@ Each photo's result is one `photos.analysis` row: kind `vision_tags`, producer `
 16 hex of the SHA-256 of the preview, label the caption, score the aesthetic rating, data the two answers merged (fields flat, as the preset
 answers them) with the models that made them under `_models`."""
 
-import hashlib
 import json
 import os
 import time
 
 import cv2
+from strata_python import files
 
 from stratastills import images
 
@@ -53,11 +53,9 @@ def preview(raw, folder, px=PX):
         im = camera_picture(raw, px)
         if im is None:
             raise TagError(f"no camera picture for {raw}")
-        tmp = out + ".tmp.jpg"
-        cv2.imwrite(tmp, im, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        os.replace(tmp, out)
-    with open(out, "rb") as f:
-        return out, hashlib.sha256(f.read()).hexdigest()[:16]
+        with files.atomic_path(out) as tmp:
+            cv2.imwrite(tmp, im, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return out, files.sha256_hex(out)[:16]
 
 
 def context(meta):

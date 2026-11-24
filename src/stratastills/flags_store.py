@@ -6,6 +6,8 @@ import json
 import os
 import threading
 
+from strata_python import files
+
 from stratastills import settings
 
 REPORTS = ("neutral", "auto")
@@ -33,11 +35,8 @@ class FileStore:
                 cur[pic] = entry
             else:
                 cur.pop(pic, None)
-            f = self._f(report)
-            os.makedirs(os.path.dirname(f), exist_ok=True)
-            tmp = f + ".tmp"
-            json.dump(cur, open(tmp, "w", encoding="utf8"), indent=1, sort_keys=True)
-            os.replace(tmp, f)
+            with files.atomic_open(self._f(report)) as f:
+                json.dump(cur, f, indent=1, sort_keys=True)
         return cur.get(pic, {})
 
 

@@ -41,7 +41,7 @@ def test_resume_retries_error_records_and_keeps_good_ones(tmp_path, monkeypatch,
 
     monkeypatch.setattr(rm, "run_exiftool", fake)
     monkeypatch.setattr(rm.shutil, "which", lambda n: "/bin/" + n)
-    monkeypatch.setattr(rm, "lower_priority", lambda: None)
+    monkeypatch.setattr(rm.oslib, "lower_priority", lambda *a, **k: None)
     monkeypatch.setattr("sys.argv", ["read_meta.py", "--hashes", str(h), "--out", str(out)])
     assert rm.main() == 0 and sorted(seen) == [
         "/r/b.ARW",

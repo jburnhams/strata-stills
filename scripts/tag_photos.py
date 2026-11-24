@@ -12,8 +12,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-import strata_models_client as sm
 from sqlalchemy import select
+from strata_python.clients import models as sm
 from strata_python.db import connect, session
 
 from stratastills import browser, nsfw, settings, tagging

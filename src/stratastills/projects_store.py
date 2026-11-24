@@ -6,6 +6,8 @@ The generated variants (`generated`, `read_sidecar`, `write_sidecar`) are the si
 import json
 import os
 
+from strata_python import files
+
 from stratastills import settings
 
 FILE = "project.json"
@@ -31,10 +33,7 @@ def _source_id(path):
 
 
 def _write(path, data, indent=1):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=indent)
-    os.replace(tmp, path)
+    files.write_json_atomic(path, data, indent=indent)
 
 
 class FileStore:
