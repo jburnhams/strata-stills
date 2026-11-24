@@ -56,3 +56,30 @@ def test_a_failed_job_fails_for_good_after_one_more_try(q, monkeypatch):
     assert q.get(jid).state == "queued"  # retried once
     q.step(jobs.HANDLERS)
     assert q.get(jid).state == "failed" and "no pixels" in (q.get(jid).error or "")
+
+
+def test_an_apply_job_takes_progress_from_several_threads_at_once(q, monkeypatch):
+    inside, release = threading.Barrier(2), threading.Event()
+    seen = []
+
+    def report(*a):  # a reporter that is still busy when the other thread reports
+        seen.append(a)
+        if len(seen) <= 2:
+            inside.wait(timeout=5)
+            release.wait(timeout=5)
+
+    monkeypatch.setattr(jobs, "report_progress", report)
+
+    def apply_rules(pid, progress, stop, workers):
+        threads = [threading.Thread(target=progress, args=(i, 2, f"p{i}")) for i in (1, 2)]
+        for t in threads:
+            t.start()
+        release.set()
+        for t in threads:
+            t.join()
+        return dict(done=2, failed=[], total=2, workers=2)
+
+    monkeypatch.setattr(PL, "apply_rules", apply_rules)
+    jid = jobs.enqueue_apply("p")
+    q.step(jobs.HANDLERS)
+    assert q.get(jid).state == "done" and sorted(seen[:2]) == [(1, 2, "p1"), (2, 2, "p2")]

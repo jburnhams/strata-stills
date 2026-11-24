@@ -94,14 +94,15 @@ def run_generate(job: Job):
 
 
 def run_apply(job: Job):
-    """Make what the project's rules ask for; progress is pictures done of the total (reported from the batch's own threads, hence the copied context)."""
+    """Make what the project's rules ask for; progress is pictures done of the total, reported from the batch's own threads. Those do not inherit the job's
+    context (its progress reporter), and one Context cannot be entered by two threads at once, so each report runs in a fresh copy of the job's."""
     from stratastills import pipeline as PL
 
-    ctx = contextvars.copy_context()  # the job's progress reporter; ThreadPoolExecutor threads do not inherit it
+    ctx = contextvars.copy_context()
     try:
         r = PL.apply_rules(
             job.options["project"],
-            lambda i, n, t: ctx.run(report_progress, i, n, t),
+            lambda i, n, t: ctx.copy().run(report_progress, i, n, t),
             stop=lambda: job.stopping,
             workers=job.options.get("workers"),
         )
