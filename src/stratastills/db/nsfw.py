@@ -23,11 +23,7 @@ class DbStore:
         """[(label, absolute dir)] longest dir first."""
         from .hashes import root_labels
 
-        dirs = (
-            self._roots
-            if self._roots is not None
-            else list(settings.source_roots()) + list(settings.load().get("extra_roots") or [])
-        )
+        dirs = self._roots if self._roots is not None else list(settings.source_roots()) + settings.extra_roots()
         return root_labels(dirs) if dirs else []
 
     def _session(self):

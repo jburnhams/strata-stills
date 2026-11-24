@@ -4,6 +4,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import stratastills
 from stratastills.server.app import create_app
 
 
@@ -21,9 +22,14 @@ def test_landing_page_and_empty_list(client):
 def test_health_and_the_page_at_any_screen_path(client):
     """strata-python's skeleton: /api/health, and the page at a path the web app owns with a <base href> back to the root (a reload behind Caddy keeps its assets);
     an unknown /api path stays a 404 rather than the page."""
+    from strata_python import web
+
     from stratastills import __version__
 
-    assert client.get("/api/health").json() == dict(ok=True, version=__version__)
+    h = client.get("/api/health").json()
+    assert (
+        h["ok"] is True and h["version"] == __version__ and h.get("commit") == web.source_commit(stratastills.__file__)
+    )
     page = client.get("/some/screen")
     assert page.status_code == 200 and '<base href="../">' in page.text
     assert client.get("/api/no-such-thing").status_code == 404
@@ -93,9 +99,31 @@ def test_sources_items_primary_and_image(client, tmp_path):
     assert client.get("/api/project/item", params=dict(id="demo", item=it["id"])).json()["stem"] == "X_1"
 
 
-def test_settings_roundtrip(client, tmp_path):
+def test_settings_roundtrip(client, tmp_path, monkeypatch):
+    monkeypatch.delenv("STRATASTILLS_SOURCES", raising=False)
     assert client.put("/api/settings", json=dict(projects_dir="relative")).status_code == 400
-    assert client.get("/api/settings").json()["projects_dir"] == str(tmp_path / "projects")
+    assert client.put("/api/settings", json=dict(nope="x")).status_code == 400
+    got = client.get("/api/settings").json()
+    assert (
+        got["projects_dir"] == str(tmp_path / "projects")
+        and got["source_roots"] == []
+        and got["nsfw_threshold"] == "0.45"
+    )
+    roots = [str(tmp_path / "drone"), str(tmp_path / "raw")]
+    assert client.put("/api/settings", json=dict(source_roots=roots)).json()["source_roots"] == roots
+    # the database URL is read from the same file but never sent: it can hold a password
+    (tmp_path / "home" / "settings.json").write_text(
+        json.dumps(dict(source_roots=roots, database_url="postgresql://u:secret@h/db"))
+    )
+    assert "database_url" not in client.get("/api/settings").json() and "secret" not in client.get("/api/settings").text
+
+
+def test_system_names_the_folders_and_strata_models(client, fake_models):
+    s = client.get("/api/system").json()
+    assert {f["name"] for f in s["folders"]} == {"projects", "thumbnails", "arena", "report"}
+    assert s["services"][0]["name"] == "strata-models" and s["services"][0]["ok"] is True
+    fake_models.down = True
+    assert client.get("/api/system").json()["services"][0]["ok"] is False
 
 
 def test_the_visual_report_is_served_from_its_folder(client, tmp_path, monkeypatch):

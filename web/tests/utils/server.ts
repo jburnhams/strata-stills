@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import type { ArenaAlert, BrowseAdd, BrowsePicture, FlaggedPicture, GenerateBody, GenerateRecord, Item, Preset, Project, Rule, SourceSummary, Stage } from '../../src/api'
+import type { ArenaAlert, BrowseAdd, BrowsePicture, FlaggedPicture, GenerateBody, GenerateResult, Item, Preset, Project, Rule, SourceSummary, Stage, Task } from '../../src/api'
 
 export const project: Project = { id: 'demo', name: 'Demo', created: null, n_sources: 1, sources: [{ path: 'C:\\shoot' }] }
 export const sources: SourceSummary[] = [{ id: 'abcd1234', path: 'C:\\shoot', reachable: true, stills: 2, panos: 1, videos: 1 }]
@@ -35,11 +35,14 @@ export const presets: Preset[] = [
   { name: 'best', label: 'Best quality (automatic)', builtin: true, stages: BEST },
   { name: 'archive', label: 'Archive: 16 bit TIFF, native size, as developed', builtin: true, stages: [{ stage: 'develop', highlight_contrast: 0.8 }, { stage: 'level' }, { stage: 'resize', size: 'native' }, { stage: 'encode', format: 'tiff', quality: 'auto' }] },
 ]
-export const generatedRecord: GenerateRecord = { key: 'abc123', file: 'C:\p\generated\abc123.jpg', output: [6016, 4512], bytes: 15000000, format: 'jpeg', quality: 90, summary: 'JPEG q90 · size auto · levelled · sharpened 3', steps: ['developed from the raw'] }
+export const generatedRecord: GenerateResult = { key: 'abc123', existing: false, summary: 'JPEG q90 · size auto · levelled · sharpened 3' }
+/** A job as the server's queue shows it (strata-python's Task). */
+export const task = <R,>(kind: string, state: Task['state'], more: Partial<Task<R>> = {}): Task<R> => ({ id: 7, kind, state, created_at: '2026-11-24T10:00:00Z', attempts: 1, domain: kind === 'apply' ? 'demo' : 'demo/abcd1234~A_1', ...more })
 
 /** What the mock server remembers within a test (reset after each one). */
 const fresh = () => ({ fullres: { state: 'ready', text: '' } as { state: string; text: string }, exists: false, existingVariant: 'gen-abc123', checks: [] as GenerateBody[], generates: [] as GenerateBody[], saved: [] as unknown[], rules: [] as Rule[], applies: 0, statusCalls: 0,
-  pairs: 0, votes: [] as unknown[], flags: [] as unknown[], unflags: [] as unknown[], undos: 0, statuses: [] as unknown[], decisions: [] as unknown[], scans: [] as string[], removed: [] as string[] })
+  pairs: 0, votes: [] as unknown[], flags: [] as unknown[], unflags: [] as unknown[], undos: 0, statuses: [] as unknown[], decisions: [] as unknown[], scans: [] as string[], removed: [] as string[],
+  jobs: [] as Task[], cancels: [] as number[], retries: [] as number[] })
 export const mock = fresh()
 export const resetMock = () => { Object.assign(mock, fresh()) }
 
@@ -59,13 +62,16 @@ handlers.push(
   http.get('/api/look', () => HttpResponse.json({ best: 'auto5', versions: [{ name: 'auto5', rating: 1647, votes: 241 }, { name: 'auto7', rating: null, votes: 0 }] })),
   http.put('/api/pipeline', async ({ request }) => { const b = await request.json(); mock.saved.push([new URL(request.url).searchParams.get('name'), b]); return HttpResponse.json({ name: new URL(request.url).searchParams.get('name'), label: 'x', builtin: false, stages: BEST }) }),
   http.post('/api/project/generate/check', async ({ request }) => { const b = await request.json() as GenerateBody; mock.checks.push(b); const st = stagesOf(b); return HttpResponse.json({ key: 'abc123', exists: mock.exists, variant: mock.exists ? mock.existingVariant : null, stages: st, summary: summaryOf(st) }) }),
-  http.post('/api/project/generate', async ({ request }) => { mock.generates.push(await request.json() as GenerateBody); return HttpResponse.json(mock.exists ? { state: 'exists', variant: mock.existingVariant } : { state: 'running', text: 'developing the full-size picture' }) }),
-  http.get('/api/project/generate', () => HttpResponse.json({ state: 'done', result: generatedRecord })),
+  http.post('/api/project/generate', async ({ request }) => { mock.generates.push(await request.json() as GenerateBody); return HttpResponse.json(mock.exists ? { state: 'exists', variant: mock.existingVariant } : task('generate', 'queued')) }),
+  http.get('/api/project/generate', () => HttpResponse.json(task('generate', 'done', { result: generatedRecord }))),
   http.get('/api/project/rules', () => HttpResponse.json({ rules: mock.rules, pending: mock.rules.length ? 3 : 0 })),
   http.put('/api/project/rules', async ({ request }) => { mock.rules = ((await request.json()) as { rules: Rule[] }).rules; return HttpResponse.json({ rules: mock.rules, pending: mock.rules.length ? 3 : 0 }) }),
-  http.post('/api/project/apply', () => { mock.applies++; return HttpResponse.json({ state: 'running', done: 0, total: 3, text: 'starting', failed: [] }) }),
-  http.get('/api/project/apply', () => { mock.statusCalls++; return HttpResponse.json({ state: 'done', done: 3, total: 3, text: '', failed: [] }) }),
-  http.delete('/api/project/apply', () => HttpResponse.json({ state: 'stopped', done: 1, total: 3, failed: [] })),
+  http.post('/api/project/apply', () => { mock.applies++; return HttpResponse.json(task('apply', 'queued')) }),
+  http.get('/api/project/apply', () => { mock.statusCalls++; return HttpResponse.json(task('apply', 'done', { result: { done: 3, total: 3, failed: [], workers: 2 } })) }),
+  http.delete('/api/project/apply', () => HttpResponse.json(task('apply', 'running', { progress: { done: 1, total: 3, text: 'A_2' } }))),
+  http.get('/api/jobs', () => HttpResponse.json({ items: mock.jobs, next: null })),
+  http.post('/api/jobs/:id/cancel', ({ params }) => { mock.cancels.push(Number(params.id)); return HttpResponse.json(task('apply', 'running')) }),
+  http.post('/api/jobs/:id/retry', ({ params }) => { mock.retries.push(Number(params.id)); return HttpResponse.json(task('generate', 'queued', { id: 99 })) }),
 )
 
 export const alerts: ArenaAlert[] = [

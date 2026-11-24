@@ -11,6 +11,7 @@ const nav = [
   { to: href.arena(), label: 'Arena' },
   { to: href.alerts(), label: 'Arena flags' },
   { to: href.flagged(), label: 'Flagged pictures' },
+  { to: href.jobs(), label: 'Jobs' },
 ]
 
 /** Links to the visual reports that exist (a failed read shows none: they are optional). */

@@ -10,6 +10,7 @@ import os
 import threading
 
 import numpy as np
+from strata_python import files
 
 from stratastills import develop, images
 from stratastills import projects as P
@@ -59,9 +60,8 @@ def _build(pid, path, f):
                 )  # a Lightroom linear DNG, or a raw LibRaw cannot develop: its biggest embedded level
         else:
             arr = images.load(path, 100000)
-        tmp = f + ".tmp.npy"
-        np.save(tmp, arr)
-        os.replace(tmp, f)
+        with files.atomic_path(f) as tmp:  # keeps the .npy, so np.save does not add a second one
+            np.save(tmp, arr)
         with _lock:
             _jobs.pop(f, None)
     except Exception as e:

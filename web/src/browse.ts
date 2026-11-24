@@ -1,29 +1,12 @@
-// The Browser's view logic, apart from React so the unit tests run it in node: the order, the groups and the thumbnail sources of a folder's pictures.
+// The Browser's view logic, apart from React so the unit tests run it in node: the groups and the thumbnail sources of a folder's pictures (strata-react's useViewOptions sorts and groups by them).
 import type { BrowsePicture } from './api'
 
-export type SortKey = 'name' | 'name-desc' | 'time' | 'time-desc'
-export type GroupKey = 'none' | 'hour' | 'day' | 'type' | 'project'
+export type GroupKey = 'hour' | 'day' | 'type' | 'project'
 export type ShowKey = 'best' | 'camera'
-export const SORTS: { value: SortKey; label: string }[] = [
-  { value: 'name', label: 'Name, A to Z' }, { value: 'name-desc', label: 'Name, Z to A' }, { value: 'time', label: 'Oldest first' }, { value: 'time-desc', label: 'Newest first' },
-]
-export const GROUPS: { value: GroupKey; label: string }[] = [
-  { value: 'none', label: 'No groups' }, { value: 'hour', label: 'By hour' }, { value: 'day', label: 'By day' }, { value: 'type', label: 'By type' }, { value: 'project', label: 'By project' },
-]
+export const GROUPS: { key: GroupKey; label: string }[] = [{ key: 'hour', label: 'Hour' }, { key: 'day', label: 'Day' }, { key: 'type', label: 'Type' }, { key: 'project', label: 'Project' }]
 
-const natural = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
-
-/** The pictures in the order asked for; names compare naturally (DSC9 before DSC10), and a picture with no time goes last. */
-export function sortPictures(rows: readonly BrowsePicture[], sort: SortKey): BrowsePicture[] {
-  const byName = (a: BrowsePicture, b: BrowsePicture) => natural.compare(a.stem, b.stem)
-  const out = [...rows]
-  if (sort === 'name' || sort === 'name-desc') return out.sort((a, b) => (sort === 'name' ? byName(a, b) : byName(b, a)))
-  const sign = sort === 'time' ? 1 : -1
-  return out.sort((a, b) => {
-    if (!a.taken || !b.taken) return Number(!a.taken) - Number(!b.taken) || byName(a, b)
-    return sign * (Date.parse(a.taken) - Date.parse(b.taken)) || byName(a, b)
-  })
-}
+/** When a picture was taken, for the "Date taken" sort (a picture with no time sorts last either way). */
+export const takenAt = (p: BrowsePicture) => (p.taken ? new Date(p.taken) : null)
 
 /** What kind of files a picture has, in a few words: "Raw + JPEG", "Raw", "JPEG", "Panorama". */
 export function typeOf(p: BrowsePicture): string {
@@ -36,25 +19,17 @@ export function typeOf(p: BrowsePicture): string {
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
-/** The groups of a sorted list, in the order their first picture comes: [{key, label, rows}]; one group of everything for 'none'. Times are the file times, in the viewer's time zone. */
-export function groupPictures(rows: readonly BrowsePicture[], group: GroupKey): { key: string; label: string; rows: BrowsePicture[] }[] {
-  if (group === 'none') return [{ key: 'all', label: 'All pictures', rows: [...rows] }]
-  const of = (p: BrowsePicture): [string, string] => {
-    if (group === 'type') return [typeOf(p), typeOf(p)]
-    if (group === 'project') return p.projects.length ? [p.projects.join(','), 'In ' + p.projects.join(', ')] : ['', 'In no project']
-    if (!p.taken) return ['?', 'No time']
-    const d = new Date(p.taken), day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    const dayLabel = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
-    return group === 'day' ? [day, dayLabel] : [`${day} ${pad(d.getHours())}`, `${dayLabel}, ${pad(d.getHours())}:00 to ${pad((d.getHours() + 1) % 24)}:00`]
-  }
-  const out = new Map<string, { key: string; label: string; rows: BrowsePicture[] }>()
-  for (const p of rows) {
-    const [key, label] = of(p)
-    if (!out.has(key)) out.set(key, { key, label, rows: [] })
-    out.get(key)!.rows.push(p)
-  }
-  return [...out.values()]
+/** The group a picture is in, in words (the heading of its group): the hour or day it was taken (file times, in the viewer's time zone), its type, or its projects. */
+export function groupOf(p: BrowsePicture, group: GroupKey): string {
+  if (group === 'type') return typeOf(p)
+  if (group === 'project') return p.projects.length ? 'In ' + p.projects.join(', ') : 'In no project'
+  if (!p.taken) return 'No time'
+  const d = new Date(p.taken), day = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+  return group === 'day' ? day : `${day}, ${pad(d.getHours())}:00 to ${pad((d.getHours() + 1) % 24)}:00`
 }
+
+/** The server's thumbnail size for a tile this wide: twice its width for a 2x screen, rounded up to the sizes the cache keeps (160, 320, 640). */
+export const thumbPx = (tile: number) => (tile * 2 <= 160 ? 160 : tile * 2 <= 320 ? 320 : 640)
 
 /** The sources to try for a thumbnail, in order: every one the server named (best first), or with 'camera' the camera's own picture first (the raw's preview, the JPEG), develops after. */
 export function thumbSources(p: BrowsePicture, show: ShowKey): string[] {

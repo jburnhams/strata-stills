@@ -42,7 +42,8 @@ def project(cli, shoot):
 
 @pytest.fixture
 def client(project):
-    """The HTTP API over the real project files of `project`."""
+    """The HTTP API over the real project files of `project`, with its job worker running (the app's lifespan)."""
     from stratastills.server.app import create_app
 
-    return TestClient(create_app())
+    with TestClient(create_app()) as c:
+        yield c

@@ -1,6 +1,6 @@
 """The rating arena: blind pairwise choices between versions of the same picture (the person's Lightroom final and the automatic versions, auto1, auto2 ...), to find out by data which automatic version people prefer, and to compare any future one the same way (add a variant, make its pictures, vote).
 
-Pure logic (no server, no images): pair choice, Elo and Bradley-Terry ratings. The server (server/app.py) holds the pool and the votes (`out/arena/`), scripts/build_arena.py makes the pictures.
+Pure logic (no server, no images): pair choice, Elo and Bradley-Terry ratings (the fit, intervals and head-to-head from strata_python.stats). The server (server/app.py) holds the pool and the votes (`out/arena/`), scripts/build_arena.py makes the pictures.
 
 Pool: {picture: {variant: {'file': relative path, 'hash': str, 'same'?: [earlier hashes], 'changed'?: unix time, 'change'?: share}}}; a picture is offered only with the variants it has, and two variants whose pictures are identical (same hash) are never paired (a picture with no face gets the same pixels from two variants that differ only for faces).
 Vote: {'pic', 'a', 'b' (variants as shown left and right), 'winner': 'a' | 'b' | 'tie', 't' (unix time), 'ms' (time to decide), 'ha', 'hb' (the hashes of the two pictures shown; votes before 2026-11-11 have none)}.
@@ -8,10 +8,10 @@ Vote: {'pic', 'a', 'b' (variants as shown left and right), 'winner': 'a' | 'b' |
 Revisions: a variant remade by new code gets a new picture. scripts/build_arena.py measures how much it changed (`arena_revision.change`: the share of pixels a person could tell apart) and, when that is small, lists the old hash in the entry's `same`, so the votes on the old picture keep counting; otherwise `same` starts empty and `changed` is the time of the remake. `current_votes` keeps only the votes on pictures still shown (or judged the same), and every rating and the pair choice use those, so a remade variant is rated on what it looks like now."""
 
 import json
-import math
 import os
-import random
 import re
+
+from strata_python import stats
 
 START = 1500.0
 K = 24.0
@@ -107,82 +107,35 @@ def elo(votes, retired=()):
     return r
 
 
-def _fit(votes, retired, iters, side):
-    """-> (strengths {variant: p} with geometric mean 1, left-side odds h) of the Bradley-Terry fit; ({}, 1.0) when there is no usable vote. The votes are summed per (left, right) pair once, so an iteration costs the number of pairs, not of votes."""
-    agg = {}  # (left, right) -> [games, score of left summed]
-    for v in votes:
-        s = score(v)
-        if s is None or v["a"] in retired or v["b"] in retired:
-            continue
-        g = agg.setdefault((v["a"], v["b"]), [0, 0.0])
-        g[0] += 1
-        g[1] += s
-    names = {n for k in agg for n in k}
-    if not names:
-        return {}, 1.0
-    total_left = sum(g[1] for g in agg.values())
-    p, h = dict.fromkeys(names, 1.0), 1.0
-    for _ in range(iters):
-        w, d = dict.fromkeys(names, 0.01), dict.fromkeys(names, 1e-9)
-        for (a, b), (n, s) in agg.items():
-            den = h * p[a] + p[b]
-            w[a] += s
-            w[b] += n - s
-            d[a] += n * h / den
-            d[b] += n / den
-        q = {n: w[n] / d[n] for n in names}
-        g = math.exp(sum(math.log(x) for x in q.values()) / len(q))
-        p = {n: x / g for n, x in q.items()}
-        if side:
-            h = (total_left + 0.01) / (sum(n * p[a] / (h * p[a] + p[b]) for (a, b), (n, _) in agg.items()) + 0.01)
-    return p, h
+def as_votes(votes, retired=()):
+    """The arena's votes as strata_python.stats votes, `(left, right, winner)`, without those about a retired variant (and without skips, which have no winner)."""
+    return [
+        (v["a"], v["b"], v["winner"])
+        for v in votes
+        if score(v) is not None and v["a"] not in retired and v["b"] not in retired
+    ]
 
 
 def bradley_terry(votes, retired=(), iters=200, side=True):
-    """Order-independent strengths (Bradley-Terry, ties as half a win each way) on the Elo scale, the mean of the variants 1500. -> {variant: rating}.
+    """Order-independent strengths (Bradley-Terry, ties as half a win each way) on the Elo scale, the mean of the variants 1500. -> {variant: rating}. The fit is
+    strata_python.stats' (the MM algorithm with a prior of 0.01 of a win, shared with strata-models' evals).
     `side` (default) fits a left-side advantage h as well: P(left wins) = h*p_a / (h*p_a + p_b), 'a' being the variant shown left. The sides are drawn at random, so h only removes noise from the strengths (the person favours the left picture, see `side_advantage`), it cannot favour a variant. `side=False` is the plain model."""
-    p, _ = _fit(votes, retired, iters, side)
-    return {n: START + 400 * math.log10(x) for n, x in p.items()}
+    return stats.bradley_terry(as_votes(votes, retired), side=side, iters=iters).ratings(START)
 
 
 def side_advantage(votes, retired=(), iters=200):
     """The odds multiplier h the left picture has over the right one at equal strength (1.0 = no side preference; 1.3 = the left picture wins 57 % of the time between equals), fitted with the strengths."""
-    return _fit(votes, retired, iters, True)[1]
+    return stats.bradley_terry(as_votes(votes, retired), side=True, iters=iters).side
 
 
 def bootstrap(votes, retired=(), n=200, seed=0):
     """The 5th and 95th percentile of each variant's Bradley-Terry rating over resamples of the votes: how far to trust a gap. -> {variant: (lo, hi)}."""
-    rng = random.Random(seed)
-    runs = []
-    for _ in range(n):
-        runs.append(
-            bradley_terry([votes[rng.randrange(len(votes))] for _ in votes], retired, iters=60)
-        ) if votes else None
-    out = {}
-    for name in bradley_terry(votes, retired, iters=20):
-        xs = sorted(r[name] for r in runs if name in r)
-        if xs:
-            out[name] = (xs[int(0.05 * len(xs))], xs[min(len(xs) - 1, int(0.95 * len(xs)))])
-    return out
+    return stats.intervals(as_votes(votes, retired), n=n, level=0.90, side=True, seed=seed)
 
 
 def head_to_head(votes, retired=()):
     """{(a, b): [wins of a, wins of b, ties]} over unordered pairs (the names sorted)."""
-    t = {}
-    for v in votes:
-        s = score(v)
-        if s is None or v["a"] in retired or v["b"] in retired:
-            continue
-        a, b = sorted((v["a"], v["b"]))
-        row = t.setdefault((a, b), [0, 0, 0])
-        first = v["a"] == a
-        if s == 0.5:
-            row[2] += 1
-        elif (s == 1.0) == first:
-            row[0] += 1
-        else:
-            row[1] += 1
-    return t
+    return stats.head_to_head(as_votes(votes, retired))
 
 
 def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None, priority=None):

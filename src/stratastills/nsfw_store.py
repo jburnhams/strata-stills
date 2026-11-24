@@ -6,8 +6,9 @@ A decision in the database belongs to a PICTURE (`nsfw_decision.photo_id`); the 
 
 import json
 import os
-import threading
 import time
+
+from strata_python import files
 
 from stratastills import settings
 
@@ -25,24 +26,14 @@ class FileStore:
         return os.path.join(self._home(), "nsfw_allowed.json")
 
     def load(self):
-        try:
-            return json.load(open(self._cache_file()))
-        except (OSError, ValueError):
-            return {}
+        return files.read_json(self._cache_file(), {})
 
     def put(self, key, value, cache):
         """Remember one score; the file store rewrites the whole cache (`cache` is the in-memory dict that already holds `key`)."""
-        os.makedirs(self._home(), exist_ok=True)
-        tmp = f"{self._cache_file()}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with open(tmp, "w") as f:
-            json.dump(cache, f)
-        os.replace(tmp, self._cache_file())
+        files.write_json_atomic(self._cache_file(), cache, indent=None)
 
     def _allowed(self):
-        try:
-            return json.load(open(self._allowed_file()))
-        except (OSError, ValueError):
-            return {}
+        return files.read_json(self._allowed_file(), {})
 
     def allowed_among(self, keys):
         a = self._allowed()
@@ -54,11 +45,7 @@ class FileStore:
             a[key] = int(time.time())
         else:
             a.pop(key, None)
-        os.makedirs(self._home(), exist_ok=True)
-        tmp = f"{self._allowed_file()}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with open(tmp, "w") as f:
-            json.dump(a, f)
-        os.replace(tmp, self._allowed_file())
+        files.write_json_atomic(self._allowed_file(), a, indent=None)
 
     def record_skip(self, line):
         os.makedirs(self._home(), exist_ok=True)

@@ -54,10 +54,8 @@ def embed_with_service():
     """(image embeddings in thumbs order, {group: text embeddings}, catalogue idx) from strata-models, or None when it is not running."""
     if os.environ.get("STRATASTILLS_LOCAL_CLIP") == "1":
         return None
-    try:
-        import strata_models_client as sm
-    except ImportError:
-        return None
+    from strata_python.clients import models as sm
+
     if not sm.available():
         return None
     import tempfile

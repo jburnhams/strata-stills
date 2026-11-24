@@ -12,6 +12,8 @@ import json
 import os
 import threading
 
+from strata_python import files
+
 from stratastills import images, ingest, settings
 from stratastills import projects as P
 
@@ -357,11 +359,7 @@ def cached(path, how, px=320):
             data = _make(path, how, px)
         except Exception as e:
             raise BrowseError(f"cannot make a thumbnail of {os.path.basename(path)}: {e}")
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        tmp = f"{out}.{threading.get_ident()}.tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, out)
+        files.write_bytes_atomic(out, data)
     return out
 
 

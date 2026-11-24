@@ -3,35 +3,15 @@
 Needs strata-python[db] and pgvector (dependencies of the app)."""
 
 import argparse
-import contextlib
-import hashlib
 import os
-import shutil
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from strata_python import oslib
+from strata_python import files, oslib
 
 from stratastills import settings
 
 EXT = ".arw,.cr2,.cr3,.nef,.dng,.raf,.orf,.rw2,.srw,.pef,.nrw"
-
-
-def sha256_of(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while b := f.read(1 << 22):
-            h.update(b)
-    return h.hexdigest()
-
-
-def lower_priority():
-    """CPU from strata-python's oslib (nice 15 on POSIX, the idle class on Windows); idle I/O class where there is an ionice (oslib has none yet). Whatever is refused is skipped."""
-    oslib.lower_priority(15)
-    with contextlib.suppress(OSError):
-        if shutil.which("ionice"):
-            subprocess.run(["ionice", "-c3", "-p", str(os.getpid())], check=False, capture_output=True)
 
 
 def candidates(roots, exts):
@@ -52,7 +32,8 @@ def main():
     a = ap.parse_args()
     roots = a.root or settings.source_roots()
     exts = {e if e.startswith(".") else "." + e for e in a.ext.lower().split(",")}
-    lower_priority()
+    # nice 15 and the idle I/O class (Windows: background mode); whatever is refused is skipped
+    oslib.lower_priority(15, io=True)
     from sqlalchemy import select
     from strata_python.db import (
         connect,
@@ -89,7 +70,7 @@ def main():
             if hit and (hit[0], hit[1].replace(os.sep, "/"), st.st_size, st.st_mtime_ns) in known:
                 continue
             try:
-                todo.append(dict(path=path, sha256=sha256_of(path), size=st.st_size, mtime_ns=st.st_mtime_ns))
+                todo.append(dict(path=path, sha256=files.sha256_hex(path), size=st.st_size, mtime_ns=st.st_mtime_ns))
             except OSError as e:
                 print("skip", path, e, file=sys.stderr)
                 continue

@@ -22,7 +22,6 @@ import json
 import math
 import os
 import re
-import time
 
 import cv2
 import numpy as np
@@ -790,6 +789,63 @@ def find_existing(pid, iid, variant=None, stages=None, preset=None, options=None
     return key, next((g for g in item["variants"] if g["kind"] == "generated" and g.get("key") == key), None)
 
 
+STAGE_WORDS = dict(
+    develop="Developing",
+    level="Levelling",
+    resize="Resizing",
+    sharpen="Sharpening",
+    look="Applying the look",
+    encode="Encoding",
+)
+
+
+def run_stages(state, st, iid, vid, folder, base, on_stage=None):
+    """Run the stages on `state` as a strata_python.workflow pipeline: each stage needs the one before (a failed stage stops the rest and is raised), reports its
+    progress to the job running it (`tasks.report_progress`: 'Sharpening', 4 of 6) and is timed. The last stage's key is the picture's own (`stage_key`), the
+    others' are it with their name. The records stay in memory (the picture's sidecar is the lasting record) and hand the working picture along as it is
+    (`json=False`). -> the stages' records, in order."""
+    from strata_python.workflow import MemoryStore, Pipeline, step
+
+    runners = dict(develop=run_develop, look=run_look, level=run_level, resize=run_resize, sharpen=run_sharpen)
+    index = {s["stage"]: i for i, s in enumerate(st)}
+
+    def stage(s):
+        p = {k: val for k, val in s.items() if k != "stage"}
+
+        def run(ctx):
+            a0 = gpu.allocations()
+            if s["stage"] == "encode":
+                os.makedirs(folder, exist_ok=True)
+                run_encode(state, p, base)
+            else:
+                runners[s["stage"]](state, p)
+            a1 = gpu.allocations()
+            ctx.measure(gpu=None if a0 is None or a1 is None else a1 > a0)
+            if on_stage:
+                on_stage(s["stage"], state)
+
+        i = index[s["stage"]]
+        return step(
+            s["stage"],
+            run,
+            version=version(s["stage"]),
+            needs=(st[i - 1]["stage"],) if i else (),
+            label=STAGE_WORDS.get(s["stage"], s["stage"]),
+        )
+
+    picture = stage_key(iid, vid, st)
+    last = st[-1]["stage"]
+    flow = Pipeline(
+        "generate",
+        [stage(s) for s in st],
+        key=lambda pipeline, s, inputs, needs: picture if s.name == last else f"{picture}:{s.name}",
+        json=False,
+    )
+    store = MemoryStore()
+    flow.advance(store, iid, {}, state)
+    return [store.load(iid)[name] for name in flow.names]
+
+
 def generate(pid, iid, variant=None, preset=None, options=None, stages=None, progress=None, on_stage=None):
     """Run a pipeline on a source variant and return the record of the new generated variant (`key`, `file`, `stages`, ...; `existing` True if these exact settings had been generated before, in which case nothing is done). `progress(text)` is called as the steps go; `on_stage(name, state)` after each stage (scripts/build_report.py takes the picture as it is at every stage)."""
     say = progress or (lambda t: None)
@@ -804,29 +860,10 @@ def generate(pid, iid, variant=None, preset=None, options=None, stages=None, pro
         if r is not None:
             return dict(r, existing=True)
     state = State(pid, iid, item, v, say)
-    runners = dict(develop=run_develop, look=run_look, level=run_level, resize=run_resize, sharpen=run_sharpen)
-    timing = state.rec[
-        "timing"
-    ] = []  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
-    for s in st:
-        p = {k: val for k, val in s.items() if k != "stage"}
-        t0 = time.perf_counter()
-        a0 = gpu.allocations()
-        if s["stage"] == "encode":
-            os.makedirs(d, exist_ok=True)
-            run_encode(state, p, base)
-        else:
-            runners[s["stage"]](state, p)
-        a1 = gpu.allocations()
-        timing.append(
-            dict(
-                stage=s["stage"],
-                seconds=round(time.perf_counter() - t0, 2),
-                gpu=None if a0 is None or a1 is None else a1 > a0,
-            )
-        )
-        if on_stage:
-            on_stage(s["stage"], state)
+    state.rec["timing"] = [
+        dict(stage=r.stage, seconds=round(r.elapsed_s, 2), gpu=r.metrics.get("gpu"))
+        for r in run_stages(state, st, iid, v["id"], d, base, on_stage)
+    ]  # per stage: seconds, and whether the card was used (gpu.allocations went up; None: cannot tell)
     rec = dict(
         state.rec,
         version=1,

@@ -3113,13 +3113,8 @@ wheels = [
 ]
 
 [[package]]
-name = "strata-models-client"
-version = "0.1.0"
-source = { git = "https://github.com/jburnhams/strata-models?subdirectory=client#00ccb63b1b4245920b172ca912404e78ba862ff1" }
-
-[[package]]
 name = "strata-python"
-version = "0.2.1"
+version = "0.2.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -3128,9 +3123,9 @@ dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/62/a4/4b0e35cc7821087b892a2fd42a64634cc842be6dc332a09e5d43cf62596f/strata_python-0.2.1.tar.gz", hash = "sha256:c97eacdadd5485f121ffa32cb78f4f314c39a83bf856e41e52a6bbed312b36e4", size = 72309, upload-time = "2026-11-14T17:50:32.813Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/32/0afcb0ae660f74dbd0e4e96bf02d7783cd92f9dfcdd564bef9925d86b730/strata_python-0.2.17.tar.gz", hash = "sha256:707d329190fb5e754e738bb0493a30ebea120ea43732e1ceb8b58a51679a9112", size = 302725, upload-time = "2026-11-24T11:28:53.841Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/78/d0f3d1ebaa1b06570a57ab0f9d280d7cba89d07cfe7207bfcb185f165017/strata_python-0.2.1-py3-none-any.whl", hash = "sha256:b89b31bd33248ab3db8b0d4dce33d8b51c5e95ded2ae6e270359e94c4ecebff1", size = 59822, upload-time = "2026-11-14T17:50:31.338Z" },
+    { url = "https://files.pythonhosted.org/packages/be/3a/29bd02b8e919dfe31d18f021cacc0ad6126f1864006072bf89313914bb04/strata_python-0.2.17-py3-none-any.whl", hash = "sha256:9133c8bba645b5f6fab337c3af4d6f424ba2745146286d7f179b71a3f64790d5", size = 213134, upload-time = "2026-11-24T11:28:52.253Z" },
 ]
 
 [package.optional-dependencies]
@@ -3170,7 +3165,6 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "strata-models-client" },
     { name = "strata-python", extra = ["db"] },
     { name = "tifffile", version = "2026.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "tifffile", version = "2026.11.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -3204,8 +3198,7 @@ requires-dist = [
     { name = "rawpy", specifier = ">=0.25" },
     { name = "scikit-learn", specifier = ">=1.6" },
     { name = "scipy", specifier = ">=1.14" },
-    { name = "strata-models-client", git = "https://github.com/jburnhams/strata-models?subdirectory=client" },
-    { name = "strata-python", extras = ["db"], specifier = ">=0.2.1,<0.3" },
+    { name = "strata-python", extras = ["db"], specifier = ">=0.2.17,<0.3" },
     { name = "tifffile" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "xgboost", specifier = ">=3.0" },

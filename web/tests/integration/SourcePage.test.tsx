@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { format } from 'strata-react'
 import { open } from '../utils/render'
-import { mock, server } from '../utils/server'
+import { mock, server, task } from '../utils/server'
 
 const pictures = async () => within(await screen.findByRole('list', { name: 'Pictures' }))
 
@@ -47,8 +47,9 @@ describe('auto-generate', () => {
     const go = await screen.findByRole('button', { name: 'Generate 3 missing' })
     await userEvent.click(go)
     await waitFor(() => expect(mock.applies).toBe(1))
-    expect(await screen.findByText('Made 3 of 3.')).toBeInTheDocument()
-    expect(screen.getByText('Generated')).toBeInTheDocument()
+    expect(await screen.findByText('Generated')).toBeInTheDocument()
+    expect(screen.getAllByText('Made 3 of 3.')).toHaveLength(2) // the job's status, and the toast that says it finished
+    expect(screen.getByText('Auto-generate finished')).toBeInTheDocument()
   })
 
   it('leaves the rules of other folders as they are, and takes a pipeline off again', async () => {
@@ -68,10 +69,11 @@ describe('auto-generate', () => {
   })
 
   it('shows a running job with its progress, and stops it', async () => {
-    let state = 'running'
+    let state: 'running' | 'cancelled' = 'running'
+    const progress = { done: 1, total: 3, text: 'A_2' }
     server.use(
-      http.get('/api/project/apply', () => HttpResponse.json(state === 'running' ? { state, done: 1, total: 3, text: 'A_2', failed: [] } : { state, done: 1, total: 3, failed: [] })),
-      http.delete('/api/project/apply', () => { state = 'stopped'; return HttpResponse.json({ state: 'stopped' }) }),
+      http.get('/api/project/apply', () => HttpResponse.json(task('apply', state, { progress, result: state === 'cancelled' ? { done: 1, total: 3, failed: [], workers: 2 } : null }))),
+      http.delete('/api/project/apply', () => { state = 'cancelled'; return HttpResponse.json(task('apply', 'running', { progress })) }),
     )
     open('/p/demo/s/abcd1234')
     expect(await screen.findByText('1 of 3: A_2')).toBeInTheDocument()
@@ -81,7 +83,7 @@ describe('auto-generate', () => {
   })
 
   it('names each picture that failed, with its reason', async () => {
-    server.use(http.get('/api/project/apply', () => HttpResponse.json({ state: 'done', done: 2, total: 3, failed: [['abcd1234~A_2', 'raw is truncated']] })))
+    server.use(http.get('/api/project/apply', () => HttpResponse.json(task('apply', 'done', { result: { done: 2, total: 3, failed: [['abcd1234~A_2', 'raw is truncated']], workers: 2 } }))))
     open('/p/demo/s/abcd1234')
     expect(await screen.findByText('Made 2 of 3; 1 failed.')).toBeInTheDocument()
     expect(within(screen.getByRole('list', { name: 'Failures' })).getByText(/A_2/)).toBeInTheDocument()

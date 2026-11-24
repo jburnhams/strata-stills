@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { BrowsePicture } from '../../src/api'
 import { thumbUrl } from '../../src/api'
-import { ancestorKeys, groupPictures, shownFrom, sortPictures, thumbSources, typeOf } from '../../src/browse'
+import { sortRows } from 'strata-react'
+import { ancestorKeys, groupOf, shownFrom, takenAt, thumbPx, thumbSources, typeOf } from '../../src/browse'
 import { href } from '../../src/route'
 import { folderName } from '../../src/components/BrowserPage'
 
@@ -13,20 +14,22 @@ const rows = [pic('DSC10', '2019-03-02T10:30:00Z'), pic('DSC9', '2019-03-02T11:0
 
 describe('the Browser view', () => {
   it('sorts names naturally and times with the unknown last', () => {
-    expect(sortPictures(rows, 'name').map(p => p.stem)).toEqual(['DSC9', 'DSC10', 'DSC100'])
-    expect(sortPictures(rows, 'name-desc').map(p => p.stem)).toEqual(['DSC100', 'DSC10', 'DSC9'])
-    expect(sortPictures(rows, 'time').map(p => p.stem)).toEqual(['DSC10', 'DSC9', 'DSC100'])
-    expect(sortPictures(rows, 'time-desc').map(p => p.stem)).toEqual(['DSC9', 'DSC10', 'DSC100'])
+    expect(sortRows(rows, p => p.stem).map(p => p.stem)).toEqual(['DSC9', 'DSC10', 'DSC100'])
+    expect(sortRows(rows, takenAt).map(p => p.stem)).toEqual(['DSC10', 'DSC9', 'DSC100'])
+    expect(sortRows(rows, takenAt, true).map(p => p.stem)).toEqual(['DSC9', 'DSC10', 'DSC100'])
   })
 
-  it('groups by type, project and hour, in the order the pictures come', () => {
+  it('names the group of each picture by type, project, hour and day', () => {
     expect(rows.map(typeOf)).toEqual(['Raw + JPEG', 'Raw', 'JPEG'])
-    expect(groupPictures(rows, 'none')).toHaveLength(1)
-    expect(groupPictures(rows, 'project').map(g => [g.label, g.rows.length])).toEqual([['In no project', 2], ['In trip', 1]])
-    const hours = groupPictures(rows, 'hour')
-    expect(hours).toHaveLength(3)
-    expect(hours[2].label).toBe('No time')
-    expect(groupPictures(rows, 'day').map(g => g.rows.length)).toEqual([2, 1])
+    expect(rows.map(p => groupOf(p, 'type'))).toEqual(['Raw + JPEG', 'Raw', 'JPEG'])
+    expect(rows.map(p => groupOf(p, 'project'))).toEqual(['In no project', 'In no project', 'In trip'])
+    expect(new Set(rows.map(p => groupOf(p, 'hour'))).size).toBe(3)
+    expect(groupOf(rows[2], 'hour')).toBe('No time')
+    expect(groupOf(rows[0], 'day')).toBe(groupOf(rows[1], 'day'))
+  })
+
+  it('asks the server for a thumbnail twice the tile, in the sizes it keeps', () => {
+    expect([64, 80, 81, 160, 161, 400].map(thumbPx)).toEqual([160, 160, 320, 320, 640, 640])
   })
 
   it('tries the best develop first, or the camera picture first', () => {

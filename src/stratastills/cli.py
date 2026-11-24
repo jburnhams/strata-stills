@@ -1,7 +1,6 @@
 """stratastills command line: `doctor` checks the environment, `scan` lists the shots in a folder and what is known of each."""
 
 import argparse
-import importlib
 import json
 import shutil
 import sys
@@ -10,61 +9,57 @@ from strata_python import cli as strata_cli
 
 from stratastills import __version__, ingest, meta, projects, settings
 
-CHECKS = (
-    ("numpy", "numpy"),
-    ("scipy", "scipy"),
+IMPORTS = (
+    "numpy",
+    "scipy",
     ("opencv", "cv2"),
     ("pillow", "PIL"),
     ("rawpy (DNG decoding)", "rawpy"),
     ("pyyaml", "yaml"),
-    ("loguru", "loguru"),
+    "loguru",
+    strata_cli.Module("torch (the GPU path and the detector models; scripts/setup_torch.py)", "torch", optional=True),
 )
+HINT = "uv sync (scripts/setup_env)"
 
 
-def doctor(args):
-    ok = True
-    print(f"stratastills {__version__}, python {sys.version.split()[0]}")
-    for label, mod in CHECKS:
-        try:
-            m = importlib.import_module(mod)
-            print(f"  ok       {label} {getattr(m, '__version__', '')}".rstrip())
-        except ImportError:
-            ok = False
-            print(f"  MISSING  {label}: uv sync (scripts/setup_env)")
-    have = bool(shutil.which("ffmpeg"))
-    print(
-        f"  {'ok      ' if have else 'missing '} ffmpeg"
-        + ("" if have else " (only needed for video; winget install Gyan.FFmpeg)")
-    )
+def check_ffmpeg():
+    have = shutil.which("ffmpeg")
+    return ("ok", have) if have else ("missing", "only needed for video; winget install Gyan.FFmpeg")
+
+
+def check_torch():
+    """Where the pixel work runs: the GPU (and whether it runs a kernel there), or the CPU. `slow` when cuDNN is off; `broken` (fails the run) when torch sees a card it cannot run on."""
     try:
         import torch
-
-        from stratastills import gpu
-
-        if gpu.available():
-            d = gpu.dev()
-            name = torch.cuda.get_device_name(0) if d.type == "cuda" else "Apple silicon (MPS)"
-            try:
-                x = torch.ones(64, 64, device=d)
-                float((x @ x).sum())
-                print(f"  ok       torch {torch.__version__}: the pixel work runs on the GPU: {name}")
-                if d.type == "cuda" and not torch.backends.cudnn.enabled:
-                    print(
-                        "  SLOW     cuDNN does not work on this card (turned off for the run): convolutions, the learned denoise above all, take 3 times as long; python scripts/setup_torch.py repairs a clashing cuDNN or picks the newest torch the card supports"
-                    )
-            except Exception as e:
-                ok = False
-                print(
-                    f"  BROKEN   torch {torch.__version__} sees {name} but cannot run a kernel on it ({str(e).splitlines()[0][:90]}): install the build that includes this card (a Pascal GTX 10xx needs the cu126 wheels, see README), or set STRATASTILLS_GPU=0"
-                )
-        else:
-            print(
-                f"  ok       torch {torch.__version__}: no CUDA or MPS device (or STRATASTILLS_GPU=0): the pixel work runs on the CPU (slower, same result)"
-            )
     except ImportError:
-        print(
-            "  missing  torch (optional: needed for the GPU path and the detector models; pip install torch, see README)"
+        return "ok", "on the CPU (no torch: the NumPy/OpenCV path, same result)"
+
+    from stratastills import gpu
+
+    if not gpu.available():
+        return (
+            "ok",
+            f"on the CPU, torch {torch.__version__}: no CUDA or MPS device (or STRATASTILLS_GPU=0); slower, same result",
         )
+    d = gpu.dev()
+    name = torch.cuda.get_device_name(0) if d.type == "cuda" else "Apple silicon (MPS)"
+    try:
+        x = torch.ones(64, 64, device=d)
+        float((x @ x).sum())
+    except Exception as e:
+        return (
+            "broken",
+            f"torch {torch.__version__} sees {name} but cannot run a kernel on it ({str(e).splitlines()[0][:90]}): install the build that includes this card (a Pascal GTX 10xx needs the cu126 wheels, see README), or set STRATASTILLS_GPU=0",
+        )
+    if d.type == "cuda" and not torch.backends.cudnn.enabled:
+        return (
+            "slow",
+            f"on the GPU, torch {torch.__version__}, {name}, but cuDNN does not work on this card (turned off for the run): convolutions, the learned denoise above all, take 3 times as long; python scripts/setup_torch.py repairs a clashing cuDNN or picks the newest torch the card supports",
+        )
+    return "ok", f"on the GPU, torch {torch.__version__}: {name}"
+
+
+def check_denoise():
     from stratastills import denoise_ai
 
     try:
@@ -74,20 +69,32 @@ def doctor(args):
     except ImportError:
         have_net = False
     if denoise_ai.available() and have_net:
-        print("  ok       learned denoise (Real-ESRGAN weights, spandrel)")
-    else:
-        print(
-            f'  missing  learned denoise ({"weights" if have_net else "spandrel"}): high-ISO pictures get the classical clean-up only; scripts/setup_env installs it, or pip install spandrel==0.4.2 einops && python -c "from stratastills import denoise_ai; denoise_ai.fetch()"'
-        )
+        return "ok", "Real-ESRGAN weights, spandrel"
+    return (
+        "missing",
+        f'{"weights" if have_net else "spandrel"}: high-ISO pictures get the classical clean-up only; scripts/setup_env installs it, or pip install spandrel==0.4.2 einops && python -c "from stratastills import denoise_ai; denoise_ai.fetch()"',
+    )
+
+
+def check_external():
     from stratastills import externaltools
 
     gone = externaltools.missing()
-    print(
-        "  ok       darktable and RawTherapee (for the comparison report and scripts/render_external.py)"
-        if not gone
-        else f"  missing  {', '.join(gone)}: needed for the comparison report and scripts/render_external.py (they stop without them); {externaltools.HINT.get(sys.platform if sys.platform in externaltools.HINT else 'linux')}"
+    if not gone:
+        return "ok", "for the comparison report and scripts/render_external.py"
+    return (
+        "missing",
+        f"{', '.join(gone)}: needed for the comparison report and scripts/render_external.py (they stop without them); {externaltools.HINT.get(sys.platform if sys.platform in externaltools.HINT else 'linux')}",
     )
-    return 0 if ok else 1
+
+
+# strata-python's doctor rows: the imports, then what an import cannot tell. Only a missing import or a GPU that cannot run a kernel fails the run; the rest is optional.
+CHECKS = (
+    strata_cli.Check("ffmpeg", check_ffmpeg, optional=True),
+    strata_cli.Check("pixel work", check_torch),
+    strata_cli.Check("learned denoise", check_denoise, optional=True),
+    strata_cli.Check("darktable and RawTherapee", check_external, optional=True),
+)
 
 
 def scan(args):
@@ -149,18 +156,6 @@ def cmd_source(args):
     return 0
 
 
-def cmd_set(args):
-    if args.value is None:
-        print(f"{args.key} = {settings.all_settings().get(args.key)}")
-        return 0
-    try:
-        settings.save({args.key: None if args.value == "default" else args.value})
-    except KeyError as e:
-        sys.exit(str(e))
-    print(f"{args.key} = {settings.all_settings()[args.key]}")
-    return 0
-
-
 def serve(host, port):
     from stratastills.server import app  # FastAPI and the pipeline load only for `serve`
 
@@ -181,17 +176,13 @@ def main(argv=None):
     n.add_argument("folder")
     n.add_argument("--remove", action="store_true")
     n.set_defaults(fn=cmd_source)
-    n = sub.add_parser(
-        "set",
-        help='show or change a setting (projects_dir, source_roots: folders separated by the path separator, ":" on Linux and ";" on Windows); value "default" resets it',
-    )
-    n.add_argument("key")
-    n.add_argument("value", nargs="?")
-    n.set_defaults(fn=cmd_set)
+    strata_cli.add_set(
+        sub, settings.SETTINGS
+    )  # `set KEY [VALUE]`; "default" resets it; a list (source_roots) is joined by the path separator, ":" on Linux and ";" on Windows
     strata_cli.add_serve(
         sub, serve, default_port=8361
     )  # `serve [--host] [--port]`: the web app, opens on the list of projects
-    sub.add_parser("doctor", help="check the environment").set_defaults(fn=doctor)
+    strata_cli.add_doctor(sub, "stratastills", __version__, IMPORTS, checks=CHECKS, hint=HINT)
     s = sub.add_parser("scan", help="list the shots in a folder")
     s.add_argument("folder")
     s.add_argument("--recursive", action="store_true")

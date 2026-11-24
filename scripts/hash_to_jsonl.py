@@ -3,33 +3,12 @@
 The folders are made absolute (the importers compare with absolute source roots). Resumable: paths already in OUT are skipped. The extension test is case-insensitive."""
 
 import argparse
-import hashlib
 import json
 import os
-import shutil
-import subprocess
 import sys
 
-
-def lower_priority():
-    try:
-        if hasattr(os, "nice"):
-            os.nice(15)
-    except (OSError, AttributeError):
-        pass
-    try:
-        if shutil.which("ionice"):
-            subprocess.run(["ionice", "-c3", "-p", str(os.getpid())], check=False, capture_output=True)
-    except OSError:
-        pass
-
-
-def sha256_of(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while b := f.read(1 << 22):
-            h.update(b)
-    return h.hexdigest()
+from strata_python import files as sfiles
+from strata_python import oslib
 
 
 def files(folders, exts, recursive):
@@ -58,7 +37,8 @@ def main():
                 done.add(json.loads(ln)["path"])
             except (ValueError, KeyError):
                 pass
-    lower_priority()
+    # nice 15 and the idle I/O class (Windows: background mode); whatever is refused is skipped
+    oslib.lower_priority(15, io=True)
     n = 0
     with open(a.out, "a", encoding="utf8") as o:
         for p in files(a.folders, exts, a.recursive):
@@ -66,7 +46,7 @@ def main():
                 continue
             try:
                 st = os.stat(p)
-                sha = sha256_of(p)
+                sha = sfiles.sha256_hex(p)
             except OSError as e:
                 print("skip", p, e, file=sys.stderr)
                 continue

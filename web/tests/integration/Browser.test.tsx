@@ -14,7 +14,7 @@ describe('the Browser', () => {
     await userEvent.click(await within(tree).findByText('2019-03-02'))
     const grid = await screen.findByRole('grid', { name: 'Pictures' })
     expect(within(grid).getAllByRole('row')).toHaveLength(2)
-    expect(within(grid).getByRole('img', { name: 'DSC00001' })).toHaveAttribute('src', '/api/browse/thumb?folder=raw%2F2019-03-02&stem=DSC00001&source=lightroom&px=320')
+    expect(within(grid).getByRole('img', { name: 'DSC00001' })).toHaveAttribute('src', '/api/browse/thumb?folder=raw%2F2019-03-02&stem=DSC00001&source=lightroom&px=640')
     expect(screen.getByText('In trip')).toBeInTheDocument()
   })
 
@@ -51,19 +51,33 @@ describe('the Browser', () => {
     expect(await screen.findByText('No pictures here')).toBeInTheDocument()
   })
 
-  it('sorts, groups, sizes and picks the thumbnail source from the view bar, kept in the address', async () => {
+  it('sorts, groups, filters and picks the thumbnail source from the view bar', async () => {
     open('/browse?folder=raw/2019-03-02')
+    const grid = () => screen.getByRole('grid', { name: 'Pictures' })
     await screen.findByRole('grid', { name: 'Pictures' })
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: /Sort/ }), 'name-desc')
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: /Group/ }), 'type')
-    expect(await screen.findByRole('grid', { name: 'Pictures, Raw + JPEG' })).toBeInTheDocument()
-    expect(screen.getAllByRole('heading', { name: /^Raw\b/ })).toHaveLength(2)
-    for (const v of ['time', 'time-desc', 'name']) await userEvent.selectOptions(screen.getByRole('combobox', { name: /Sort/ }), v)
-    for (const v of ['hour', 'day', 'project']) await userEvent.selectOptions(screen.getByRole('combobox', { name: /Group/ }), v)
-    expect(screen.getByRole('grid', { name: 'Pictures, In no project' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('radio', { name: 'Small' }))
+    const stems = () => within(grid()).getAllByRole('img').map(i => i.getAttribute('alt'))
+    expect(stems()).toEqual(['DSC00001', 'DSC00002'])
+    await userEvent.click(screen.getByRole('button', { name: 'A to Z' }))
+    await waitFor(() => expect(stems()).toEqual(['DSC00002', 'DSC00001']))
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Sort by' }), 'taken')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Group by' }), 'type')
+    await waitFor(() => expect(within(grid()).getAllByText('Raw + JPEG')).toHaveLength(2)) // the group's heading and the tile's type
+    expect(within(grid()).getAllByText('Raw')).toHaveLength(2)
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Filter' }), 'DSC00002')
+    await waitFor(() => expect(stems()).toEqual(['DSC00002']))
     await userEvent.click(screen.getByRole('radio', { name: 'Camera preview' }))
-    expect(screen.getByRole('img', { name: 'DSC00001' })).toHaveAttribute('src', '/api/browse/thumb?folder=raw%2F2019-03-02&stem=DSC00001&source=embedded&px=160')
+    expect(screen.getByRole('img', { name: 'DSC00002' })).toHaveAttribute('src', '/api/browse/thumb?folder=raw%2F2019-03-02&stem=DSC00002&source=embedded&px=640')
+  })
+
+  it('ticks folders in the tree and adds them, a folder with sub-folders taking them all', async () => {
+    open('/browse')
+    const tree = await screen.findByRole('treegrid', { name: 'Folders' })
+    await userEvent.click(within(tree).getByRole('checkbox', { name: /raw/ }))
+    await userEvent.click(await screen.findByRole('button', { name: /^Add 2.folders/ }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.selectOptions(within(dialog).getByLabelText('Project'), 'demo')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add to project' }))
+    await waitFor(() => expect(browse.added).toEqual([{ project: 'demo', folders: ['raw', 'raw/2019-03-02'] }]))
   })
 
   it('adds the folder in view, and shows why an add failed', async () => {

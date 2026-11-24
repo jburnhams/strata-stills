@@ -150,7 +150,7 @@ def test_hash_to_jsonl_writes_absolute_paths(tmp_path, monkeypatch):
     (tmp_path / "d").mkdir()
     (tmp_path / "d" / "a.mp4").write_bytes(b"x")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(h2j, "lower_priority", lambda: None)
+    monkeypatch.setattr(h2j.oslib, "lower_priority", lambda *a, **k: None)
     monkeypatch.setattr("sys.argv", ["hash_to_jsonl.py", "out.jsonl", "d"])
     assert h2j.main() == 0
     assert os.path.isabs(json.loads(open(tmp_path / "out.jsonl").readline())["path"])
