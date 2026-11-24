@@ -18,12 +18,26 @@ export interface Preset { name: string; label: string; builtin: boolean; stages:
 export interface Options { look?: string; size?: string; format?: 'jpeg' | 'tiff'; quality?: number | 'auto'; level?: boolean; sharpen?: boolean; sharpen_amount?: number; highlight_contrast?: number; exposure?: 'auto' | 'camera' | 'match' | number }
 export interface GenerateBody { variant?: string | null; preset?: string | null; options?: Options | null; stages?: Stage[] | null }
 export interface GenerateCheck { key: string; exists: boolean; variant: string | null; stages: Stage[]; summary: string }
-export interface GenerateRecord { key: string; file: string; output: [number, number]; bytes: number; format: string; quality: number | null; summary: string; steps: string[]; existing?: boolean }
-export interface GenerateJob { state: 'idle' | 'running' | 'done' | 'failed' | 'exists'; text?: string; result?: GenerateRecord | null; error?: string | null; variant?: string }
+/** A job of the server's queue (strata-python's `Task`, jobs.py): generating a picture (`generate`) or applying a project's rules (`apply`). `domain` is what it is about:
+ * `<project>/<item>` or `<project>`. `progress` is the line the job reports (a stage, or pictures done of the total). */
+export interface Task<R = unknown> {
+  id: number; kind: string; state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; created_at: string; started_at?: string | null; finished_at?: string | null
+  error?: string | null; result?: R | null; progress?: { done: number; total: number | null; text: string; stage?: string | null } | null; attempts?: number; domain?: string | null
+}
+export type Idle = { state: 'idle' }
+export interface JobsPage { items: Task[]; next: string | null }
+/** What a generate job made: the picture's key (its variant is `gen-<key>`). */
+export interface GenerateResult { key: string; existing: boolean; summary: string | null }
+/** Starting to generate: the job, or the variant these settings made before. */
+export type GenerateJob = Task<GenerateResult> | { state: 'exists'; variant: string }
+/** What an apply job made: pictures done and failed ([item, reason]) of the total. */
+export interface ApplyResult { done: number; failed: [string, string][]; total: number; workers: number }
+export type ApplyJob = Task<ApplyResult>
+/** A job still to finish: queued or running. */
+export const active = (j: { state: string } | null | undefined) => j?.state === 'queued' || j?.state === 'running'
 export interface FullRes { state: 'ready' | 'running' | 'failed' | 'idle'; text: string }
 export interface Rule { source: string; pipeline: string; variant?: string }
 export interface Rules { rules: Rule[]; pending: number }
-export interface ApplyJob { state: 'idle' | 'running' | 'done' | 'stopped' | 'failed'; done?: number; total?: number; text?: string; failed?: [string, string][] }
 export interface Transform { id: string; label: string }
 /** The look's versions with their arena rating (Bradley-Terry, null before any votes), and which one 'best' is now. */
 export interface LookVersions { best: string; versions: { name: string; rating: number | null; votes: number }[] }
@@ -102,16 +116,20 @@ export const api = {
   deletePipeline: (name: string) => req<Preset[]>('/api/pipeline?name=' + encodeURIComponent(name), { method: 'DELETE' }),
   checkGenerate: (id: string, item: string, b: GenerateBody) => req<GenerateCheck>('/api/project/generate/check' + qi(id, item), send('POST', b)),
   generate: (id: string, item: string, b: GenerateBody) => req<GenerateJob>('/api/project/generate' + qi(id, item), send('POST', b)),
-  generateStatus: (id: string, item: string) => req<GenerateJob>('/api/project/generate' + qi(id, item)),
+  generateStatus: (id: string, item: string) => req<Task<GenerateResult> | Idle>('/api/project/generate' + qi(id, item)),
   fullres: (id: string, item: string, variant: string) => req<FullRes>('/api/project/fullres' + qi(id, item) + '&variant=' + encodeURIComponent(variant)),
   rules: (id: string) => req<Rules>('/api/project/rules' + q(id)),
   setRules: (id: string, rules: Rule[]) => req<Rules>('/api/project/rules' + q(id), send('PUT', { rules })),
   applyRules: (id: string) => req<ApplyJob>('/api/project/apply' + q(id), { method: 'POST' }),
-  applyStatus: (id: string) => req<ApplyJob>('/api/project/apply' + q(id)),
+  applyStatus: (id: string) => req<ApplyJob | Idle>('/api/project/apply' + q(id)),
   browseFolders: (folder: string | null) => req<BrowseFolder[]>('/api/browse/folders' + (folder ? '?folder=' + encodeURIComponent(folder) : '')),
   browsePictures: (folder: string) => req<BrowseListing>('/api/browse/pictures?folder=' + encodeURIComponent(folder)),
   browseAdd: (b: BrowseAdd) => req<BrowseAdded>('/api/browse/add', send('POST', b)),
-  stopApply: (id: string) => req<ApplyJob>('/api/project/apply' + q(id), { method: 'DELETE' }),
+  stopApply: (id: string) => req<ApplyJob | Idle>('/api/project/apply' + q(id), { method: 'DELETE' }),
+  // The queue's own routes (strata-python's tasks.web): every job, newest first; cancel and run again.
+  jobs: () => req<JobsPage>('/api/jobs?limit=100'),
+  cancelJob: (id: number | string) => req<Task>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
+  retryJob: (id: number | string) => req<Task>(`/api/jobs/${id}/retry`, { method: 'POST' }),
 }
 
 /** URL of a picture: an item's variant with a transform, at most `px` on the long side. */

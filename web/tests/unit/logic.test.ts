@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { href, sourceOf } from '../../src/route'
-import { alertImageUrl, arenaImageUrl, flaggedImageUrl, imageUrl } from '../../src/api'
+import { alertImageUrl, arenaImageUrl, flaggedImageUrl, imageUrl, type ApplyJob } from '../../src/api'
+import { describeJob } from '../../src/components/JobsPage'
 import { describe as say } from '../../src/components/ItemPage'
 import { arenaQuery } from '../../src/components/ArenaPage'
 import { jobSummary } from '../../src/components/AutoGenerate'
@@ -33,13 +34,23 @@ describe('arena and flags addresses', () => {
 
 describe('words', () => {
   it('says how an auto-generate run stands', () => {
-    expect(jobSummary({ state: 'running', done: 1, total: 3, text: 'A_1' })).toBe('1 of 3: A_1')
-    expect(jobSummary({ state: 'running' })).toBe('0 of …')
-    expect(jobSummary({ state: 'stopped', done: 1, total: 3 })).toBe('Stopped after 1 of 3.')
-    expect(jobSummary({ state: 'stopped' })).toBe('Stopped after 0 of 0.')
-    expect(jobSummary({ state: 'done', done: 3, total: 3, failed: [] })).toBe('Made 3 of 3.')
-    expect(jobSummary({ state: 'done', done: 2, total: 3, failed: [['x~A', 'broken']] })).toBe('Made 2 of 3; 1 failed.')
-    expect(jobSummary({ state: 'done' })).toBe('Made 0 of 0.')
+    const t = (state: ApplyJob['state'], more: Partial<ApplyJob> = {}): ApplyJob => ({ id: 1, kind: 'apply', state, created_at: '2026-11-24T10:00:00Z', ...more })
+    expect(jobSummary(t('queued'))).toBe('Waiting for the jobs ahead of it.')
+    expect(jobSummary(t('running', { progress: { done: 1, total: 3, text: 'A_1' } }))).toBe('1 of 3: A_1')
+    expect(jobSummary(t('running'))).toBe('0 of …')
+    expect(jobSummary(t('cancelled', { progress: { done: 1, total: 3, text: 'stopped' } }))).toBe('Stopped after 1 of 3.')
+    expect(jobSummary(t('cancelled'))).toBe('Stopped after 0 of 0.')
+    expect(jobSummary(t('failed', { error: 'no pixels' }))).toBe('no pixels')
+    expect(jobSummary(t('done', { result: { done: 3, total: 3, failed: [], workers: 2 } }))).toBe('Made 3 of 3.')
+    expect(jobSummary(t('done', { result: { done: 2, total: 3, failed: [['x~A', 'broken']], workers: 2 } }))).toBe('Made 2 of 3; 1 failed.')
+    expect(jobSummary(t('done'))).toBe('Made 0 of 0.')
+  })
+  it('names a job by what it makes', () => {
+    expect(describeJob({ kind: 'generate', domain: '2025/drone/A_1' })).toBe('Generate A_1 in 2025/drone')
+    expect(describeJob({ kind: 'generate', domain: 'demo/abcd1234~A_1' })).toBe('Generate A_1 in demo')
+    expect(describeJob({ kind: 'apply', domain: 'demo' })).toBe('Auto-generate demo')
+    expect(describeJob({ kind: 'apply', domain: null })).toBe('Auto-generate a project')
+    expect(describeJob({ kind: 'other', domain: null })).toBe('other')
   })
   it('says what a folder holds, leaving out what it has none of', () => {
     expect(holds({ id: 'a', path: 'p', reachable: true, stills: 2, panos: 1, videos: 1 })).toBe('2 stills, 1 panoramas, 1 videos')

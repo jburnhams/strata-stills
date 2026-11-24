@@ -1,5 +1,5 @@
 // The app's addresses. Hash routing (React Router's createHashRouter): the server serves one page at its root, behind a reverse proxy at a path too, so the route lives after the '#':
-// #/ (projects), #/p/<project> (its sources), #/p/<project>/s/<source> (contents of a source), #/p/<project>/i/<item> (one item), #/arena, #/alerts, #/flagged, #/browse?folder=<key> (the Browser).
+// #/ (projects), #/p/<project> (its sources), #/p/<project>/s/<source> (contents of a source), #/p/<project>/i/<item> (one item), #/arena, #/alerts, #/flagged, #/jobs (the server's queue), #/browse?folder=<key> (the Browser).
 // Every id is URI-encoded (project ids contain slashes); these are the paths given to React Router's Link and navigate, which add the '#'.
 import { useParams } from 'react-router'
 
@@ -15,6 +15,7 @@ export const href = {
   arena: () => '/arena',
   alerts: () => '/alerts',
   flagged: () => '/flagged',
+  jobs: () => '/jobs',
   browse: (folder?: string) => '/browse' + (folder ? '?folder=' + enc(folder) : ''),
 }
 

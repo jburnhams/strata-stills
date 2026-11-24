@@ -12,13 +12,14 @@ from stratastills.server.app import create_app
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATASTILLS_PROJECTS", str(tmp_path / "projects"))
     monkeypatch.setenv("STRATASTILLS_HOME", str(tmp_path / "home"))
-    return TestClient(create_app())
+    with TestClient(create_app()) as c:  # the lifespan runs the job worker
+        yield c
 
 
 def wait(client, url, **params):
     for _ in range(300):
         j = client.get(url, params=params).json()
-        if j["state"] != "running":
+        if j["state"] not in ("queued", "running"):
             return j
         time.sleep(0.1)
     raise AssertionError("still running")
@@ -67,7 +68,7 @@ def test_pipelines_generate_check_rules_and_download(client, tmp_path):
     assert (
         client.post("/api/project/generate/check", params=q, json=dict(options=dict(format="bmp"))).status_code == 400
     )
-    assert client.post("/api/project/generate", params=q, json=body).json()["state"] in ("running", "done")
+    assert client.post("/api/project/generate", params=q, json=body).json()["state"] in ("queued", "running", "done")
     j = wait(client, "/api/project/generate", **q)
     assert j["state"] == "done", j
 
@@ -100,12 +101,12 @@ def test_pipelines_generate_check_rules_and_download(client, tmp_path):
     )
     assert client.get("/api/project/apply", params=dict(id="demo")).json()["state"] == "idle" and client.post(
         "/api/project/apply", params=dict(id="demo")
-    ).json()["state"] in ("running", "done")
+    ).json()["state"] in ("queued", "running", "done")
     j = wait(client, "/api/project/apply", id="demo")
     assert (
         j["state"] == "done"
-        and j["done"] == 1
-        and j["failed"] == []
+        and j["result"]["done"] == 1
+        and j["result"]["failed"] == []
         and client.get("/api/project/rules", params=dict(id="demo")).json()["pending"] == 0
     )
     assert client.delete("/api/project/apply", params=dict(id="demo")).json()["state"] == "done"

@@ -1,11 +1,12 @@
 // Generating a picture is running a pipeline preset on the item's source: one button, nothing to choose (the default preset is the automatic best).
 // Every setting is behind "Advanced" (a Disclosure, mounted only while open), laid over the preset. The result is a new variant of the item (listed with the others, comparable in the loupe);
 // the same settings twice find the first one, and the button says so. The server's generate/check says what will run, so this panel never repeats the preset logic.
-// Generating is a server job: useJob polls its status while it runs and reads the item again once when it ends.
+// Generating is a job of the server's queue (Jobs page): useJob polls the item's newest job while it is queued or running and reads the item again once when it ends;
+// its line is the stage it is at ('Sharpening', 4 of 6), which the server's pipeline reports.
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Alert, AsyncButton, Button, Checkbox, Disclosure, Field, Input, JobStatus, NativeSelect, useAsyncAction, useJob, useLoad } from 'strata-react'
-import { api, hasStage, stageValue, type Detail, type GenerateBody, type Options } from '../api'
+import { active, api, hasStage, stageValue, type Detail, type GenerateBody, type Options } from '../api'
 
 export const mp = (w: number, h: number) => (w * h / 1e6).toFixed(1) + ' MP'
 export const mb = (b: number) => (b / 1048576).toFixed(1) + ' MB'
@@ -28,18 +29,19 @@ export default function GeneratePanel({ project, item, variant, onGenerated, onS
   const [preset, setPreset] = useState('best'), [opts, setOpts] = useState<Options>({}), [custom, setCustom] = useState('4000'), [customMode, setCustomMode] = useState(false), [saveAs, setSaveAs] = useState('')
   useEffect(() => { setOpts({}); setCustomMode(false) }, [item])
   const body: GenerateBody = { variant, preset, options: Object.keys(opts).length ? opts : null }
-  const job = useJob({ queryKey: ['generate', project, item], queryFn: () => api.generateStatus(project, item), isRunning: j => j.state === 'running', every: 1500, invalidates: [['item', project, item], ['generate-check', project, item]] })
+  const job = useJob({ queryKey: ['generate', project, item], queryFn: () => api.generateStatus(project, item), isRunning: active, every: 1500, invalidates: [['item', project, item], ['generate-check', project, item]] })
   const check = useLoad({ queryKey: ['generate-check', project, item, JSON.stringify(body)], queryFn: () => api.checkGenerate(project, item, body), staleTime: 0 })
   // A job seen running here and then done: show what it made. A job already done when the page opened is not news.
   const sawRunning = useRef(false)
   useEffect(() => {
     if (job.status !== 'ready') return
-    if (job.data.state === 'running') sawRunning.current = true
-    else if (sawRunning.current) { sawRunning.current = false; if (job.data.state === 'done' && job.data.result) onGenerated('gen-' + job.data.result.key) }
+    const d = job.data
+    if (active(d)) sawRunning.current = true
+    else if (sawRunning.current) { sawRunning.current = false; if (d.state === 'done' && d.result) onGenerated('gen-' + d.result.key) }
   }, [job, onGenerated])
   const go = useAsyncAction(async () => {
     const j = await api.generate(project, item, body)
-    if (j.state === 'exists' && j.variant) { onShow(j.variant); return }
+    if (j.state === 'exists') { onShow(j.variant); return }
     client.setQueryData(['generate', project, item], j); job.poll()
   })
   const set = (o: Options) => setOpts(p => ({ ...p, ...o }))
@@ -64,9 +66,10 @@ export default function GeneratePanel({ project, item, variant, onGenerated, onS
           : <AsyncButton variant="default" disabled={job.running || !c} phase={job.running ? 'pending' : go.phase} error={go.error} labels={{ idle: 'Generate', pending: 'Generating…', done: 'Generated', error: 'Try again' }} onPress={() => void go.run()} />}
       </div>
       <p className="type-caption text-muted-foreground" data-testid="will-make">{c ? <>Will make: {c.summary}</> : 'Checking…'}{Object.keys(opts).length > 0 && presetLabel ? <> (changed from “{presetLabel}”)</> : null}</p>
-      {j && (j.state === 'running' || j.state === 'failed') && (
+      {j && j.state !== 'idle' && (active(j) || j.state === 'failed') && (
         <JobStatus label="Generate" running={job.running} words={{ running: 'Generating', finished: 'Generated', failed: 'Failed' }} failed={j.state === 'failed'}
-          summary={j.state === 'running' ? `${j.text ?? 'Working'}… (a 48 MP raw takes a minute or two)` : (j.error ?? 'Generating failed')} />
+          current={j.progress?.done} total={j.progress?.total ?? undefined}
+          summary={j.state === 'queued' ? 'Waiting for the jobs ahead of it' : active(j) ? `${j.progress?.text || 'Starting'}… (a 48 MP raw takes a minute or two)` : (j.error ?? 'Generating failed')} />
       )}
       {failure && <Alert tone="danger" announce>{failure}</Alert>}
 

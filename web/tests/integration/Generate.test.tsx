@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { open } from '../utils/render'
-import { generatedRecord, items, mock, presets, server } from '../utils/server'
+import { generatedRecord, items, mock, presets, server, task } from '../utils/server'
 
 const A1 = '/p/demo/i/abcd1234~A_1'
 const willMake = () => screen.getByTestId('will-make')
@@ -11,7 +11,7 @@ const advanced = async () => userEvent.click(await screen.findByRole('button', {
 
 describe('generate', () => {
   it('needs nothing chosen: the default preset, its summary and one button; the rest is behind Advanced', async () => {
-    server.use(http.get('/api/project/generate', () => HttpResponse.json(mock.generates.length ? { state: 'running', text: 'developing' } : { state: 'idle' })))
+    server.use(http.get('/api/project/generate', () => HttpResponse.json(mock.generates.length ? task('generate', 'running', { progress: { done: 1, total: 6, text: 'developing', stage: 'develop' } }) : { state: 'idle' })))
     open(A1)
     expect(await screen.findByText(/Contrast is half gone at about 2822 px across/)).toBeInTheDocument()
     await waitFor(() => expect(willMake()).toHaveTextContent('Will make: JPEG q90 · size auto · levelled · sharpened 3'))
@@ -20,7 +20,7 @@ describe('generate', () => {
     expect(screen.queryByRole('combobox', { name: 'Size' })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Generate' }))
     expect(mock.generates.at(-1)).toMatchObject({ variant: 'raw', preset: 'best', options: null })
-    expect(await screen.findByText(/developing… \(a 48 MP raw takes a minute or two\)/)).toBeInTheDocument()
+    expect((await screen.findAllByText(/developing… \(a 48 MP raw takes a minute or two\)/)).length).toBeGreaterThan(0)
   })
 
   it('shows the settings of the pipeline that will run, and sends only what was changed, laid over the preset', async () => {
@@ -88,7 +88,7 @@ describe('generate', () => {
   it('shows the new variant once the job it watched ends', async () => {
     let polls = 0
     server.use(
-      http.get('/api/project/generate', () => { if (!mock.generates.length) return HttpResponse.json({ state: 'idle' }); polls++; return HttpResponse.json(polls < 2 ? { state: 'running', text: 'developing' } : { state: 'done', result: generatedRecord }) }),
+      http.get('/api/project/generate', () => { if (!mock.generates.length) return HttpResponse.json({ state: 'idle' }); polls++; return HttpResponse.json(polls < 2 ? task('generate', 'running', { progress: { done: 1, total: 6, text: 'developing' } }) : task('generate', 'done', { result: generatedRecord })) }),
       http.get('/api/project/item', () => HttpResponse.json(polls >= 2 ? { ...items[0], variants: [...items[0].variants, { id: 'gen-abc123', label: 'Generated', path: 'x', kind: 'generated', ext: '.jpg' }] } : items[0])),
     )
     open(A1); await waitFor(() => expect(willMake()).toHaveTextContent('Will make'))
@@ -102,10 +102,16 @@ describe('generate', () => {
   })
 
   it('says why generating failed', async () => {
-    server.use(http.get('/api/project/generate', () => HttpResponse.json({ state: 'failed', error: 'out of memory' })))
+    server.use(http.get('/api/project/generate', () => HttpResponse.json(task('generate', 'failed', { error: 'out of memory' }))))
     open(A1)
     expect(await screen.findByText('out of memory')).toBeInTheDocument()
     expect(screen.getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('says a picture is waiting while other jobs run first', async () => {
+    server.use(http.get('/api/project/generate', () => HttpResponse.json(task('generate', 'queued'))))
+    open(A1)
+    expect(await screen.findByText('Waiting for the jobs ahead of it')).toBeInTheDocument()
   })
 
   it('says why a failed job gave no reason, and why starting one was refused', async () => {
