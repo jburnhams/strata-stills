@@ -21,7 +21,7 @@ import cv2
 from stratastills import images
 
 KIND, PRODUCER, VERSION = "vision_tags", "strata-models", "fields-v2+caption-v1"
-CALLS = (("photo-fields", "photo-fields-v2", 600), ("photo-caption", "photo-caption-v1", 1500))
+CALLS = (("photo-fields", "photo-fields-v2", 600), ("photo-caption", "photo-caption-v1", 3000))
 PX = 1024
 
 
