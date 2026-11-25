@@ -1,19 +1,17 @@
 """The person's learned look, for any picture: the pipeline's `look` stage and the arena's auto versions run this one code.
 
 A picture's look is predicted from its FEATURES (look/features.py: stats of the camera's preview, EXIF, the raw's metadata, what CLIP sees)
-and its FACES, by models trained on the person's Lightroom catalogue (scripts/lr_look.py, lr_tmodel.py, lr_ftarget.py,
+and its FACES, by models trained on the person's Lightroom catalogue (scripts/lr_look.py, lr_ftarget.py,
 lr_neutral_model.py, lr_face_first.py train them). The trained models are frozen into a BUNDLE (`settings.look_dir()`, made by
 scripts/export_look_bundle.py), so the app needs neither the catalogue nor the training data; the bundle is private (trained on the
 person's photos) and never in the repository.
 
 The versions (the arena's names), each applied to our neutral develop:
   auto1  the look model: tone curve through the predicted percentiles, Shadows/Highlights, Clarity, vignette, colour by predicted means
-  auto2  auto1 with the colour from the camera-trained transform model
-  auto3  auto2 with the face anchor (the largest face moved toward the predicted face of the final)
-  auto4  the network trained on our neutral -> the final, its whole transform (the person's typical edit when it would flatten the picture)
-  auto5  auto3 with its colour from that network
-  auto6  auto4, then face first (the main real face's skin toward the predicted skin)
-  auto7  auto5, then face first
+  auto5  auto1 with its colour from the network trained on our neutral -> the final, and the face anchor (the largest face moved toward the
+         predicted face of the final)
+  auto7  auto5, then face first (the main real face's skin toward the predicted skin)
+auto2, auto3, auto4 and auto6 lost to auto5 in the arena and were retired on 2026-11-25 (RETIRED): a stage saved with one of them makes `best`.
 Faces and CLIP come from the strata-models service (roles faces, face-kind, image-embed); without it a picture gets no faces and NaN
 for the CLIP columns (the models were trained to cope with missing values), and the stage says so in what it did."""
 
@@ -30,9 +28,11 @@ from stratastills.look import face_first as FF
 from stratastills.look import features as F
 
 VERSION = 1  # of the stage's code here; the bundle's manifest is part of version() too
-VARIANTS = ("auto1", "auto2", "auto3", "auto4", "auto5", "auto6", "auto7")
+VARIANTS = ("auto1", "auto5", "auto7")
+RETIRED = ("auto2", "auto3", "auto4", "auto6")
 DEFAULT = "best"  # the version the arena's votes rate highest now (`winner`)
-FALLBACK = "auto5"  # the winner when there are no ratings to go by (the arena's leader on 2026-11-14)
+FALLBACK = "auto5"  # the winner when no version has enough votes to go by (the arena's leader on 2026-11-25)
+MIN_VOTES = 60  # a version with fewer current votes is not a winner, however high its rating: auto7 was `best` on 11 votes (range 1516-1899) over auto5 on 151
 RATINGS_TTL = 600.0
 PRIORITY = os.environ.get(
     "STRATASTILLS_LOOK_PRIORITY", "batch"
@@ -70,9 +70,6 @@ class Bundle:
     def look(self):
         return self._pickle("look.pkl")
 
-    def tmodel(self):
-        return self._pickle("tmodel.pkl")
-
     def ftarget(self):
         return self._pickle("ftarget.pkl")
 
@@ -97,9 +94,7 @@ class Bundle:
 
             dev = "cuda" if gpu.available() and gpu.torch_().cuda.is_available() else "cpu"
             r = np.load(os.path.join(self.path, "neutral-range.npz"))
-            return dict(
-                net.load(os.path.join(self.path, "neutral-net.pt"), dev), lo=r["lo"], hi=r["hi"], typical=r["typical"]
-            )
+            return dict(net.load(os.path.join(self.path, "neutral-net.pt"), dev), lo=r["lo"], hi=r["hi"])
 
         return self._get("net", load)
 
@@ -126,6 +121,8 @@ def ratings():
         bt = AR.bradley_terry(votes, retired)
         n = {}
         for v in votes:
+            if v["a"] in retired or v["b"] in retired:
+                continue  # not in the rating either
             for k in (v["a"], v["b"]):
                 n[k] = n.get(k, 0) + 1
         out = {k: dict(rating=round(bt[k]), votes=n.get(k, 0)) for k in VARIANTS if k in bt and k not in retired}
@@ -136,8 +133,8 @@ def ratings():
 
 
 def winner():
-    """The auto version the arena rates highest now (FALLBACK without ratings): what 'best' means."""
-    r = ratings()
+    """The auto version the arena rates highest now, of those with MIN_VOTES votes or more (FALLBACK when there is none): what 'best' means."""
+    r = {k: v for k, v in ratings().items() if v["votes"] >= MIN_VOTES}
     return max(r, key=lambda k: r[k]["rating"]) if r else FALLBACK
 
 
@@ -351,34 +348,13 @@ def _face_target(models, x, face):
 
 
 def predictions(x, fl, b=None):
-    """What the models predict for a picture: the look row, the camera-trained colour transform, and the face target of its largest face."""
+    """What the models predict for a picture: the look row, and the face target of its largest face."""
     b = b or bundle()
     X = np.asarray(x, np.float32)[None]
     return dict(
         pred=A.predict(b.look(), X)[0],
-        colour=np.stack([m.predict(X) for m in b.tmodel()], 1).astype(np.float32)[0],
         face=dict(box=fl[0]["box"], target=_face_target(b.ftarget(), np.asarray(x, np.float32), fl[0])) if fl else None,
     )
-
-
-def apply_params(bgr, p, gpu=None):
-    """The transform (look/transform.py) with parameters `p` applied to a picture (scripts/lr_tmodel.py apply_params): on the GPU when the picture fits."""
-    import cv2
-    import torch
-
-    from stratastills.look import transform as T
-
-    dev = (
-        "cuda" if gpu is not False and torch.cuda.is_available() and bgr.shape[0] * bgr.shape[1] < 4_000_000 else "cpu"
-    )
-    with torch.no_grad():
-        out = (
-            T.transform(T.to_lab(bgr[None]).to(dev), torch.from_numpy(np.asarray(p, np.float32))[None].to(dev))[0]
-            .permute(1, 2, 0)
-            .cpu()
-            .numpy()
-        )
-    return np.clip(cv2.cvtColor(out.astype(np.float32), cv2.COLOR_LAB2BGR) * 255 + 0.5, 0, 255).astype(np.uint8)
 
 
 def neutral_params(neu, x, b=None):
@@ -405,21 +381,8 @@ def _render(variant, neu, x, fl, b=None, preds=None, gpu=None):
     cam = dict(zip(b.names, x))
     if variant == "auto1":
         return A.apply_look(neu, p["pred"], cam, gpu=gpu)
-    if variant == "auto2":
-        return A.apply_look(neu, p["pred"], cam, colour=p["colour"], gpu=gpu)
-    if variant == "auto3":
-        return A.apply_look(neu, p["pred"], cam, colour=p["colour"], face=p["face"], gpu=gpu)
-    if variant in ("auto4", "auto6"):
-        out = apply_params(neu, neutral_params(neu, x, b), gpu)
-        did = dict(transform="network")
-        if out.std() < 0.3 * neu.std():
-            out, did = (
-                apply_params(neu, b.net()["typical"]),
-                dict(transform="typical (the network's would flatten this picture)"),
-            )
-    else:  # auto5, auto7
-        out, did = A.apply_look(neu, p["pred"], cam, colour=neutral_params(neu, x, b), face=p["face"], gpu=gpu)
-    if variant in ("auto6", "auto7"):
+    out, did = A.apply_look(neu, p["pred"], cam, colour=neutral_params(neu, x, b), face=p["face"], gpu=gpu)
+    if variant == "auto7":
         main = FF.main_face(fl)
         if main is not None and main.get("lm"):
             out, more = FF.apply(out, neu, x, main, b.skin())

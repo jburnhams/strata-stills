@@ -1,4 +1,4 @@
-"""The versions of a picture the rating arena (scripts/build_arena.py, /arena/) compares. To try an idea: add a function here and an entry in VARIANTS (auto4, auto5 ...); the arena makes its pictures for every picture already in the pool, and the votes decide. A version that is clearly worse is retired (`build_arena.py --retire NAME`): its votes are kept but it is no longer shown or rated.
+"""The versions of a picture the rating arena (scripts/build_arena.py, /arena/) compares. To try an idea: add a function here and an entry in VARIANTS (auto8, auto9 ...); the arena makes its pictures for every picture already in the pool, and the votes decide. A version that is clearly worse is retired (`build_arena.py --retire NAME`): its votes are kept but it is no longer shown or rated.
 
 Each function gets a context `c` (types.SimpleNamespace): fin (the person's final, BGR, the picture all others are laid on), neu (our neutral picture laid on it), cam (the camera's own picture laid on it), x (its features, made by stratastills.look from the camera's preview cut as the final was), fl (its faces, boxes in this frame), bundle and preds (the look's frozen models and what they predict) and returns a BGR uint8 picture of the same size. The auto versions ARE the pipeline's look stage (stratastills.look), so a version that wins here is what a project's 'Best quality' makes."""
 
@@ -60,7 +60,7 @@ def _look(name):
     return f
 
 
-auto1, auto2, auto3, auto4, auto5, auto6, auto7 = (_look(f"auto{i}") for i in range(1, 8))
+auto1, auto5, auto7 = (_look(n) for n in look.VARIANTS)
 
 
 VARIANTS = {
@@ -68,10 +68,6 @@ VARIANTS = {
     "camera": camera,
     "neutral": neutral,
     "auto1": auto1,
-    "auto2": auto2,
-    "auto3": auto3,
-    "auto4": auto4,
     "auto5": auto5,
-    "auto6": auto6,
     "auto7": auto7,
 }

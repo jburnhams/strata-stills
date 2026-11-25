@@ -18,7 +18,7 @@ import numpy as np
 
 from stratastills import cpu_tiled, denoise_ai, gpu, gpu_tiled, inputs, lenscorr, lineardng, resources
 
-VERSION = 19  # 19: a near-black frame's pedestal offset is read off the decodes instead of falling back to LibRaw's clipped decode (18: that fallback; 17 and before: o = 0, green starfields)
+VERSION = 20  # 20: lensfun finds the E PZ 16-50mm and its shading gain is bounded (lensfundb.MAX_GAIN); 19: a near-black frame's pedestal offset is read off the decodes instead of falling back to LibRaw's clipped decode (18: that fallback; 17 and before: o = 0, green starfields)
 D65 = np.array([0.95047, 1.0, 1.08883])
 D50 = np.array([0.96422, 1.0, 0.82521])
 XYZ_TO_SRGB = np.array(

@@ -4,7 +4,7 @@
   level     turn the picture square to the scene (transforms.py), measured on the working picture, applied at full size              (no settings; leave the stage out to skip it)
   resize    the size to make it: 'auto' (the detail limit measured on the picture itself, detail.py), 'native', or a long side in px   settings: size
   sharpen   a Wiener filter built from the measured blur of this very picture, luminance only, no halos                               settings: amount (1 undoes the blur; 1.5 is as crisp as a camera JPEG)
-  look      the person's learned look (stratastills.look: auto1 ... auto7, the arena's versions; 'best' the arena's leader; 'none' our neutral picture)   settings: variant
+  look      the person's learned look (stratastills.look: auto1, auto5, auto7, the arena's versions; 'best' the arena's leader; 'none' our neutral picture)   settings: variant
   encode    JPEG (4:4:4; quality 90 by default, or 'auto' = the lowest whose error the picture's own noise hides, jpeg_quality.py) or 16 bit TIFF      settings: format, quality
 
 `develop` comes first and `encode` last; the others are in that order and each appears at most once. A generated picture is a new VARIANT of the item (projects.generated_variants), identified by the KEY of the stage settings that made it (item, source variant, every stage's settings and version):
@@ -141,7 +141,7 @@ def _look_params(p):
     from stratastills import look
 
     v = str(p.get("variant", look.DEFAULT)).lower()
-    if v == "best":
+    if v == look.DEFAULT or v in look.RETIRED:
         v = look.winner()  # resolved here, so a picture's key names the version it was made with
     if v not in look.VARIANTS + ("none",):
         raise P.ProjectError(f"look is one of best, {', '.join(look.VARIANTS)} or none")

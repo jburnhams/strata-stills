@@ -13,7 +13,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ATTEMPTS = 3  # runs of each pass: pictures that failed in one (the card out of memory, a CUDA error) are made by the next; a run with nothing left to do ends at once
-ORDER = "auto7,auto5,auto6,auto4,auto3,auto2,auto1,neutral,camera,lightroom"
+ORDER = "auto7,auto5,auto1,neutral,camera,lightroom"
 
 
 def main():

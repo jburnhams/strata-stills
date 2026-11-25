@@ -21,6 +21,11 @@ def db_dir():
     return p if os.path.isdir(p) else None
 
 
+EDITIONS = re.compile(
+    r"\s+I(?:/I{1,3}|/IV)+$"
+)  # "E PZ 16-50mm f/3.5-5.6 OSS I/II": one calibration for every edition of the lens; the cameras name the first one without a number
+
+
 def tokens(name):
     s = re.sub(r"\bf\s*/\s*", "f", str(name).lower())
     return [t for t in re.split(r"[^a-z0-9.\-]+", s) if t]
@@ -95,11 +100,11 @@ def load(directory=None):
 
 
 def find(lens_model, lenses=None):
-    """The lens of the database that a camera's lens model string names: every token of the database's name is in the camera's; the one with the most tokens wins (None when none fits)."""
+    """The lens of the database that a camera's lens model string names: every token of the database's name (without its EDITIONS) is in the camera's; the one with the most tokens wins (None when none fits)."""
     want = set(tokens(lens_model))
     best = None
     for ln in load() if lenses is None else lenses:
-        t = tokens(ln["model"])
+        t = tokens(EDITIONS.sub("", ln["model"]))
         if t and set(t) <= want and (best is None or len(t) > best[0]):
             best = (len(t), ln)
     return best[1] if best else None
@@ -171,13 +176,23 @@ def vignetting_attenuation(lens, focal, aperture, distance, r):
     return a + (b - a) * t
 
 
+MAX_GAIN = 1.5  # the shading gain goes no higher. The profiles of the E-mount wide angles go to 4x (E 16mm F2.8) and 32x (E PZ 16-50mm at 16 mm F3.5) at the corner, past the edge of what the corrected frame shows: applied whole, the corners came out 14 L brighter than the person's Lightroom finals (4-6 with the lenses whose profile is moderate) and the tone match to the camera's preview, which is not shading-corrected, was lost on 30 % of the pictures instead of 5 %. 1.5 brings both to the others' level (20 kit zoom, 10 E 16mm and 10 longer kit zoom pictures, docs/progress.md 2026-11-25)
+
+
 def corrections(lens, width, height, focal, aperture=None, distance=None, camera_crop=None):
     """(gain_fn, warp_coefficients) for a shot: `gain_fn(r)` the shading gain at the radius r (1 = the half diagonal of the picture), and the [3 planes, 6] WarpRectilinear coefficients (lenscorr's form), or None for what the lens has no data for."""
     cam = camera_crop or lens["crop"]
     to_vig = lens["crop"] / cam
     to_dist = to_vig * np.sqrt(1 + lens["aspect"] ** 2)  # picture radius (1 = half diagonal) -> lensfun's
     gain = (
-        (lambda r: 1.0 / vignetting_attenuation(lens, focal, aperture, distance, np.minimum(r * to_vig, 1.0)))
+        (
+            lambda r: (
+                1.0
+                / np.maximum(
+                    vignetting_attenuation(lens, focal, aperture, distance, np.minimum(r * to_vig, 1.0)), 1 / MAX_GAIN
+                )
+            )
+        )
         if lens["vignetting"]
         else None
     )  # beyond the calibrated corner (a lens for a smaller sensor on a bigger one) the value of the corner is held: no extrapolation
