@@ -20,7 +20,7 @@ dependencies = [
     "imagecodecs",              # JPEG XL inside those DNGs
     "nudenet",                  # the nudity filter (nsfw.py, on by default): local ONNX detector, weights inside the package
     "onnxruntime",              # runs it
-    "strata-python[db]>=0.2.17,<0.3",  # from PyPI: shared server code (web serving, the serve command, OS helpers, the hermetic test plugin), the strata-check gate, the strata-models client (`strata_python.clients.models`: gpu.lease, the look's faces and CLIP, tagging) and, with [db], the photos schema's connection, migrations and test fixtures (SQLAlchemy, Alembic, psycopg); brings FastAPI, uvicorn, pydantic and pytest. While 0.x a minor may break: read its CHANGELOG.md before moving the cap
+    "strata-python[db]>=0.2.22,<0.3",  # from PyPI: shared server code (web serving, the serve command, OS helpers, the hermetic test plugin), the strata-check gate, the strata-models client (`strata_python.clients.models`: gpu.lease, the look's faces and CLIP, tagging) and, with [db], the photos schema's connection, migrations and test fixtures (SQLAlchemy, Alembic, psycopg); brings FastAPI, uvicorn, pydantic and pytest. While 0.x a minor may break: read its CHANGELOG.md before moving the cap
     "pgvector",                 # the `vector` column type of the photos schema (db/types.py)
     "xgboost>=3.0",             # the look stage (stratastills.look): the frozen look models are XGBoost regressors
     "scikit-learn>=1.6",        # which XGBoost's scikit-learn wrapper needs to unpickle them

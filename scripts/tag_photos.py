@@ -1,10 +1,12 @@
 """Tag the archive's photos through strata-models (stratastills.tagging): every photo with a raw and no `vision_tags` row of this version yet.
 Writes photos.analysis (needs STRATA_DB_LIVE=1 STRATA_DB_DATABASE=omarchy and the strata-models service running). Resumable: rerun to go on.
 
-    .venv/bin/python scripts/tag_photos.py [--limit N] [--photos 12 34 ...] [--batch 8] [--dry-run]
+    .venv/bin/python scripts/tag_photos.py [--limit N] [--photos 12 34 ...] [--batch 500] [--dry-run]
 
 Photos the nudity filter flags are skipped and never sent. The caption call is a Claude API call (about $0.0004 a photo, from the strata-models
-Claude budget); the fields call runs on the GPU queue at batch priority."""
+Claude budget); the fields call runs on the GPU queue at batch priority. Each round of --batch photos is queued in one bulk call per role, so
+a round of 20 or more captions goes through the Claude batch API at half price; its answers come within a day (most within an hour), and the
+round is saved once they have all come. --batch under 20 never waits for a batch."""
 
 import argparse
 import os
@@ -55,7 +57,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--photos", type=int, nargs="*")
-    ap.add_argument("--batch", type=int, default=8, help="photos in flight at once")
+    ap.add_argument(
+        "--batch", type=int, default=500, help="photos queued in one bulk call (20 or more: the Claude batch API)"
+    )
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if not sm.available():
@@ -78,7 +82,7 @@ def main():
     ok = skipped = failed = 0
     t0 = time.time()
     for i in range(0, len(work), a.batch):
-        flight = []
+        ready = []
         for pid, raw in work[i : i + a.batch]:
             try:
                 if (
@@ -106,10 +110,12 @@ def main():
                     if m
                     else None
                 )
-                flight.append((pid, key, tagging.submit(sm, img, ctx, APP)))
+                ready.append((pid, key, img, ctx))
             except (tagging.TagError, OSError) as e:
                 failed += 1
                 print(f"  p{pid}: {e}", flush=True)
+        jobs = tagging.submit_many(sm, [(img, ctx) for _, _, img, ctx in ready], APP)
+        flight = [(pid, key, j) for (pid, key, _, _), j in zip(ready, jobs, strict=True)]
         rows = []
         for pid, key, jobs in flight:
             try:

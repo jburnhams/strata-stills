@@ -484,3 +484,7 @@ Both libraries moved (strata-python 0.2.1 -> 0.2.17, pin `>=0.2.17,<0.3`; strata
 - Retired: auto2, auto3, auto4, auto6 (1,010 votes: auto5 34-16 over auto4, 33-16 over auto6, 21-7 over auto3). auto5 keeps auto1's tone model and the neutral-trained network. `best` needs `MIN_VOTES` 60.
 - A per-picture choice between versions was tried and ruled out: predicted from features and each version's output, on unseen shoots, 9.24-9.27 dE2000 against 9.26 for always auto5; a perfect choice among all seven 8.36.
 - Not retrained yet here: the network and the skin model were trained on neutrals without the correction.
+
+## 2026-11-25: tagging in bulk
+
+- strata-models now takes normal and low priority work only on its bulk endpoint (a single `POST /api/jobs` is high priority only), and batches a bulk call of 20 or more on a Claude model through the Message Batches API at half the price. `scripts/tag_photos.py` submits rounds of 500 pictures (`--batch`), one `submit_many` per role (`tagging.submit_many`), so the Claude tags of a round go in one batch. Needs strata-python 0.2.22 (`submit_many`), now the floor in `pyproject.toml`.

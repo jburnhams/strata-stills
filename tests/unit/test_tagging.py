@@ -42,9 +42,10 @@ class FakeSM:
     def __init__(self, results):
         self.results, self.sent = results, []
 
-    def submit(self, role, params, app, priority):
-        self.sent.append((role, params, app, priority))
-        return dict(id=len(self.sent))
+    def submit_many(self, role, items, app, priority):
+        start = len(self.sent)
+        self.sent += [(role, params, app, priority) for params in items]
+        return list(range(start + 1, len(self.sent) + 1))
 
     def wait_job(self, jid):
         return self.results[jid - 1]
@@ -78,6 +79,19 @@ def test_two_calls_merge_into_one_row():
         r["data"]["_models"] == {"photo-fields": "qwen3.5-9b-vl", "photo-caption": "claude-haiku-5-5-api"}
         and r["data"]["indoor_outdoor"] == "outdoor"
     )
+
+
+def test_many_pictures_go_in_one_bulk_call_per_role():
+    sm = FakeSM([])
+    jobs = tagging.submit_many(sm, [("/a.jpg", {}), ("/b.jpg", None)], "app")
+    assert jobs == [[("photo-fields", 1), ("photo-caption", 3)], [("photo-fields", 2), ("photo-caption", 4)]]
+    assert [(r, p["image"]) for r, p, _, _ in sm.sent] == [
+        ("photo-fields", "/a.jpg"),
+        ("photo-fields", "/b.jpg"),
+        ("photo-caption", "/a.jpg"),
+        ("photo-caption", "/b.jpg"),
+    ]
+    assert tagging.submit_many(sm, [], "app") == []
 
 
 def test_a_failed_call_or_an_answer_without_json_fails_the_photo():

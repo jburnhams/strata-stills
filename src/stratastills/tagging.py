@@ -88,20 +88,26 @@ def retry(sm, fn, wait_s=30, give_up_s=3600, sleep=time.sleep):
             waited += wait_s
 
 
-def submit(sm, image, ctx, app, priority="batch"):
-    """Queue both calls for one picture; [(role, job id)]."""
-    return [
-        (
-            role,
-            retry(
-                sm,
-                lambda r=role, p=preset, m=mt: sm.submit(
-                    r, dict(image=image, preset=p, context=ctx, max_tokens=m), app, priority
-                ),
-            )["id"],
+def submit_many(sm, pictures, app, priority="batch"):
+    """Queue both calls for each (image, context) in `pictures`, one bulk call per role (strata-models' submit_many: 20 or more on a Claude
+    model go through its batch API at half price, answered within a day); [[(role, job id), ...] per picture]."""
+    if not pictures:
+        return []
+    ids = {
+        role: retry(
+            sm,
+            lambda r=role, p=preset, m=mt: sm.submit_many(
+                r, [dict(image=image, preset=p, context=ctx, max_tokens=m) for image, ctx in pictures], app, priority
+            ),
         )
         for role, preset, mt in CALLS
-    ]
+    }
+    return [[(role, ids[role][i]) for role, _, _ in CALLS] for i in range(len(pictures))]
+
+
+def submit(sm, image, ctx, app, priority="batch"):
+    """Queue both calls for one picture; [(role, job id)]."""
+    return submit_many(sm, [(image, ctx)], app, priority)[0]
 
 
 def collect(sm, jobs):
