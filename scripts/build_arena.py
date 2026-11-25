@@ -39,11 +39,14 @@ LOOK_SRC = os.path.join(os.path.dirname(__file__), "..", "src", "stratastills", 
 
 
 def code_key(name):
-    """A version is made again when its own function, the brightness helper or (for the automatic ones) the look's code or its frozen models (the bundle) changed, not when another version did."""
+    """A version is made again when its own function, the develop (its cut follows it), the brightness helper or (for the automatic ones) the look's code or its frozen models (the bundle) changed, not when another version did."""
     import inspect
 
     h = hashlib.sha1(name.encode())
     h.update(b"framing 5")
+    h.update(
+        LRR.BR.code_hash().encode()
+    )  # every version, the person's final included, is cut to what our neutral shows of it, so all of them follow the develop: after the lens fix (2026-11-25) the finals kept their old cut beside versions that had a new one
     h.update(inspect.getsource(AV.VARIANTS[name]).encode())
     h.update(inspect.getsource(LRR.to_final).encode())
     h.update(

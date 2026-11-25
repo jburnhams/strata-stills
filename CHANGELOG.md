@@ -8,6 +8,7 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 The arena rebuild after the lens fix left auto5 with 1 current vote and auto1 with 56; four more votes would have made auto1 `best` with nothing to compare it with.
 
 - `src/stratastills/look/__init__.py`: `winner` returns `FALLBACK` while it has fewer than `MIN_VOTES` votes itself. `tests/unit/test_look.py`, `AGENTS.md`.
+- `scripts/build_arena.py`: every version's key carries the develop's code hash, as the neutral cache's does. The finals were not made again when the lens fix changed the cut, and lay 1.5 % off the other versions at the edges.
 
 **Retiring a version keeps its votes in the ratings (branch `retired-votes-count`)**
 Retiring four versions dropped every vote against them, half of auto5's (the ones it won), and auto1 became `best`. Retired now means hidden: the ratings are fitted over all votes and the retired versions left out of the result.
