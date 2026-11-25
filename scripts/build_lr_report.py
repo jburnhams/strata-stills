@@ -264,26 +264,27 @@ def neutral(raws, work, say, rebuild=False, retry_now=True):
     return out
 
 
-def turn_to_ref(c, ref):
-    """`c` turned the way it lies in `ref` (Lightroom may have turned the picture, and some raws, the NEX-5N's among them, say Orientation 1 regardless). When the landscape/portrait of the two differ, a crop cannot explain it, so `c` must be turned a quarter; when either is (nearly) square, the shapes say nothing and `c` as it is competes with both quarter-turns. Which: the candidate whose features register on `ref` without a further turn (the catalogue's own orientation is not in the exported files), else the one whose coarse structure matches best (soft or heavily cropped pictures do not register)."""
+def turn_code(c, ref):
+    """How `c` must be turned to lie as in `ref`: a cv2.rotate code, or None (Lightroom may have turned the picture, and some raws, the NEX-5N's among them, say Orientation 1 regardless). When the landscape/portrait of the two differ, a crop cannot explain it, so `c` must be turned a quarter; when either is (nearly) square, the shapes say nothing and `c` as it is competes with both quarter-turns. Which: the candidate whose features register on `ref` without a further turn (the catalogue's own orientation is not in the exported files), else the one whose coarse structure matches best (soft or heavily cropped pictures do not register)."""
     sq = lambda x: abs(np.log(x.shape[1] / x.shape[0])) < 0.05
     if not (sq(c) or sq(ref)) and (c.shape[1] > c.shape[0]) == (ref.shape[1] > ref.shape[0]):
-        return c
+        return None
     H, W = ref.shape[:2]
     k = 1500 / max(W, H)
     g = lambda x: cv2.cvtColor(
         cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY
     )
-    cands = [cv2.rotate(c, r) for r in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)]
+    codes = [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]
     if sq(c) or sq(ref):
-        cands = [c] + cands
+        codes = [None, *codes]
+    cands = [c if r is None else cv2.rotate(c, r) for r in codes]
     reg = [BR.register(g(ref), g(x), inliers=True) for x in cands]
     score = [
         n if M is not None and abs(M[0, 0] - 1) <= 0.08 and abs(M[1, 0]) <= 0.05 else 0 for M, n in reg
     ]  # register allows any rotation: a candidate it lays on `ref` only by another turn is the wrong way up
     if max(score) >= 20:
-        return cands[int(np.argmax(score))]
-    return cands[int(np.argmax([structure_corr(g(ref), g(x)) for x in cands]))]
+        return codes[int(np.argmax(score))]
+    return codes[int(np.argmax([structure_corr(g(ref), g(x)) for x in cands]))]
 
 
 def structure_corr(a, b, n=64):
@@ -297,36 +298,127 @@ def structure_corr(a, b, n=64):
     return float((e(a) * e(b)).mean())
 
 
+RESHAPED = (
+    "PerspectiveVertical",
+    "PerspectiveHorizontal",
+    "PerspectiveRotate",
+    "PerspectiveAspect",
+    "PerspectiveX",
+    "PerspectiveY",
+    "PerspectiveUpright",
+)
+
+
+def reshaped(row):
+    """Whether the person changed the picture's perspective in Lightroom (a catalogue row's Perspective sliders or Upright): a similarity cannot lay ours on such a final."""
+    return any(D.num(row.get(k), 0) for k in RESHAPED) or D.num(row.get("PerspectiveScale"), 100) != 100
+
+
+GRID, PER_CELL = 8, 40  # matches used for the fit: at most PER_CELL of each cell of a GRID x GRID grid
+NEAR = 6.0  # px (at 1500) within which a match agrees with the fit
+
+
+def register_even(a, b, perspective=False):
+    """The 3x3 matrix that lays gray uint8 `b` on `a` of the same size: a similarity, or a homography with `perspective`. Like build_report.register, but the matches are drawn evenly over the frame: ORB finds most of them where the detail is, usually the middle, and RANSAC with 2 px then fits the middle and leaves the edges up to 1.5 % of the long side off (23 of 594 arena pictures, 2026-11-25; the lens profiles of the two programs differ a little). Tried on the pictures as they are, then with their local contrast evened out (dark ones). None when there are too few matches."""
+    h, w = a.shape
+    for prep in (lambda x: x, cv2.createCLAHE(3, (8, 8)).apply):
+        orb = cv2.ORB_create(8000)
+        ka, da = orb.detectAndCompute(prep(a), None)
+        kb, db = orb.detectAndCompute(prep(b), None)
+        if da is None or db is None or len(ka) < 20 or len(kb) < 20:
+            continue
+        m = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(db, da)
+        if len(m) < 20:
+            continue
+        m = sorted(m, key=lambda x: x.distance)  # the best of each cell
+        pb = np.float32([kb[x.queryIdx].pt for x in m])
+        pa = np.float32([ka[x.trainIdx].pt for x in m])
+        cell = (pa[:, 0] * GRID // w).astype(int) * GRID + (pa[:, 1] * GRID // h).astype(int)
+        keep = np.concatenate([np.flatnonzero(cell == c)[:PER_CELL] for c in np.unique(cell)])
+        pb, pa = pb[keep], pa[keep]
+        if perspective:
+            M, ok = cv2.findHomography(pb, pa, cv2.RANSAC, NEAR)
+        else:
+            M, ok = cv2.estimateAffinePartial2D(pb, pa, method=cv2.RANSAC, ransacReprojThreshold=NEAR)
+            M = None if M is None else np.vstack([M, [0, 0, 1]])
+        if M is not None and ok.sum() >= 20 and plausible(M, w, h, perspective):
+            return M
+    return None
+
+
+def edge_agreement(a, b):
+    """Correlation of the edges of two gray pictures of one size, whatever their tone (local contrast evened out, smoothed)."""
+
+    def e(x):
+        x = cv2.GaussianBlur(cv2.createCLAHE(8, (6, 6)).apply(x), (0, 0), 3).astype(np.float32)
+        m = max(8, min(x.shape) // 40)
+        return np.hypot(cv2.Sobel(x, cv2.CV_32F, 1, 0), cv2.Sobel(x, cv2.CV_32F, 0, 1))[m:-m, m:-m].ravel()
+
+    ea, eb = e(a), e(b)
+    return float(np.corrcoef(ea, eb)[0, 1]) if ea.std() and eb.std() else 0.0
+
+
+def plausible(M, w, h, perspective):
+    """Whether `M` is a small correction of a w x h picture: a similarity within 8 % in scale and 3 degrees, a homography that keeps the corners in order and moves none more than a third of the frame."""
+    if not perspective:
+        return abs(M[0, 0] - 1) <= 0.08 and abs(M[1, 0]) <= 0.05
+    q = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    c = cv2.perspectiveTransform(q[None], M)[0]
+    return bool(cv2.isContourConvex(c) and (np.abs(c - q) < np.array([w, h]) / 3).all())
+
+
+def sensor_to_crop(shape, row, orientation, code, size):
+    """The 3x3 matrix from pixels of a picture of `shape` in the sensor's frame to Lightroom's crop of it, the way up, turned by `code`, at `size` (W, H): read off the same steps done to a map of the coordinates, so that it cannot disagree with lr_crop and orient."""
+    h, w = shape[:2]
+    n = 800 / max(h, w)
+    nh, nw = max(8, round(h * n)), max(8, round(w * n))
+    y, x = np.mgrid[0:nh, 0:nw].astype(np.float32)
+    m = np.dstack([(x + 0.5) * w / nw, (y + 0.5) * h / nh, np.full((nh, nw), 1.0, np.float32)])
+    m = D.orient(D.lr_crop(m, row), orientation)
+    m = m if code is None else cv2.rotate(m, code)
+    ch, cw = m.shape[:2]
+    cy, cx = np.mgrid[0:ch, 0:cw]
+    q = m[..., 2] > 0.999  # real pixels: the turn of the crop fills its wedges with zeros
+    src = np.column_stack([m[q][:, :2], np.ones(q.sum())])
+    dst = np.column_stack([(cx[q] + 0.5) * size[0] / cw, (cy[q] + 0.5) * size[1] / ch])
+    A = np.linalg.lstsq(src, dst, rcond=None)[0].T
+    half = np.array([[1, 0, -0.5], [0, 1, -0.5], [0, 0, 1]])  # pixel corners -> pixel centres
+    return half @ np.vstack([A, [0, 0, 1]]) @ np.linalg.inv(half)
+
+
 def to_final(im, row, orientation, ref, with_rect=False):
-    """`im` (BGR, in the sensor's frame) cut to Lightroom's crop, turned the way up, then laid exactly on `ref` (the final, BGR) by a similarity transform found from features (lens corrections and the programs' framing differ by a few pixels and a little scale); the crop alone if no transform is found. -> (picture at ref's size, how it was aligned)."""
-    c = D.orient(D.lr_crop(im, row), orientation)
+    """`im` (BGR, in the sensor's frame) laid on `ref` (the final, BGR): Lightroom's crop, turned the way up, then a similarity found from features (lens corrections and the programs' framing differ by a few pixels and a little scale), or a homography when the person changed the perspective (`reshaped`); the crop alone if no transform is found. All of it is one move of `im`, so what Lightroom shows from outside its nominal crop is real pixels, and where there are none is known from that move. -> (picture at ref's size, how it was aligned), with `with_rect` also the largest rectangle of real pixels (x0, y0, x1, y1)."""
     H, W = ref.shape[:2]
-    c = turn_to_ref(c, ref)
-    c = cv2.resize(c, (W, H), interpolation=cv2.INTER_AREA if c.shape[1] > W else cv2.INTER_CUBIC)
+    c = D.orient(D.lr_crop(im, row), orientation)
+    code = turn_code(c, ref)
+    ch, cw = c.shape[:2] if code is None else c.shape[1::-1]
+    s = min(
+        1.0, max(W / cw, H / ch)
+    )  # shrunk first with every pixel counted: the move itself only looks at its neighbours
+    src = cv2.resize(im, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else im
+    T = sensor_to_crop(src.shape, row, orientation, code, (W, H))
+    move = lambda x, M, flags, border: cv2.warpPerspective(x, M, (W, H), flags=flags, borderMode=border)
+    c = move(src, T, cv2.INTER_CUBIC, cv2.BORDER_REPLICATE)
     k = 1500 / max(W, H)
+    K = np.diag([k, k, 1.0])
     g = lambda x: cv2.cvtColor(
         cv2.resize(x, (round(W * k), round(H * k)), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY
     )
-    M = BR.register(g(ref), g(c))
-    if M is None or abs(M[0, 0] - 1) > 0.08 or abs(M[1, 0]) > 0.05:
-        return (c, "Lightroom crop", (0, 0, W, H)) if with_rect else (c, "Lightroom crop")
-    M = M.copy()
-    M[:, 2] /= k
-    out = cv2.warpAffine(c, M, (W, H), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    M = register_even(g(ref), g(c), reshaped(row))
+    if M is not None and edge_agreement(g(ref), cv2.warpPerspective(g(c), M, g(c).shape[1::-1])) < edge_agreement(
+        g(ref), g(c)
+    ):
+        M = None  # a near-black or empty frame, whose matches are noise
+    how = "Lightroom crop"
+    if M is not None:
+        T = np.linalg.inv(K) @ M @ K @ T
+        c = move(src, T, cv2.INTER_CUBIC, cv2.BORDER_REPLICATE)
+        how += ", then registered" + (" with perspective" if reshaped(row) else "")
     if not with_rect:
-        return out, "Lightroom crop, then registered"
-    ok = (
-        cv2.warpAffine(
-            np.full((H, W), 255, np.uint8),
-            M,
-            (W, H),
-            flags=cv2.INTER_NEAREST,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-        > 0
-    )  # where the moved picture really has pixels: outside it the border is a smear of the last row or column
-    return out, "Lightroom crop, then registered", FR.inner_rect(ok, pad=3)
+        return c, how
+    real = np.full(src.shape[:2], 255, np.uint8)
+    ok = move(real, T, cv2.INTER_NEAREST, cv2.BORDER_CONSTANT) > 0
+    return c, how, FR.inner_rect(ok, pad=0 if ok.all() else 3)
 
 
 def face_errors(ims, ref, faces):

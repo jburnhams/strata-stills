@@ -43,14 +43,16 @@ def code_key(name):
     import inspect
 
     h = hashlib.sha1(name.encode())
-    h.update(b"framing 5")
+    h.update(b"framing 6")
     h.update(
         LRR.BR.code_hash().encode()
     )  # every version, the person's final included, is cut to what our neutral shows of it, so all of them follow the develop: after the lens fix (2026-11-25) the finals kept their old cut beside versions that had a new one
     h.update(inspect.getsource(AV.VARIANTS[name]).encode())
     h.update(inspect.getsource(LRR.to_final).encode())
+    for fn in (LRR.turn_code, LRR.register_even, LRR.edge_agreement, LRR.plausible, LRR.reshaped, LRR.sensor_to_crop):
+        h.update(inspect.getsource(fn).encode())
     h.update(
-        inspect.getsource(LRR.turn_to_ref).encode()
+        repr((LRR.RESHAPED, LRR.GRID, LRR.PER_CELL, LRR.NEAR)).encode()
     )  # the framing code itself, so a fix to it (the square-crop turn) reaches pictures already in the pool
     if name in ("camera", "neutral"):
         h.update(inspect.getsource(AV.match_brightness).encode())

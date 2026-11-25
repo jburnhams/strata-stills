@@ -4,6 +4,13 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 
 ## 2026-11-25
 
+**Arena: our pictures line up with the Lightroom finals at the edges (branch `arena-alignment`)**
+Jonathan asked why nine wide pictures did not line up: their perspective was changed in Lightroom (361 of the 21,367 catalogue pictures have a perspective, Upright, manual distortion or profile scale edit). 23 others were 0.5-1.5 % off because the registration fitted the middle of the frame.
+
+- `scripts/build_lr_report.py`: `to_final` is one move from the sensor's frame (`sensor_to_crop` composed with the registration), so pixels Lightroom shows from outside its nominal crop are ours too, and the missing ones are known from that move; `register_even` draws the matches evenly over the frame and tries again with the local contrast evened out (dark pictures); `reshaped` pictures get a homography; `turn_code` (was `turn_to_ref`) returns the turn.
+- `scripts/build_arena.py`: framing 6, the new functions are part of every version's key.
+- `tests/unit/test_lr_report_framing.py`: **new**.
+
 **`best` stays the default until the default has enough votes (branch `best-keeps-default`)**
 The arena rebuild after the lens fix left auto5 with 1 current vote and auto1 with 56; four more votes would have made auto1 `best` with nothing to compare it with.
 
