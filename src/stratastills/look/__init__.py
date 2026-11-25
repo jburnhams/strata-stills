@@ -131,9 +131,9 @@ def ratings():
 
 
 def winner():
-    """The auto version the arena rates highest now, of those with MIN_VOTES votes or more (FALLBACK when there is none): what 'best' means."""
+    """The auto version the arena rates highest now, of those with MIN_VOTES votes or more: what 'best' means. FALLBACK while it has fewer itself (a rebuild that changes the pictures takes a version's votes away: on 2026-11-25 auto5 went from 151 to 1 and auto1, hardly changed, kept 56), so nothing takes its place unmeasured."""
     r = {k: v for k, v in ratings().items() if v["votes"] >= MIN_VOTES}
-    return max(r, key=lambda k: r[k]["rating"]) if r else FALLBACK
+    return max(r, key=lambda k: r[k]["rating"]) if FALLBACK in r else FALLBACK
 
 
 def version():

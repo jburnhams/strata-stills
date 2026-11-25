@@ -121,7 +121,7 @@ def test_the_pipeline_has_a_look_stage_set_to_the_arena_leader(monkeypatch):
         )
     monkeypatch.setattr(look, "ratings", lambda: rated(look.MIN_VOTES - 1))  # too few votes to lead on
     assert PL.normalize(PL.BEST)[-2]["variant"] == "auto5"
-    for r in ({}, {"auto1": dict(rating=1700, votes=5)}):
+    for r in ({}, {"auto1": dict(rating=1700, votes=5)}, {"auto1": dict(rating=1700, votes=90)}):
         monkeypatch.setattr(look, "ratings", lambda r=r: r)
         assert PL.normalize(PL.BEST)[-2]["variant"] == look.FALLBACK == "auto5"
     assert "look" not in [s["stage"] for s in PL.get_preset("neutral")["stages"]]
