@@ -94,48 +94,49 @@ def score(v):
 
 
 def elo(votes, retired=()):
-    """Elo ratings by playing the votes in time order (K = 24); retired variants' votes are skipped. -> {variant: rating}."""
+    """Elo ratings by playing the votes in time order (K = 24); retired variants play (their votes say something about the others) but are left out of the result. -> {variant: rating}."""
     r = {}
     for v in sorted(votes, key=lambda v: v.get("t", 0)):
         s = score(v)
-        if s is None or v["a"] in retired or v["b"] in retired:
+        if s is None:
             continue
         ra, rb = r.setdefault(v["a"], START), r.setdefault(v["b"], START)
         ea = 1 / (1 + 10 ** ((rb - ra) / 400))
         r[v["a"]] = ra + K * (s - ea)
         r[v["b"]] = rb + K * ((1 - s) - (1 - ea))
-    return r
+    return shown(r, retired)
 
 
-def as_votes(votes, retired=()):
-    """The arena's votes as strata_python.stats votes, `(left, right, winner)`, without those about a retired variant (and without skips, which have no winner)."""
-    return [
-        (v["a"], v["b"], v["winner"])
-        for v in votes
-        if score(v) is not None and v["a"] not in retired and v["b"] not in retired
-    ]
+def shown(by_variant, retired):
+    """{variant: ...} without the retired ones. Retiring hides a version, it does not throw away its votes: every fit below is over all of them. (Leaving them out on 2026-11-25 dropped half of auto5's votes, the ones it won, and put auto1 in front of it.)"""
+    return {k: v for k, v in by_variant.items() if k not in retired}
+
+
+def as_votes(votes):
+    """The arena's votes as strata_python.stats votes, `(left, right, winner)`, without skips, which have no winner."""
+    return [(v["a"], v["b"], v["winner"]) for v in votes if score(v) is not None]
 
 
 def bradley_terry(votes, retired=(), iters=200, side=True):
     """Order-independent strengths (Bradley-Terry, ties as half a win each way) on the Elo scale, the mean of the variants 1500. -> {variant: rating}. The fit is
     strata_python.stats' (the MM algorithm with a prior of 0.01 of a win, shared with strata-models' evals).
     `side` (default) fits a left-side advantage h as well: P(left wins) = h*p_a / (h*p_a + p_b), 'a' being the variant shown left. The sides are drawn at random, so h only removes noise from the strengths (the person favours the left picture, see `side_advantage`), it cannot favour a variant. `side=False` is the plain model."""
-    return stats.bradley_terry(as_votes(votes, retired), side=side, iters=iters).ratings(START)
+    return shown(stats.bradley_terry(as_votes(votes), side=side, iters=iters).ratings(START), retired)
 
 
-def side_advantage(votes, retired=(), iters=200):
+def side_advantage(votes, iters=200):
     """The odds multiplier h the left picture has over the right one at equal strength (1.0 = no side preference; 1.3 = the left picture wins 57 % of the time between equals), fitted with the strengths."""
-    return stats.bradley_terry(as_votes(votes, retired), side=True, iters=iters).side
+    return stats.bradley_terry(as_votes(votes), side=True, iters=iters).side
 
 
 def bootstrap(votes, retired=(), n=200, seed=0):
     """The 5th and 95th percentile of each variant's Bradley-Terry rating over resamples of the votes: how far to trust a gap. -> {variant: (lo, hi)}."""
-    return stats.intervals(as_votes(votes, retired), n=n, level=0.90, side=True, seed=seed)
+    return shown(stats.intervals(as_votes(votes), n=n, level=0.90, side=True, seed=seed), retired)
 
 
 def head_to_head(votes, retired=()):
     """{(a, b): [wins of a, wins of b, ties]} over unordered pairs (the names sorted)."""
-    return stats.head_to_head(as_votes(votes, retired))
+    return {k: w for k, w in stats.head_to_head(as_votes(votes)).items() if not set(k) & set(retired)}
 
 
 def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None, priority=None):
