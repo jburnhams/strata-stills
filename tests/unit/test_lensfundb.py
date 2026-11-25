@@ -9,7 +9,10 @@ XML = """<lensdatabase version="2"><lens><maker>Sony</maker><model>E 50mm f/1.8 
 <calibration><distortion model="poly3" focal="50" k1="0.01"/><tca model="linear" focal="50" kr="1.0002" kb="0.9998"/>
 <vignetting model="pa" focal="50" aperture="1.8" distance="1000" k1="-0.5" k2="-0.2" k3="0"/><vignetting model="pa" focal="50" aperture="2.8" distance="1000" k1="-0.3" k2="-0.1" k3="0"/></calibration></lens>
 <lens><maker>Sony</maker><model>FE 28-60mm f/4-5.6</model><mount>Sony E</mount><cropfactor>1.0</cropfactor><aspect-ratio>3:2</aspect-ratio>
-<calibration><distortion model="ptlens" focal="28" a="0.0" b="-0.05" c="0.0"/><distortion model="ptlens" focal="60" a="0.0" b="0.0" c="0.0"/></calibration></lens></lensdatabase>"""
+<calibration><distortion model="ptlens" focal="28" a="0.0" b="-0.05" c="0.0"/><distortion model="ptlens" focal="60" a="0.0" b="0.0" c="0.0"/></calibration></lens>
+<lens><maker>Sony</maker><model>E PZ 16-50mm f/3.5-5.6 OSS I/II</model><model lang="en">E 16-50mm f/3.5-5.6 OSS PZ (Vers. I/II)</model><mount>Sony E</mount><cropfactor>1.534</cropfactor>
+<calibration><distortion model="ptlens" focal="16" a="0.0219" b="-0.10642" c="0.06233"/>
+<vignetting model="pa" focal="16" aperture="3.5" distance="1000" k1="-0.6128" k2="-0.6331" k3="0.2769"/></calibration></lens></lensdatabase>"""
 
 
 @pytest.fixture
@@ -31,8 +34,16 @@ def test_the_lens_is_found_from_the_exif_name_by_its_words_and_numbers(lenses):
     )  # a name needs all its tokens: no partial match
 
 
+def test_a_lens_listed_for_all_its_editions_is_found_by_any_of_their_names(lenses):
+    for name in ("E PZ 16-50mm F3.5-5.6 OSS", "E PZ 16-50mm F3.5-5.6 OSS II"):
+        assert F.find(name, lenses)["model"] == "E PZ 16-50mm f/3.5-5.6 OSS I/II"
+    assert F.find("E 16-50mm F3.5-5.6 OSS", lenses) is None  # another lens
+    only_two = [dict(lenses[0], model="FE 70-200mm f/2.8 GM OSS II")]
+    assert F.find("FE 70-200mm F2.8 GM OSS", only_two) is None  # a second edition alone is not the first
+
+
 def test_models_follow_lensfuns_formulas(lenses):
-    e50, fe = lenses
+    e50, fe, _ = lenses
     r = np.array([0.0, 0.5, 1.0])
     assert np.allclose(F.distortion_ratio(e50, 50, r), [0.99, 0.01 * 0.25 + 0.99, 1.0]) and np.allclose(
         F.distortion_ratio(fe, 28, r), -0.05 * r * r + 1 + 0.05
@@ -51,20 +62,21 @@ def test_models_follow_lensfuns_formulas(lenses):
 
 
 def test_the_correction_is_handed_to_the_development_as_opcodes(lenses):
-    e50, _ = lenses
+    e50, *_ = lenses
     gain, warp = F.corrections(e50, 600, 400, 50, 1.8, None, camera_crop=1.534)
-    assert gain(np.array([1.0]))[0] == pytest.approx(1 / 0.3) and warp.shape == (3, 6)
+    assert gain(np.array([0.5]))[0] == pytest.approx(1 / (1 - 0.5 * 0.25 - 0.2 * 0.0625)) and warp.shape == (3, 6)
+    assert gain(np.array([1.0]))[0] == F.MAX_GAIN  # 1 / 0.3 by the profile
     ops = D.parse_opcodes(L.opcodes_from(gain, warp, 600, 400))
     assert [i for i, _ in ops] == [9, 1]
     m = D.gain_map(ops[0][1])[0]
     assert (
         m.shape == (65, 65, 1)
         and m[32, 32, 0] == pytest.approx(1.0, abs=1e-3)
-        and m[0, 0, 0] == pytest.approx(1 / 0.3, rel=1e-3)
+        and m[0, 0, 0] == pytest.approx(F.MAX_GAIN, rel=1e-3)
     )
     g2, w2 = F.corrections(e50, 600, 400, 50, 1.8, None, camera_crop=1.0)
     assert g2(np.array([1.0]))[0] == pytest.approx(
-        1 / 0.3
+        F.MAX_GAIN
     )  # a lens for a smaller sensor on a bigger one: the corner's value is held beyond the calibrated circle
     assert L.opcodes_from(None, None, 10, 10) is None and [
         i for i, _ in D.parse_opcodes(L.opcodes_from(None, warp, 10, 10))
@@ -107,3 +119,9 @@ def test_the_crop_is_centred_and_keeps_the_shape(monkeypatch):
     assert st.rgb.shape == (400, 600, 3) and not st.rec
     PL.crop_to_image_circle(st, "auto")
     assert st.rgb.shape == (260, 390, 3) and st.analysis.shape == (130, 195) and st.rec["frame"]["fraction"] == 0.65
+
+
+def test_the_shading_gain_is_bounded_where_the_profile_leaves_the_image_circle(lenses):
+    gain, warp = F.corrections(lenses[2], 600, 400, 16, 3.5, None, camera_crop=1.534)
+    g = gain(np.linspace(0, 1, 50))  # the profile's own gain is 32 at the corner
+    assert g[0] == 1 and g.max() == F.MAX_GAIN and (np.diff(g) >= 0).all() and warp is not None

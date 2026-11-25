@@ -1,6 +1,6 @@
 """Freeze the learned look into a bundle the app can run on any picture (stratastills.look, the pipeline's `look` stage and the arena).
   python scripts/export_look_bundle.py [--out DIR] [--meta-records FILE] [--clip FILE]
--> DIR (default settings.look_dir()): manifest.json (feature names, how each block was made, the files' hashes), look.pkl, tmodel.pkl,
+-> DIR (default settings.look_dir()): manifest.json (feature names, how each block was made, the files' hashes), look.pkl,
    ftarget.pkl, skin.pkl, neutral-net.pt, neutral-range.npz, meta-encoder.json, clip-basis.npz, clip-prompts.json.
 
 The models are the ones the arena uses: trained on the shoots NOT held out (lr_look.test_shoot), so the arena's held-out pictures stay
@@ -27,7 +27,6 @@ import lr_face_first as FF
 import lr_ftarget as FT
 import lr_look as LK
 import lr_neutral_model as NM
-import lr_tmodel as TM
 
 from stratastills import settings
 from stratastills.look import features as F
@@ -121,7 +120,6 @@ def main():
     import pickle
 
     pickle.dump(LK.train_cached(X[~test], Y[~test]), open(os.path.join(tmp, "look.pkl"), "wb"))
-    pickle.dump(TM.train_cached(), open(os.path.join(tmp, "tmodel.pkl"), "wb"))
     pickle.dump(FT.train_cached(), open(os.path.join(tmp, "ftarget.pkl"), "wb"))
     if FF.models() is not None:
         pickle.dump(FF.models(), open(os.path.join(tmp, "skin.pkl"), "wb"))
@@ -131,7 +129,6 @@ def main():
         os.path.join(tmp, "neutral-range.npz"),
         lo=np.percentile(q, 0.5, 0),
         hi=np.percentile(q, 99.5, 0),
-        typical=np.median(q, 0).astype(np.float32),
     )
     json.dump(enc, open(os.path.join(tmp, "meta-encoder.json"), "w"))
     np.savez(os.path.join(tmp, "clip-basis.npz"), mu=mu, vt=vt, **{f"text_{g}": t for g, t in text.items()})

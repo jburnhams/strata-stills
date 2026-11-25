@@ -24,7 +24,7 @@ import build_report as BR
 import lr_dataset as D
 import lr_ftarget as FT
 import lr_look as LK
-import lr_tmodel as TM
+import lr_neutral_model as NM
 
 from stratastills import framing as FR
 from stratastills import images
@@ -39,9 +39,8 @@ NAMES = [
     "Camera",
     "Neutral (ours)",
     "Lightroom (yours)",
-    "Auto (ours)",
-    "Auto 2 (learned colour)",
-    "Auto 3 (face anchor)",
+    "auto1 (ours)",
+    "auto5 (ours)",
 ]
 KEY_SETTINGS = [
     "ProcessVersion",
@@ -410,7 +409,6 @@ def build(a):
     say(
         f"{len(X)} pairs, {test.sum()} in {len(set(G[test]))} held-out shoots; training the look model on the other {(~test).sum()}"
     )
-    tmodels = TM.train_cached(a.hard_weight)
     FACES = (
         json.load(open(os.path.join(D.OUT, "faces.json"))) if os.path.exists(os.path.join(D.OUT, "faces.json")) else {}
     )
@@ -482,17 +480,16 @@ def build(a):
             )  # our output is turned the way up already: back to the sensor's frame for Lightroom's crop
             pred = LK.predict(models, X[i : i + 1])[0]
             auto, did = LK.apply_look(neu_a, pred, dict(zip(names, X[i])))
-            auto2, _ = LK.apply_look(neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i : i + 1])[0])
             fl = FACES.get(str(int(idx[i])), [])
             fa = dict(box=fl[0]["box"], target=FT.face_target(fmodels, X[i], fl[0])) if fl else None
-            auto3, did3 = LK.apply_look(
-                neu_a, pred, dict(zip(names, X[i])), colour=TM.predict(tmodels, X[i : i + 1])[0], face=fa
+            auto5, did5 = LK.apply_look(
+                neu_a, pred, dict(zip(names, X[i])), colour=NM.predict_params(neu_a, X[i]), face=fa
             )
-            did = dict(did, **{k: v for k, v in did3.items() if k.startswith("face_")})
-            ims = [cam_a, neu_a, fin, auto, auto2, auto3]
-            err = errors([cam_a, neu_a, auto, auto2, auto3], fin)
+            did = dict(did, **{k: v for k, v in did5.items() if k.startswith("face_")})
+            ims = [cam_a, neu_a, fin, auto, auto5]
+            err = errors([cam_a, neu_a, auto, auto5], fin)
             summary.append((why[i], err))
-            fe = face_errors([cam_a, neu_a, auto, auto2, auto3], fin, fl)
+            fe = face_errors([cam_a, neu_a, auto, auto5], fin, fl)
             if fe:
                 face_summary.append(fe)
             maps = [
@@ -586,7 +583,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
         "<table class=t><tr><th>largest face, off from your final by</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>"
         + "".join(
             f"<tr><th>{nm}</th>" + "".join(f"<td>{v:.1f}</td>" for v in e) + "</tr>"
-            for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4], NAMES[5]], fe)
+            for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], fe)
         )
         + "</table>"
         if fe
@@ -604,7 +601,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
         "<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>"
         + "".join(
             f"<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>"
-            for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4], NAMES[5]], err)
+            for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], err)
         )
         + "</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>"
     )
@@ -692,7 +689,6 @@ def page(sections, nav, summary, held, n_shoots, n_pics, face_summary=()):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--hard-weight", type=float, default=3.0)
     ap.add_argument(
         "--rebuild", action="store_true", help="make the neutral pictures again, ignoring the cache in out/cache/"
     )

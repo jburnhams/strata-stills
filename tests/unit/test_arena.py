@@ -101,19 +101,19 @@ def test_side_term_takes_a_left_preference_out_of_the_strengths():
 
 
 def test_priority_weights_clear_pairs_of_interesting_variants_and_faces_but_never_drop_a_pair():
-    pool = {p: {v: {"file": f"{p}{v}", "hash": f"{p}{v}"} for v in ("auto4", "auto6", "camera")} for p in ("p1", "p2")}
+    pool = {p: {v: {"file": f"{p}{v}", "hash": f"{p}{v}"} for v in ("auto5", "auto7", "camera")} for p in ("p1", "p2")}
     pr = dict(
         faces=["p2"],
-        dist={"p1": {"auto4|auto6": 1.0, "auto4|camera": 12.0, "auto6|camera": 12.0}},
+        dist={"p1": {"auto5|auto7": 1.0, "auto5|camera": 12.0, "auto7|camera": 12.0}},
     )
     seen, pn = {}, {}
-    assert arena.pair_weight(pr, "p1", "auto4", "auto6", seen, pn) < arena.pair_weight(
-        pr, "p1", "auto4", "camera", seen, pn
+    assert arena.pair_weight(pr, "p1", "auto5", "auto7", seen, pn) < arena.pair_weight(
+        pr, "p1", "auto5", "camera", seen, pn
     )
-    assert arena.pair_weight(pr, "p2", "auto4", "auto6", seen, pn) > arena.pair_weight(
-        pr, "p1", "auto4", "auto6", seen, pn
+    assert arena.pair_weight(pr, "p2", "auto5", "auto7", seen, pn) > arena.pair_weight(
+        pr, "p1", "auto5", "auto7", seen, pn
     )
-    assert arena.pair_weight(pr, "p1", "auto4", "auto6", seen, pn) > 0
+    assert arena.pair_weight(pr, "p1", "auto5", "auto7", seen, pn) > 0
     rng, hits = random.Random(0), {}
     for _ in range(400):
         pic, a, b = arena.pick_pair(pool, [], rng, priority=pr)
@@ -123,8 +123,8 @@ def test_priority_weights_clear_pairs_of_interesting_variants_and_faces_but_neve
 
 def test_load_priorities_reads_the_file_or_says_none(tmp_path):
     assert arena.load_priorities(str(tmp_path)) is None
-    (tmp_path / "priorities.json").write_text('{"interest": {"auto6": 2}}')
-    assert arena.load_priorities(str(tmp_path)) == {"interest": {"auto6": 2}}
+    (tmp_path / "priorities.json").write_text('{"interest": {"auto7": 2}}')
+    assert arena.load_priorities(str(tmp_path)) == {"interest": {"auto7": 2}}
     (tmp_path / "priorities.json").write_text("[1]")
     assert arena.load_priorities(str(tmp_path)) is None
 

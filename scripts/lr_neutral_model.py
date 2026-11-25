@@ -1,7 +1,7 @@
 """Learn the person's edit FROM OUR NEUTRAL picture (scripts/lr_neutral_thumbs.py) instead of from the camera's preview: the automatic look is applied to our neutral, so the transform it predicts should be one that turns our neutral into their final.
   python scripts/lr_neutral_model.py fit              per pair, the 19-parameter transform (scripts/lr_fit.py) that takes our neutral to the final -> candidates/personal/nfit.npz (the ceiling)
   python scripts/lr_neutral_model.py eval [--epochs N] [--no-cnn] [--cam]
-      on the held-out shoots (lr_look.test_shoot), mean |dL| / colour distance to the final for: our neutral as it is; the current camera-trained transform model applied to our neutral (what auto2/auto3 do); XGBoost on the same features trained on the neutral fits; a small network (ImageNet ResNet-18 on the neutral thumb, plus the scalar features) trained end to end on the distance after the transform; the per-pair fit. Also over the hard cases (candidates/personal/hard/hard_cases.json) and the old hard mask.
+      on the held-out shoots (lr_look.test_shoot), mean |dL| / colour distance to the final for: our neutral as it is; the current camera-trained transform model applied to our neutral (what the retired auto2/auto3 did); XGBoost on the same features trained on the neutral fits; a small network (ImageNet ResNet-18 on the neutral thumb, plus the scalar features) trained end to end on the distance after the transform; the per-pair fit. Also over the hard cases (candidates/personal/hard/hard_cases.json) and the old hard mask.
 PRIVATE: the person's own pictures. Needs `uv sync --group research` and torchvision."""
 
 import argparse
@@ -242,15 +242,8 @@ def _predict_params(neu_bgr, x):
     return NETM.predict_params(_net["net"], neu_bgr, x, _net["lo"], _net["hi"])
 
 
-def typical_params():
-    """The median per-pair neutral fit: the person's typical edit, the fallback when the network's transform would flatten a picture."""
-    if "typical" not in _net:
-        _net["typical"] = np.median(_train_fits(), 0).astype(np.float32)
-    return _net["typical"]
-
-
 def _train_fits():
-    """The per-pair neutral fits of the TRAINING shoots only (lr_look.test_shoot False): the range and median used at inference must not come from the held-out finals the arena judges against."""
+    """The per-pair neutral fits of the TRAINING shoots only (lr_look.test_shoot False): the range used at inference must not come from the held-out finals the arena judges against."""
     z = np.load(os.path.join(D.OUT, "nfit.npz"))
     rows = D.load_catalogue()
     train = np.array([not K.test_shoot(os.path.dirname(rows[int(i)]["final"])) for i in z["idx"]])

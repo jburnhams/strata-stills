@@ -83,7 +83,6 @@ def stub_bundle(tmp_path, monkeypatch):
     )
     pred = [40.0] * len(F.PCTS) + [40.0] + [0, 0, 20, 30, 20, 40] + [d for _, d in A.SLIDERS]
     pickle.dump([Const(v) for v in pred], open(tmp_path / "look.pkl", "wb"))
-    pickle.dump([Const(0.0)] * 19, open(tmp_path / "tmodel.pkl", "wb"))
     pickle.dump([Const(0.0)] * 3, open(tmp_path / "ftarget.pkl", "wb"))
     monkeypatch.setenv("STRATASTILLS_LOOK", str(tmp_path))
     look._bundles.clear()
@@ -103,27 +102,28 @@ def test_versions_render_on_a_picture(stub_bundle):
     rng = np.random.default_rng(0)
     neu = (rng.random((60, 80, 3)) * 200 + 20).astype(np.uint8)
     x = np.zeros(2, np.float32)
-    for v in ("auto1", "auto2", "auto3"):
-        out, did = look.render(v, neu, x, [], stub_bundle)
-        assert out.shape == neu.shape and out.dtype == np.uint8 and "curve" in did
-    fl = [
-        dict(box=[0.3, 0.3, 0.3, 0.3], score=0.9, cam=[60.0, 10.0, 15.0], lm=[], pose=[0, 0, 0], real=0.9, kind="real")
-    ]
-    out, did = look.render("auto3", neu, x, fl, stub_bundle)
-    assert "face_dL" in did
-    with pytest.raises(ValueError):
-        look.render("auto9", neu, x, [], stub_bundle)
+    out, did = look.render("auto1", neu, x, [], stub_bundle)
+    assert out.shape == neu.shape and out.dtype == np.uint8 and "curve" in did
+    for v in ("auto9", *look.RETIRED):
+        with pytest.raises(ValueError):
+            look.render(v, neu, x, [], stub_bundle)
     assert look.version() != f"{look.VERSION}-none"
 
 
 def test_the_pipeline_has_a_look_stage_set_to_the_arena_leader(monkeypatch):
-    monkeypatch.setattr(
-        look, "ratings", lambda: {"auto5": dict(rating=1647, votes=241), "auto7": dict(rating=1700, votes=40)}
-    )
+    rated = lambda n: {"auto5": dict(rating=1647, votes=241), "auto7": dict(rating=1700, votes=n)}
+    monkeypatch.setattr(look, "ratings", lambda: rated(look.MIN_VOTES))
     st = PL.normalize(PL.BEST)
     assert [s["stage"] for s in st][-2:] == ["look", "encode"] and st[-2]["variant"] == "auto7"
-    monkeypatch.setattr(look, "ratings", lambda: {})
-    assert PL.normalize(PL.BEST)[-2]["variant"] == look.FALLBACK == "auto5"
+    for v in look.RETIRED:  # a stage saved with a retired version makes the leader
+        assert PL.normalize([dict(stage="develop"), dict(stage="look", variant=v), dict(stage="encode")])[1] == dict(
+            stage="look", variant="auto7"
+        )
+    monkeypatch.setattr(look, "ratings", lambda: rated(look.MIN_VOTES - 1))  # too few votes to lead on
+    assert PL.normalize(PL.BEST)[-2]["variant"] == "auto5"
+    for r in ({}, {"auto1": dict(rating=1700, votes=5)}):
+        monkeypatch.setattr(look, "ratings", lambda r=r: r)
+        assert PL.normalize(PL.BEST)[-2]["variant"] == look.FALLBACK == "auto5"
     assert "look" not in [s["stage"] for s in PL.get_preset("neutral")["stages"]]
     assert "look" not in [s["stage"] for s in PL.apply_options(st, dict(look="none"))]
     assert PL.apply_options(PL.get_preset("neutral")["stages"], dict(look="auto5"))[-2] == dict(
@@ -217,7 +217,7 @@ def full_bundle(stub_bundle, fake_models):
 
     ident = T.init_params(1, "cpu")[0].numpy()
     b._m["net"] = dict(
-        net=Net(), mu=np.zeros(len(names)), sd=np.ones(len(names)), dev="cpu", lo=ident - 1, hi=ident + 1, typical=ident
+        net=Net(), mu=np.zeros(len(names)), sd=np.ones(len(names)), dev="cpu", lo=ident - 1, hi=ident + 1
     )
     script_models(fake_models, rng.normal(size=8))
     return b
@@ -237,6 +237,7 @@ def test_a_new_picture_gets_its_features_and_faces_and_every_version(full_bundle
     for v in look.VARIANTS:
         out, did = look.render(v, neu, x, fl, full_bundle)
         assert out.shape == neu.shape, v
+    assert "face_dL" in look.render("auto5", neu, x, fl, full_bundle)[1]
     assert "face_target" in look.render("auto7", neu, x, fl, full_bundle)[1]
     x2 = look.feature_row(pv, ex, RECS[0], None, full_bundle)
     assert np.isnan(x2[-5:]).all()  # no strata-models: CLIP columns missing, as the models were trained to cope with
@@ -296,7 +297,9 @@ def test_ratings_come_from_the_arena_votes(monkeypatch):
             return {}
 
     monkeypatch.setattr(arena_store, "get", lambda: Store())
-    monkeypatch.setattr(AR, "current_votes", lambda v, p: [dict(a="auto5", b="auto7")] * 3)
+    monkeypatch.setattr(
+        AR, "current_votes", lambda v, p: [dict(a="auto5", b="auto7")] * 3 + [dict(a="auto2", b="auto7")]
+    )
     monkeypatch.setattr(
         AR, "bradley_terry", lambda v, r: {"auto5": 1650.4, "auto7": 1500.0, "auto2": 1700.0, "lightroom": 1800.0}
     )

@@ -2,6 +2,17 @@
 
 Newest first, grouped by day. One entry per change, in the same commit or PR as the change.
 
+## 2026-11-25
+
+**The kit zoom gets its lens correction; auto2, auto3, auto4 and auto6 retired (branch `kit-zoom-lens`)**
+Jonathan asked for both after the review of the auto modes (2026-11-25). The measurements are in docs/progress.md.
+
+- `src/stratastills/lensfundb.py`: `find` ignores the editions a database name lists ("... OSS I/II", `EDITIONS`), so the E PZ 16-50mm (half the catalogue) is found; the shading gain of a profile is bounded (`MAX_GAIN` 1.5).
+- `src/stratastills/develop.py`: VERSION 20.
+- `src/stratastills/look/__init__.py`: VARIANTS is auto1, auto5, auto7; `RETIRED` names the other four and the pipeline reads them as `best`; `winner` only takes a version with `MIN_VOTES` (60) votes; a version's votes no longer count those against a retired one. The camera-trained colour model (`tmodel.pkl`) and the typical edit leave the bundle and the code (only retired versions used them).
+- `src/stratastills/pipeline.py`, `src/stratastills/arena.py`, `src/stratastills/server/app.py`, `scripts/arena_variants.py`, `scripts/arena_passes.py`, `scripts/export_look_bundle.py`, `scripts/lr_neutral_model.py`, `scripts/build_lr_report.py` (its columns are now auto1 and auto5), `AGENTS.md`: follow.
+- `tests/unit/test_lensfundb.py`, `test_look.py`, `test_arena.py`: the editions, the bound, the vote minimum, retired names.
+
 ## 2026-11-14
 
 **The photos schema on strata_python.db instead of omarchy-db (branch `claude/project-thread-k3276m-db`, issue #102)**

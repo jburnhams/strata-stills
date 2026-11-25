@@ -429,6 +429,8 @@ def create_app():
         e = AR.elo(votes, retired)
         n = {}
         for v in votes:
+            if v["a"] in retired or v["b"] in retired:
+                continue  # not in the ratings either
             for k in (v["a"], v["b"]):
                 n[k] = n.get(k, 0) + 1
         names = sorted(set(bt) | {k for vs in pool.values() for k in vs} - retired, key=lambda k: -bt.get(k, 0))

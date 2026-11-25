@@ -178,13 +178,10 @@ def pick_pair(pool, votes, rng, retired=(), want=None, blocked=(), only=None, pr
 
 
 INTEREST = {
-    "auto4": 3.0,
     "auto5": 3.0,
-    "auto6": 3.0,
-    "auto3": 1.5,
+    "auto7": 3.0,
     "lightroom": 1.5,
     "auto1": 0.5,
-    "auto2": 0.5,
     "camera": 0.2,
     "neutral": 0.2,
 }  # how much a vote on a version is wanted now (the newest automatic versions most; overridden by 'interest' of priorities.json; a version not listed counts 1)
