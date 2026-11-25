@@ -42,6 +42,7 @@ NAMES = [
     "auto1 (ours)",
     "auto5 (ours)",
 ]
+COMPARED = [n for n in NAMES if n != "Lightroom (yours)"]  # what is measured against the final, in this order
 KEY_SETTINGS = [
     "ProcessVersion",
     "CameraProfile",
@@ -582,8 +583,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     ftab = (
         "<table class=t><tr><th>largest face, off from your final by</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>"
         + "".join(
-            f"<tr><th>{nm}</th>" + "".join(f"<td>{v:.1f}</td>" for v in e) + "</tr>"
-            for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], fe)
+            f"<tr><th>{nm}</th>" + "".join(f"<td>{v:.1f}</td>" for v in e) + "</tr>" for nm, e in zip(COMPARED, fe)
         )
         + "</table>"
         if fe
@@ -599,10 +599,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     )
     errs = (
         "<table class=t><tr><th></th><th>lightness off by</th><th>colour off by</th></tr>"
-        + "".join(
-            f"<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>"
-            for nm, e in zip([NAMES[0], NAMES[1], NAMES[3], NAMES[4]], err)
-        )
+        + "".join(f"<tr><th>{nm}</th><td>{e[0]:.1f}</td><td>{e[1]:.1f}</td></tr>" for nm, e in zip(COMPARED, err))
         + "</table><p class=m>Mean difference from your final, CIELAB units (lightness 0-100; colour: CIE76 distance), on the whole picture.</p>"
     )
     key = {k: row.get(k, "") for k in KEY_SETTINGS if k in row}
@@ -633,7 +630,7 @@ def render(sid, stem, row, why, W, H, tabs, blocks, err, pred, did, nrec, exif, 
     return f"""<section class=pic id="{sid}"><h2>{html.escape(stem)} <small class=why>{html.escape(os.path.basename(os.path.dirname(row["final"])))} · {html.escape(why)}</small></h2>{BR.flag_widget(sid)}<p class=m>{html.escape(sh)} · final {W}x{H} (brought to {LONG} px long side)<br>raw: {html.escape(row["raw"])}<br>final: {html.escape(row["final"])}</p>
 <div class=ov style="width:{BR.fit_width(W, H, OVERVIEW)}"><img class=ovimg src="assets/{tabs[2][1]}">{boxes}</div>{tabs_html}{errs}{ftab}
 <details open><summary>Lightroom: your main settings</summary>{table(key)}</details>
-<details><summary>Auto (ours): the predicted look and what was done</summary>{look}{did_html}</details>
+<details><summary>auto1 (ours): the predicted look and what was done</summary>{look}{did_html}</details>
 <details><summary>Neutral (ours): the pipeline's settings</summary>{BR.settings_html(nrec)}</details>
 <details><summary>Lightroom: every setting in the export ({len(rest) + len(key)})</summary>{table(rest)}</details>
 <details><summary>The raw's metadata ({len(ex)} tags)</summary>{table(ex)}</details>{crops}</section>"""
@@ -646,7 +643,7 @@ def face_table(fs):
     mean = lambda j, k: float(np.mean([e[j][k] for e in fs]))
     rows = "".join(
         f"<tr><th>{nm}</th>" + "".join(f"<td>{mean(j, k):.1f}</td>" for k in range(4)) + "</tr>"
-        for j, nm in enumerate(["Camera", "Neutral", "Auto", "Auto 2 (learned colour)", "Auto 3 (face anchor)"])
+        for j, nm in enumerate(COMPARED)
     )
     return f"<h3>Faces ({len(fs)} of the shown pictures have one)</h3><table class=t><tr><th>mean distance of the largest face from your final</th><th>lightness</th><th>hue (deg)</th><th>chroma</th><th>colour</th></tr>{rows}</table>"
 
@@ -657,7 +654,7 @@ def page(sections, nav, summary, held, n_shoots, n_pics, face_summary=()):
         f"<tr><th>{html.escape(lab)} ({sum(1 for w, _ in summary if w == lab)})</th>"
         + "".join(
             f"<td>{med([e[j][0] for w, e in summary if w == lab]):.1f} / {med([e[j][1] for w, e in summary if w == lab]):.1f}</td>"
-            for j in range(5)
+            for j in range(len(COMPARED))
         )
         + "</tr>"
         for _, lab, _ in CATEGORIES
@@ -667,7 +664,7 @@ def page(sections, nav, summary, held, n_shoots, n_pics, face_summary=()):
         "<tr><th>all shown</th>"
         + "".join(
             f"<td>{med([e[j][0] for _, e in summary]):.1f} / {med([e[j][1] for _, e in summary]):.1f}</td>"
-            for j in range(5)
+            for j in range(len(COMPARED))
         )
         + "</tr>"
     )
@@ -680,9 +677,9 @@ def page(sections, nav, summary, held, n_shoots, n_pics, face_summary=()):
         )
     )
     return f"""<!doctype html><meta charset=utf-8><title>stratastills: auto-process</title><style>{BR.CSS}</style><header><h1>Auto-process: camera, neutral, your Lightroom final and auto</h1>
-<div class=note>PRIVATE: your own pictures. Generated {time.strftime("%Y-%m-%d %H:%M")} by scripts/build_lr_report.py, on pictures from shoots the look model was not trained on. Every picture is shown on the crop of your final, at {LONG} px on the long side: <b>Camera</b> (the camera's JPEG beside the raw, else the preview inside the raw: smaller, so softer), <b>Neutral</b> (our 'best' pipeline, not levelled), <b>Lightroom</b> (your export), <b>Auto</b> (our neutral bent to the look the model predicts you would have given it: version 1, one global tone curve, colour strength and cast; no local Highlights/Shadows yet). Crops are taken where auto, neutral and the camera differ most from yours. <a href="../neutral/">Neutral report</a> · <a href="../">All reports</a></div>
+<div class=note>PRIVATE: your own pictures. Generated {time.strftime("%Y-%m-%d %H:%M")} by scripts/build_lr_report.py, on pictures from shoots the look model was not trained on. Every picture is shown on the crop of your final, at {LONG} px on the long side: <b>Camera</b> (the camera's JPEG beside the raw, else the preview inside the raw: smaller, so softer), <b>Neutral</b> (our 'best' pipeline, not levelled), <b>Lightroom</b> (your export), <b>auto1</b> (our neutral bent to the look the model predicts you would have given it: tone curve, colour strength and cast), <b>auto5</b> (auto1's tone with the colour of the network trained on our neutral, and the face anchor). Crops are taken where auto, neutral and the camera differ most from yours. <a href="../neutral/">Neutral report</a> · <a href="../">All reports</a></div>
 {BR.flag_header("auto")}<nav>{"".join(f'<a href="#{s}">{html.escape(t)}</a>' for s, t in nav)}</nav></header><main>
-<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th><th>Camera</th><th>Neutral</th><th>Auto</th><th>Auto 2 (learned colour)</th><th>Auto 3 (face anchor)</th></tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>{face_table(face_summary)}
+<h2>How close each comes to your final</h2><table class=t><tr><th>pictures shown</th>{"".join(f"<th>{n}</th>" for n in COMPARED)}</tr>{rows}</table><p class=m>Mean lightness / colour difference from your final (CIELAB units), whole pictures.</p>{face_table(face_summary)}
 <h3>All {n_pics} pictures of the {n_shoots} held-out shoots (the model's prediction only, no pictures made)</h3><table class=t><tr><th>error of the final's lightness at</th>{"".join(f"<th>p{p}</th>" for p in D.PCTS)}</tr>{hrows}</table>
 {"".join(sections)}</main>{BR.flag_script("auto")}<script>document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{{const t=b.parentNode;t.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');b.closest('section').querySelector('.ovimg').src=b.dataset.src}})</script>"""
 
