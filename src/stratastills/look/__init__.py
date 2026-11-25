@@ -121,8 +121,6 @@ def ratings():
         bt = AR.bradley_terry(votes, retired)
         n = {}
         for v in votes:
-            if v["a"] in retired or v["b"] in retired:
-                continue  # not in the rating either
             for k in (v["a"], v["b"]):
                 n[k] = n.get(k, 0) + 1
         out = {k: dict(rating=round(bt[k]), votes=n.get(k, 0)) for k in VARIANTS if k in bt and k not in retired}

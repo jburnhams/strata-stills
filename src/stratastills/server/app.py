@@ -429,8 +429,6 @@ def create_app():
         e = AR.elo(votes, retired)
         n = {}
         for v in votes:
-            if v["a"] in retired or v["b"] in retired:
-                continue  # not in the ratings either
             for k in (v["a"], v["b"]):
                 n[k] = n.get(k, 0) + 1
         names = sorted(set(bt) | {k for vs in pool.values() for k in vs} - retired, key=lambda k: -bt.get(k, 0))
@@ -441,7 +439,7 @@ def create_app():
             voted_pictures=len({v["pic"] for v in votes}),
             retired=sorted(retired),
             left_odds=round(
-                AR.side_advantage(votes, retired), 3
+                AR.side_advantage(votes), 3
             ),  # >1: the left picture wins more often between equals (already taken out of the ratings)
             variants=[
                 dict(

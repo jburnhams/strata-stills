@@ -13,13 +13,19 @@ def test_elo_and_bradley_terry_rank_the_winner_first():
     assert e["x"] > e["y"] and bt["x"] > bt["y"] and abs(bt["x"] + bt["y"] - 3000) < 1
 
 
-def test_ties_move_the_ratings_together_and_retired_variants_are_skipped():
+def test_ties_move_the_ratings_together():
     e = arena.elo(votes(("x", "y", "a"), ("x", "y", "tie")))
     assert e["x"] > e["y"]
-    assert (
-        arena.elo(votes(("x", "y", "a")), retired={"y"}) == {}
-        and arena.bradley_terry(votes(("x", "y", "a")), retired={"x"}) == {}
-    )
+
+
+def test_a_retired_variant_is_left_out_but_its_votes_still_rate_the_others():
+    # x and y never met: only the votes against the retired r tell them apart
+    vs = votes(*[("x", "r", "a")] * 8 + [("r", "y", "a")] * 8 + [("x", "r", "b"), ("r", "y", "b")])
+    for rate in (arena.elo, arena.bradley_terry):
+        got = rate(vs, retired={"r"})
+        assert set(got) == {"x", "y"} and got["x"] > got["y"] and got == {k: rate(vs)[k] for k in got}
+    assert set(arena.bootstrap(vs, retired={"r"}, n=20)) == {"x", "y"}
+    assert arena.head_to_head(vs + votes(("x", "y", "a")), retired={"r"}) == {("x", "y"): [1, 0, 0]}
 
 
 def test_head_to_head_counts_by_sorted_pair():

@@ -304,7 +304,7 @@ def test_ratings_come_from_the_arena_votes(monkeypatch):
         AR, "bradley_terry", lambda v, r: {"auto5": 1650.4, "auto7": 1500.0, "auto2": 1700.0, "lightroom": 1800.0}
     )
     look._ratings.clear()
-    assert look.ratings() == {"auto5": dict(rating=1650, votes=3), "auto7": dict(rating=1500, votes=3)}
+    assert look.ratings() == {"auto5": dict(rating=1650, votes=3), "auto7": dict(rating=1500, votes=4)}
     assert look.winner() == "auto5"
     look._ratings.clear()
 
